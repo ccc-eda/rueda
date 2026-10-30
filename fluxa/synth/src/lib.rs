@@ -6,6 +6,7 @@
 //! fluxa/docs/synthesis-plan.md.
 
 pub mod gen;
+pub mod graph;
 pub mod hw;
 pub mod lower;
 pub mod ty;
@@ -31,6 +32,8 @@ pub fn synthesize(prog: &Arc<Program>, top: &str, params: &HashMap<String, i128>
     let decl = prog.fns.get(top).ok_or_else(|| format!("no task `{}`", top))?.clone();
     if decl.kind != FnKind::Task { return Err(format!("`{}` is not a task", top)); }
     if !decl.generics.is_empty() { return Err(format!("`{}`: generic tasks are not synthesized yet", top)); }
+    // a task that builds a network: its instances connected by FIFOs
+    if graph::is_graph(&decl) { return graph::build(prog, &decl, params); }
     let cfg = lower::lower(&decl)?;
     gen::build(prog, &decl, &cfg, params)
 }

@@ -7,6 +7,7 @@ use eda::netlist::{Bit, Netlist};
 use eda::netsim::NetSim;
 use fluxa::runtime::{HwProvider, HwTask};
 use fluxa::value::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// a token on a channel: a value, or the end of the stream
@@ -30,13 +31,13 @@ pub struct HwSim<'n> {
     pub changed: bool,
 }
 
-fn to_bits(v: i128, t: Ty) -> u128 {
+fn to_bits(v: i128, t: &Ty) -> u128 {
     let w = t.width();
     let m = if w >= 128 { u128::MAX } else { (1u128 << w) - 1 };
     (v as u128) & m
 }
 
-fn from_bits(b: u128, t: Ty) -> i128 {
+fn from_bits(b: u128, t: &Ty) -> i128 {
     let w = t.width() as u32;
     let (lo, _) = t.range();
     if lo < 0 && w < 128 && (b >> (w - 1)) & 1 == 1 { (b as i128) - (1i128 << w) } else { b as i128 }
@@ -46,7 +47,7 @@ impl<'n> HwSim<'n> {
     /// the circuit after a reset cycle, with the scalar inputs set
     pub fn new(nl: &'n Netlist, io: &'n Iface, scalars: &[i128]) -> HwSim<'n> {
         let mut sim = NetSim::new(nl);
-        for ((n, t), v) in io.scalars.iter().zip(scalars) { sim.poke(n, to_bits(*v, *t)); }
+        for ((n, t), v) in io.scalars.iter().zip(scalars) { sim.poke(n, to_bits(*v, t)); }
         sim.set("rst", 1);
         sim.step();
         sim.set("rst", 0);
@@ -59,7 +60,7 @@ impl<'n> HwSim<'n> {
     /// taken and what each output channel sent.
     pub fn cycle(&mut self, offer: &[Option<Tok>], room: &[bool]) -> (Vec<bool>, Vec<Option<Tok>>) {
         for ((n, t), o) in self.io.ins.iter().zip(offer) {
-            let (valid, close, data) = match o { Some(Tok::Data(v)) => (1, 0, to_bits(*v, *t)), Some(Tok::Close) => (1, 1, 0), None => (0, 0, 0) };
+            let (valid, close, data) = match o { Some(Tok::Data(v)) => (1, 0, to_bits(*v, t)), Some(Tok::Close) => (1, 1, 0), None => (0, 0, 0) };
             self.sim.poke(&format!("{}_valid", n), valid);
             self.sim.poke(&format!("{}_close", n), close);
             self.sim.poke(&format!("{}_data", n), data);
@@ -69,7 +70,7 @@ impl<'n> HwSim<'n> {
         let taken: Vec<bool> = self.io.ins.iter().zip(offer).map(|((n, _), o)| o.is_some() && self.sim.get(&format!("{}_ready", n)) == 1).collect();
         let sent: Vec<Option<Tok>> = self.io.outs.iter().zip(room).map(|((n, t), r)| {
             if !*r || self.sim.get(&format!("{}_valid", n)) == 0 { return None; }
-            Some(if self.sim.get(&format!("{}_close", n)) == 1 { Tok::Close } else { Tok::Data(from_bits(self.sim.get(&format!("{}_data", n)), *t)) })
+            Some(if self.sim.get(&format!("{}_close", n)) == 1 { Tok::Close } else { Tok::Data(from_bits(self.sim.get(&format!("{}_data", n)), t)) })
         }).collect();
         let before: Vec<bool> = self.state.iter().map(|b| self.sim.bit(*b)).collect();
         self.sim.step();
@@ -95,27 +96,54 @@ impl<'n> HwSim<'n> {
     }
 }
 
-/// a task replaced by its synthesized netlist in the Fluxa simulator (`reda gatesim KIND x.fx`):
-/// every `spawn` of `top` runs the netlist instead of the interpreter
+/// a task's netlist and ports, kept for the whole run
+type Built = (&'static Netlist, &'static Iface);
+
+/// tasks replaced by their synthesized netlists in the Fluxa simulator (`reda gatesim KIND x.fx`):
+/// a spawn of one of them runs its netlist instead of the interpreter. Each task is synthesized
+/// (scalar parameters as input ports) and mapped to `kind` (opt, ice40, ecp5, asic, sky130) at
+/// its first spawn.
 pub struct Provider {
-    top: String,
-    nl: &'static Netlist,
-    io: &'static Iface,
-    /// cells in the netlist (for the report)
-    pub cells: usize,
+    prog: Arc<fluxa::ast::Program>,
+    kind: String,
+    /// only this task (else every task)
+    only: Option<String>,
+    built: std::sync::Mutex<HashMap<String, Result<Built, String>>>,
 }
 
 impl Provider {
-    /// synthesize `top` (scalar parameters as input ports) and map it to `kind`
-    /// (opt, ice40, ecp5, asic, sky130)
+    /// `top` as `kind` gates (synthesized now, so errors show at once)
     pub fn new(prog: &Arc<fluxa::ast::Program>, top: &str, kind: &str) -> Result<Provider, String> {
-        let s = crate::synthesize(prog, top, &Default::default())?;
-        let nl = eda::netsim::mapped(&s.netlist, kind)?;
-        let cells = nl.cells.len();
-        // one netlist for the whole run: every spawn of the task simulates it
-        let nl: &'static Netlist = Box::leak(Box::new(nl));
-        let io: &'static Iface = Box::leak(Box::new(s.iface));
-        Ok(Provider { top: top.to_string(), nl, io, cells })
+        let p = Provider { prog: prog.clone(), kind: kind.into(), only: Some(top.into()), built: Default::default() };
+        p.netlist(top)?;
+        Ok(p)
+    }
+
+    /// every task as `kind` gates
+    pub fn all(prog: &Arc<fluxa::ast::Program>, kind: &str) -> Provider {
+        Provider { prog: prog.clone(), kind: kind.into(), only: None, built: Default::default() }
+    }
+
+    fn netlist(&self, task: &str) -> Result<(&'static Netlist, &'static Iface), String> { self.netlist_with(task, task, &Default::default()) }
+
+    /// `task` with scalar parameters `params` (a network's are constants), cached as `key`
+    fn netlist_with(&self, key: &str, task: &str, params: &HashMap<String, i128>) -> Result<(&'static Netlist, &'static Iface), String> {
+        let mut b = self.built.lock().unwrap();
+        if let Some(r) = b.get(key) { return r.clone(); }
+        let r = crate::synthesize(&self.prog, task, params).and_then(|s| {
+            let nl = eda::netsim::mapped(&s.netlist, &self.kind)?;
+            // one netlist for the whole run: every spawn of the task simulates it
+            Ok((&*Box::leak(Box::new(nl)), &*Box::leak(Box::new(s.iface))))
+        });
+        b.insert(key.to_string(), r.clone());
+        r
+    }
+
+    /// the tasks synthesized so far: (name, cells) or why not
+    pub fn report(&self) -> Vec<(String, Result<usize, String>)> {
+        let mut v: Vec<(String, Result<usize, String>)> = self.built.lock().unwrap().iter().map(|(k, r)| (k.clone(), r.as_ref().map(|(n, _)| n.cells.len()).map_err(|e| e.clone()))).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
     }
 }
 
@@ -130,15 +158,29 @@ impl HwTask for Running {
 
 impl HwProvider for Provider {
     fn start(&self, task: &str, args: &[(String, Value)]) -> Option<Result<Box<dyn HwTask>, String>> {
-        if task != self.top { return None; }
+        if self.only.as_deref().is_some_and(|o| o != task) { return None; }
+        let decl = self.prog.fns.get(task)?;
+        // a network has its scalar arguments built in: one netlist per set of arguments
+        let net = crate::graph::is_graph(decl);
+        let built = if net {
+            let ps: HashMap<String, i128> = args.iter().filter_map(|(n, v)| match v { Value::Int(k) => Some((n.clone(), *k)), Value::Bool(b) => Some((n.clone(), *b as i128)), _ => None }).collect();
+            let mut key: Vec<String> = ps.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+            key.sort();
+            self.netlist_with(&format!("{}({})", task, key.join(",")), task, &ps)
+        } else { self.netlist(task) };
+        let (nl, io) = match built {
+            Ok(x) => x,
+            // replacing one task: its error; every task: the ones that do not synthesize stay in the interpreter
+            Err(e) => return if self.only.is_some() { Some(Err(e)) } else { None },
+        };
         let mut scalars = vec![];
-        for (n, _) in &self.io.scalars {
+        for (n, _) in &io.scalars {
             match args.iter().find(|(a, _)| a == n).map(|(_, v)| v) {
                 Some(Value::Int(k)) => scalars.push(*k),
                 Some(Value::Bool(b)) => scalars.push(*b as i128),
                 _ => return Some(Err(format!("hardware `{}`: parameter `{}` needs an integer", task, n))),
             }
         }
-        Some(Ok(Box::new(Running(HwSim::new(self.nl, self.io, &scalars)))))
+        Some(Ok(Box::new(Running(HwSim::new(nl, io, &scalars)))))
     }
 }

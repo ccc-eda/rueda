@@ -9,7 +9,7 @@
 
 use crate::ty::R;
 use fluxa::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub type B = usize;
 
@@ -194,19 +194,22 @@ pub fn has_chan(e: &Expr) -> bool {
     found
 }
 
-fn stmt_has_chan(s: &Stmt) -> bool {
+/// does a statement need states (a channel operation, a loop over a channel, spawn, return)?
+fn stmt_has_chan(s: &Stmt, chans: &HashSet<String>) -> bool {
     match &s.kind {
         StmtKind::Let { init, .. } => init.as_ref().is_some_and(has_chan),
         StmtKind::Carry { init, .. } => has_chan(init),
         StmtKind::Assign { target, value, .. } => has_chan(target) || has_chan(value),
-        StmtKind::For { iter, body, .. } => has_chan(iter) || block_has_chan(body) || matches!(&iter.kind, ExprKind::Path(_)),
+        StmtKind::For { iter, body, .. } => has_chan(iter) || block_has_chan(body, chans) || is_chan_path(iter, chans),
         StmtKind::Spawn(_) | StmtKind::Parallel(_) | StmtKind::Return(_) => true,
         StmtKind::Assert { .. } => false,
         StmtKind::Expr(e) => has_chan(e),
     }
 }
 
-fn block_has_chan(b: &Block) -> bool { b.stmts.iter().any(stmt_has_chan) || b.tail.as_ref().is_some_and(|e| has_chan(e)) }
+fn block_has_chan(b: &Block, chans: &HashSet<String>) -> bool { b.stmts.iter().any(|s| stmt_has_chan(s, chans)) || b.tail.as_ref().is_some_and(|e| has_chan(e)) }
+
+fn is_chan_path(e: &Expr, chans: &HashSet<String>) -> bool { matches!(&e.kind, ExprKind::Path(p) if p.len() == 1 && chans.contains(&p[0])) }
 
 /// every sub-expression, in evaluation order (children before the node)
 fn visit(e: &Expr, f: &mut dyn FnMut(&Expr)) {
@@ -220,7 +223,12 @@ fn visit(e: &Expr, f: &mut dyn FnMut(&Expr)) {
         ExprKind::Array(xs) | ExprKind::Tuple(xs) => for x in xs { v(x); },
         ExprKind::Lambda(_, b) => v(b),
         ExprKind::Block(b) | ExprKind::Comptime(b) => { for s in &b.stmts { visit_stmt(s, f); } if let Some(t) = &b.tail { visit(t, f); } }
-        ExprKind::If(c, t, el) => { visit(c, f); for s in &t.stmts { visit_stmt(s, f); } if let Some(x) = &t.tail { visit(x, f); } if let Some(x) = el { visit(x, f); } }
+        ExprKind::If(c, t, el) => {
+            visit(c, f);
+            for s in &t.stmts { visit_stmt(s, f); }
+            if let Some(x) = &t.tail { visit(x, f); }
+            if let Some(x) = el { visit(x, f); }
+        }
         ExprKind::Match(s, arms) => { visit(s, f); for a in arms { if let Some(g) = &a.guard { visit(g, f); } visit(&a.body, f); } }
         _ => {}
     }
@@ -240,6 +248,10 @@ fn visit_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
 
 struct Lower {
     blocks: Vec<Bb>,
+    /// the channel parameters (unique names)
+    chans: HashSet<String>,
+    /// `@reg` variables: written to `NAME~p` in loops, current again at each iteration's end
+    regs: Vec<String>,
     temps: Vec<(String, Temp)>,
     n: usize,
     /// where `return` goes
@@ -370,7 +382,7 @@ impl Lower {
     }
 
     fn stmt(&mut self, s: &Stmt, mut cur: B) -> R<B> {
-        if !stmt_has_chan(s) {
+        if !stmt_has_chan(s, &self.chans) {
             self.blocks[cur].stmts.push(s.clone());
             return Ok(cur);
         }
@@ -407,7 +419,7 @@ impl Lower {
                 };
                 match &iter.kind {
                     // for v in rx: receive until the channel is closed
-                    ExprKind::Path(p) if p.len() == 1 => {
+                    ExprKind::Path(p) if p.len() == 1 && self.chans.contains(&p[0]) => {
                         let ch = p[0].clone();
                         let dst = self.temp("recv", Temp::ChanElem(ch.clone()));
                         let (head, first, exit) = (self.new_block(), self.new_block(), self.new_block());
@@ -415,6 +427,7 @@ impl Lower {
                         self.blocks[head].term = Term::Recv { dst: dst.clone(), ch, closed: Some(exit), next: first };
                         if let Some(v) = var { self.blocks[first].stmts.push(let_stmt(&v, path(&dst, line), line)); }
                         let end = self.stmts(&body.stmts, body.tail.as_deref(), first)?;
+                        self.commit(end, line);
                         self.blocks[end].term = Term::Goto(head);
                         Ok(exit)
                     }
@@ -433,15 +446,42 @@ impl Lower {
                         self.blocks[head].term = Term::Branch(cond, first, exit);
                         if let Some(v) = var { self.blocks[first].stmts.push(let_stmt(&v, path(&i, line), line)); }
                         let last = self.stmts(&body.stmts, body.tail.as_deref(), first)?;
+                        self.commit(last, line);
                         let inc = Expr { kind: ExprKind::Binary(BinOp::Add, Box::new(path(&i, line)), Box::new(Expr { kind: ExprKind::Int(1), line })), line };
                         self.blocks[last].stmts.push(assign(&i, inc, line));
                         self.blocks[last].term = Term::Goto(head);
                         Ok(exit)
                     }
-                    _ => Err(format!("line {}: this loop is not synthesized yet (a channel or a range)", line)),
+                    // for x in arr (channel operations in the body): an index over the array
+                    _ => {
+                        let len = Expr { kind: ExprKind::Call(Box::new(path("len", line)), vec![Arg { name: None, value: iter.clone() }]), line };
+                        let k = self.temp("k", Temp::Like(Expr { kind: ExprKind::Range(Box::new(Expr { kind: ExprKind::Int(0), line }), Box::new(len.clone()), false), line }));
+                        self.blocks[cur].stmts.push(assign(&k, Expr { kind: ExprKind::Int(0), line }, line));
+                        let (head, first, exit) = (self.new_block(), self.new_block(), self.new_block());
+                        self.blocks[cur].term = Term::Goto(head);
+                        let cond = Expr { kind: ExprKind::Binary(BinOp::Lt, Box::new(path(&k, line)), Box::new(len)), line };
+                        self.blocks[head].term = Term::Branch(cond, first, exit);
+                        let item = Expr { kind: ExprKind::Index(Box::new(iter.clone()), Box::new(path(&k, line))), line };
+                        if let Some(v) = var { self.blocks[first].stmts.push(let_stmt(&v, item, line)); }
+                        let last = self.stmts(&body.stmts, body.tail.as_deref(), first)?;
+                        self.commit(last, line);
+                        let inc = Expr { kind: ExprKind::Binary(BinOp::Add, Box::new(path(&k, line)), Box::new(Expr { kind: ExprKind::Int(1), line })), line };
+                        self.blocks[last].stmts.push(assign(&k, inc, line));
+                        self.blocks[last].term = Term::Goto(head);
+                        Ok(exit)
+                    }
                 }
             }
             StmtKind::Assert { .. } => Ok(cur),
+        }
+    }
+}
+
+impl Lower {
+    /// the end of a loop iteration: the `@reg` variables' pending values become current
+    fn commit(&mut self, b: B, line: u32) {
+        for r in self.regs.clone() {
+            self.blocks[b].stmts.push(assign(&r, path(&format!("{}~p", r), line), line));
         }
     }
 }
@@ -455,7 +495,10 @@ pub fn lower(decl: &FnDecl) -> R<Cfg> {
     let mut rn = Renamer { scopes: vec![HashMap::new()], n: 0 };
     let params: Vec<String> = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
-    let mut l = Lower { blocks: vec![], temps: vec![], n: 0, end: 0 };
+    let chans: HashSet<String> = decl.params.iter().zip(&params).filter(|(p, _)| matches!(p.ty, TypeExpr::Chan(..))).map(|(_, u)| u.clone()).collect();
+    let mut regs = vec![];
+    let body = reg_rewrite(&body, &mut regs, false);
+    let mut l = Lower { blocks: vec![], chans, regs, temps: vec![], n: 0, end: 0 };
     let entry = l.new_block();
     let end = l.new_block();
     l.end = end;
@@ -483,4 +526,72 @@ pub fn rename_fn(decl: &FnDecl, start: usize) -> (Vec<String>, Block) {
     let params = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
     (params, body)
+}
+
+// ---------------------------------------------------------------- @reg
+
+/// `let x @reg = e` gets a pending copy `x~p`; inside a loop a write to `x` (or a part of it)
+/// goes to `x~p`, which the end of each iteration copies to `x` (reads in the iteration see the
+/// old value, as the simulator does); outside loops a write goes to both
+fn reg_rewrite(b: &Block, regs: &mut Vec<String>, in_loop: bool) -> Block {
+    let mut stmts = vec![];
+    for s in &b.stmts {
+        let line = s.line;
+        match &s.kind {
+            StmtKind::Let { pat: Pattern::Ident(n), placement: Some(p), .. } if p == "reg" => {
+                regs.push(n.clone());
+                stmts.push(s.clone());
+                stmts.push(let_stmt(&format!("{}~p", n), path(n, line), line));
+            }
+            StmtKind::Assign { target, op, value } if root(target).is_some_and(|r| regs.contains(&r)) => {
+                let r = root(target).unwrap();
+                if in_loop {
+                    // x op= e reads the pending value
+                    let pend = rename_root(target, &format!("{}~p", r));
+                    let value = match op { Some(o) => Expr { kind: ExprKind::Binary(*o, Box::new(pend.clone()), Box::new(value.clone())), line }, None => value.clone() };
+                    stmts.push(Stmt { kind: StmtKind::Assign { target: pend, op: None, value }, line });
+                } else {
+                    stmts.push(s.clone());
+                    stmts.push(assign(&format!("{}~p", r), path(&r, line), line));
+                }
+            }
+            StmtKind::For { attr, pat, iter, body } => {
+                let body = reg_rewrite(body, regs, true);
+                stmts.push(Stmt { kind: StmtKind::For { attr: attr.clone(), pat: pat.clone(), iter: iter.clone(), body }, line });
+            }
+            StmtKind::Expr(e) => stmts.push(Stmt { kind: StmtKind::Expr(reg_expr(e, regs, in_loop)), line }),
+            _ => stmts.push(s.clone()),
+        }
+    }
+    let tail = b.tail.as_ref().map(|t| Box::new(reg_expr(t, regs, in_loop)));
+    Block { stmts, tail }
+}
+
+/// the blocks inside an expression (if / match / block) get the same rewriting
+fn reg_expr(e: &Expr, regs: &mut Vec<String>, in_loop: bool) -> Expr {
+    let kind = match &e.kind {
+        ExprKind::Block(b) => ExprKind::Block(reg_rewrite(b, regs, in_loop)),
+        ExprKind::If(c, t, el) => ExprKind::If(c.clone(), reg_rewrite(t, regs, in_loop), el.as_ref().map(|x| Box::new(reg_expr(x, regs, in_loop)))),
+        _ => return e.clone(),
+    };
+    Expr { kind, line: e.line }
+}
+
+/// the variable an assignment target writes (`x`, `x[i]`, `x.0`)
+fn root(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Path(p) if p.len() == 1 => Some(p[0].clone()),
+        ExprKind::Index(b, _) | ExprKind::Field(b, _) => root(b),
+        _ => None,
+    }
+}
+
+fn rename_root(e: &Expr, to: &str) -> Expr {
+    let kind = match &e.kind {
+        ExprKind::Path(_) => ExprKind::Path(vec![to.to_string()]),
+        ExprKind::Index(b, i) => ExprKind::Index(Box::new(rename_root(b, to)), i.clone()),
+        ExprKind::Field(b, f) => ExprKind::Field(Box::new(rename_root(b, to)), f.clone()),
+        k => k.clone(),
+    };
+    Expr { kind, line: e.line }
 }

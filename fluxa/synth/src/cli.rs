@@ -47,37 +47,45 @@ pub fn main(all: Vec<String>) {
         for t in crate::tasks(&prog) { println!("{}", t); }
         return;
     }
-    let top = top.or_else(|| crate::default_top(&prog)).unwrap_or_else(|| { eprintln!("no task to synthesize"); std::process::exit(1) });
     if let Some(kind) = gatesim {
-        std::process::exit(gate_tests(&prog, &top, &kind));
+        std::process::exit(gate_tests(&prog, top.as_deref(), &kind));
     }
+    let top = top.or_else(|| crate::default_top(&prog)).unwrap_or_else(|| { eprintln!("no task to synthesize"); std::process::exit(1) });
     opts.apply().unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(2) });
     let s = crate::synthesize(&prog, &top, &params).unwrap_or_else(|e| { eprintln!("synthesis error in '{}': {}", top, e); std::process::exit(1) });
     eda::flow::run(s.netlist, s.warnings, &top, &opts);
 }
 
-/// `reda gatesim KIND x.fx`: the program's tests with `top` replaced by its `kind` netlist;
-/// the exit code (0 all passed, 1 a failure, 2 synthesis failed)
-fn gate_tests(prog: &std::sync::Arc<fluxa::ast::Program>, top: &str, kind: &str) -> i32 {
-    let p = match crate::hw::Provider::new(prog, top, kind) {
-        Ok(p) => p,
-        Err(e) => { eprintln!("synthesis error in '{}': {}", top, e); return 2; }
+/// `reda gatesim KIND x.fx`: the program's tests with `top` (else every task) replaced by its
+/// `kind` netlist; the exit code (0 all passed, 1 a failure, 2 synthesis failed)
+fn gate_tests(prog: &std::sync::Arc<fluxa::ast::Program>, top: Option<&str>, kind: &str) -> i32 {
+    let p = match top {
+        Some(t) => match crate::hw::Provider::new(prog, t, kind) { Ok(p) => p, Err(e) => { eprintln!("synthesis error in '{}': {}", t, e); return 2; } },
+        None => crate::hw::Provider::all(prog, kind),
     };
-    println!("gate-level simulation: {} as {} cells ({})", top, p.cells, kind);
-    let opts = fluxa::Options { hw: Some(std::sync::Arc::new(p)), ..Default::default() };
+    let p = std::sync::Arc::new(p);
+    let opts = fluxa::Options { hw: Some(p.clone()), ..Default::default() };
     let (mut pass, mut fail) = (0, 0);
+    let mut out = String::new();
     for t in &prog.tests {
         let r = fluxa::run_test(prog, t, &opts);
-        print!("{}", r.output);
+        out += &r.output;
         if r.passed {
             pass += 1;
-            println!("[PASS] {} ({:.3}s, {})", r.name, r.secs, kind);
+            out += &format!("[PASS] {} ({:.3}s, {})\n", r.name, r.secs, kind);
         } else {
             fail += 1;
-            println!("[FAIL] {} ({:.3}s, {})", r.name, r.secs, kind);
-            for l in r.message.lines() { println!("       {}", l); }
+            out += &format!("[FAIL] {} ({:.3}s, {})\n", r.name, r.secs, kind);
+            for l in r.message.lines() { out += &format!("       {}\n", l); }
         }
     }
+    for (task, r) in p.report() {
+        match r {
+            Ok(n) => println!("gate-level simulation: {} as {} cells ({})", task, n, kind),
+            Err(e) => println!("gate-level simulation: {} stays behavioral: {}", task, e),
+        }
+    }
+    print!("{}", out);
     println!("{} passed, {} failed", pass, fail);
     if fail > 0 { 1 } else { 0 }
 }

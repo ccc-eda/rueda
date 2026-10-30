@@ -14,8 +14,8 @@ use eda::netlist::{self, bits_for, Bit, Builder, Dir, Port};
 use fluxa::ast::*;
 use fluxa::interp::Interp;
 use fluxa::runtime::{block_on, Shared};
-use fluxa::value::Value;
-use std::collections::HashMap;
+use fluxa::value::{Ovf, Round, Value};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// what a task parameter is in hardware
@@ -33,8 +33,8 @@ pub struct Gen<'p> {
     /// the variables' types (the width of their registers)
     pub vars: HashMap<String, Ty>,
     /// untyped variables: their type grows with what is assigned (until the type pass settles)
-    untyped: std::collections::HashSet<String>,
-    pub env: HashMap<String, SVal>,
+    untyped: HashSet<String>,
+    pub env: HashMap<String, HV>,
     grew: bool,
     rename: usize,
     depth: usize,
@@ -48,10 +48,12 @@ impl<'p> Gen<'p> {
         Gen { g: Builder::new(), prog, it: Interp::new(sh, 0, "synth".into()), vars: HashMap::new(), untyped: Default::default(), env: HashMap::new(), grew: false, rename: 1_000_000, depth: 0 }
     }
 
+    fn here(&self, line: u32) -> String { self.prog.loc(line) }
+
     /// a type expression's hardware type (constants and generics are known at compile time)
     pub fn ty(&mut self, t: &TypeExpr, line: u32) -> R<Ty> {
-        let rt = block_on(self.it.eval_type(t)).map_err(|e| format!("{}: type: {:?}", self.prog.loc(line), e))?;
-        Ty::of_rt(&rt).map_err(|m| format!("{}: {}", self.prog.loc(line), m))
+        let rt = block_on(self.it.eval_type(t)).map_err(|e| format!("{}: type: {:?}", self.here(line), e))?;
+        Ty::of_rt(&rt).map_err(|m| format!("{}: {}", self.here(line), m))
     }
 
     /// a compile-time constant (`comptime`, constants); None when it reads anything else
@@ -62,43 +64,92 @@ impl<'p> Gen<'p> {
         block_on(self.it.eval(e)).ok()
     }
 
-    fn value(&self, v: &Value, line: u32) -> R<SVal> {
-        match v {
-            Value::Int(n) => Ok(SVal::konst(*n)),
-            Value::Bool(b) => Ok(SVal::bool_const(*b)),
-            other => err(line, self.prog, format!("the constant {} is not synthesized yet", fluxa::value::kind(other))),
-        }
+    fn value(&self, v: &Value, line: u32) -> R<HV> {
+        Ok(match v {
+            Value::Int(n) => HV::S(SVal::konst(*n)),
+            Value::Bool(b) => HV::S(SVal::bool_const(*b)),
+            Value::Fixed(r, f) => HV::S(SVal::fixed_const(*r, *f)),
+            Value::Array(xs) | Value::Tuple(xs) => HV::A(xs.iter().map(|x| self.value(x, line)).collect::<R<_>>()?),
+            Value::Range(lo, hi) => HV::A((*lo..*hi).map(|k| HV::S(SVal::konst(k))).collect()),
+            Value::Str(_) | Value::Unit => HV::S(SVal::konst(0)),
+            // a float that is a binary fraction (0.375 = 3/8) is an exact fixed-point constant
+            Value::Float(x) => {
+                let f = (0..=60).find(|f| { let y = x * 2f64.powi(*f); y.fract() == 0.0 && y.abs() < 2f64.powi(100) });
+                match f {
+                    Some(f) => HV::S(SVal::fixed_const((x * 2f64.powi(f)) as i128, f as u32)),
+                    None => return err(line, self.prog, format!("the float {} is not a binary fraction: give it as a fixed-point constant", x)),
+                }
+            }
+            other => return err(line, self.prog, format!("the constant {} is not synthesized", fluxa::value::kind(other))),
+        })
     }
 
     // ------------------------------------------------------------ variables
 
-    /// declare `name` of type `t` (None: the value's own type) with value `v`
-    fn declare(&mut self, name: &str, t: Option<Ty>, v: SVal) {
+    /// declare `name` of type `t` (None: the value's own type, growing) with value `v`
+    fn declare(&mut self, name: &str, t: Option<Ty>, v: HV) -> R<()> {
         let t = match t {
-            Some(t) => { self.untyped.remove(name); *self.vars.entry(name.into()).or_insert(t) }
+            Some(t) => { self.untyped.remove(name); self.vars.entry(name.into()).or_insert(t).clone() }
             None => {
                 if !self.vars.contains_key(name) { self.untyped.insert(name.into()); }
-                let cur = self.vars.get(name).copied();
-                let t = widen(cur, v.ty());
-                if cur != Some(t) { self.grew = true; self.vars.insert(name.into(), t); }
+                let cur = self.vars.get(name).cloned();
+                let t = widen(cur.clone(), v.ty());
+                if cur.as_ref() != Some(&t) { self.grew = true; self.vars.insert(name.into(), t.clone()); }
                 t
             }
         };
-        self.env.insert(name.into(), wrap_to(&v, t));
+        let v = fit_hv(&mut self.g, &v, &t)?;
+        self.env.insert(name.into(), v);
+        Ok(())
     }
 
-    fn assign(&mut self, name: &str, v: SVal, line: u32) -> R<()> {
-        if !self.vars.contains_key(name) && self.untyped.contains(name) { self.declare(name, None, v); return Ok(()); }
-        let t = match self.vars.get(name) { Some(t) => *t, None => return err(line, self.prog, format!("assignment to `{}`, which is not a variable here", base(name))) };
+    /// `name` (whole, or the element / field at `path`) gets `v`
+    fn store(&mut self, name: &str, path: &[PathStep], v: HV, line: u32) -> R<()> {
+        if !self.vars.contains_key(name) && self.untyped.contains(name) && path.is_empty() { return self.declare(name, None, v); }
+        let t = match self.vars.get(name) { Some(t) => t.clone(), None => return err(line, self.prog, format!("assignment to `{}`, which is not a variable here", base(name))) };
+        let cur = match self.env.get(name) { Some(c) => c.clone(), None => HV::konst_of(&t) };
+        let new = self.put(&cur, &t, path, v, line)?;
         if self.untyped.contains(name) {
-            let w = widen(Some(t), v.ty());
+            let w = widen(Some(t.clone()), new.ty());
             if w != t { self.grew = true; self.vars.insert(name.into(), w); }
-            let t = self.vars[name];
-            self.env.insert(name.into(), wrap_to(&v, t));
+            let w = self.vars[name].clone();
+            let new = fit_hv(&mut self.g, &new, &w)?;
+            self.env.insert(name.into(), new);
         } else {
-            self.env.insert(name.into(), wrap_to(&v, t));
+            let new = fit_hv(&mut self.g, &new, &t).map_err(|m| format!("{}: {}", self.here(line), m))?;
+            self.env.insert(name.into(), new);
         }
         Ok(())
+    }
+
+    /// `cur` (of type `t`) with the part at `path` replaced by `v`
+    fn put(&mut self, cur: &HV, t: &Ty, path: &[PathStep], v: HV, line: u32) -> R<HV> {
+        let Some((step, rest)) = path.split_first() else { return Ok(v) };
+        let (xs, et): (&Vec<HV>, Vec<Ty>) = match (cur, t) {
+            (HV::A(xs), Ty::Array(e, n)) => (xs, vec![(**e).clone(); *n]),
+            (HV::A(xs), Ty::Tuple(ts)) => (xs, ts.clone()),
+            _ => return err(line, self.prog, "indexing something that is not an array"),
+        };
+        let mut out = xs.clone();
+        match step {
+            PathStep::Const(k) => {
+                let k = *k;
+                if k >= out.len() { return err(line, self.prog, format!("index {} out of bounds (length {})", k, out.len())); }
+                out[k] = self.put(&xs[k], &et[k], rest, v, line)?;
+            }
+            PathStep::Var(i) => {
+                // every element: the new value where the index matches
+                for k in 0..out.len() {
+                    if i.hi < k as i128 || i.lo > k as i128 { continue; }
+                    let hit = compare(&mut self.g, i, &SVal::konst(k as i128), "==").bits[0];
+                    let nv = self.put(&xs[k], &et[k], rest, v.clone(), line)?;
+                    let nv = fit_hv(&mut self.g, &nv, &et[k])?;
+                    let old = fit_hv(&mut self.g, &xs[k], &et[k])?;
+                    out[k] = select_hv(&mut self.g, hit, &nv, &old).map_err(|m| format!("{}: {}", self.here(line), m))?;
+                }
+            }
+        }
+        Ok(HV::A(out))
     }
 
     // ------------------------------------------------------------ statements
@@ -108,6 +159,17 @@ impl<'p> Gen<'p> {
         Ok(())
     }
 
+    fn bind(&mut self, p: &Pattern, v: HV, t: Option<Ty>, line: u32) -> R<()> {
+        match p {
+            Pattern::Ident(n) => self.declare(n, t, v),
+            Pattern::Wild => Ok(()),
+            Pattern::Tuple(ps) => match v {
+                HV::A(xs) if xs.len() == ps.len() => { for (p, x) in ps.iter().zip(xs) { self.bind(p, x, None, line)?; } Ok(()) }
+                _ => err(line, self.prog, format!("cannot destructure this value into a {}-tuple", ps.len())),
+            },
+        }
+    }
+
     fn stmt(&mut self, s: &Stmt) -> R<()> {
         let line = s.line;
         match &s.kind {
@@ -115,50 +177,41 @@ impl<'p> Gen<'p> {
                 let t = match ty { Some(t) => Some(self.ty(t, line)?), None => None };
                 let v = match init {
                     Some(e) => self.eval(e)?,
-                    None => match t { Some(t) => SVal::of_ty(vec![Bit::C0; t.width()], t), None => return err(line, self.prog, "`let` needs an initializer or a type") },
+                    None => match &t { Some(t) => HV::konst_of(t), None => return err(line, self.prog, "`let` needs an initializer or a type") },
                 };
-                match pat {
-                    Pattern::Ident(n) => self.declare(n, t, v),
-                    Pattern::Wild => {}
-                    Pattern::Tuple(_) => return err(line, self.prog, "tuple patterns are not synthesized yet"),
-                }
-                Ok(())
+                self.bind(pat, v, t, line)
             }
             StmtKind::Carry { name, ty, init } => {
                 let t = self.ty(ty, line)?;
                 let v = self.eval(init)?;
-                self.declare(name, Some(t), v);
-                Ok(())
+                self.declare(name, Some(t), v)
             }
             StmtKind::Assign { target, op, value } => {
-                let name = match &target.kind {
-                    ExprKind::Path(p) if p.len() == 1 => p[0].clone(),
-                    _ => return err(line, self.prog, "only whole variables can be assigned in synthesized code so far"),
-                };
+                let (name, path) = self.target(target)?;
                 let rhs = self.eval(value)?;
                 let v = match op {
                     None => rhs,
                     Some(op) => {
                         let cur = self.eval(target)?;
-                        self.binop(*op, &cur, &rhs, Some(&name), line)?
+                        let (a, b) = (cur.s()?.clone(), rhs.s()?.clone());
+                        let wrap_ty = if matches!(op, BinOp::AddW | BinOp::SubW | BinOp::MulW) { Some(self.part_ty(&name, &path, line)?) } else { None };
+                        HV::S(self.binop(*op, &a, &b, wrap_ty, line)?)
                     }
                 };
-                self.assign(&name, v, line)
+                self.store(&name, &path, v, line)
             }
             StmtKind::Expr(e) => { self.eval(e)?; Ok(()) }
             StmtKind::Assert { .. } => Ok(()),
-            StmtKind::For { pat, iter, body, .. } => {
-                // a loop with constant bounds and no channel operation: unrolled
-                let (lo, hi, incl) = match &iter.kind { ExprKind::Range(a, b, i) => (a, b, *i), _ => return err(line, self.prog, "this loop is not synthesized yet") };
-                let lv = self.eval(lo)?.as_const();
-                let hv = self.eval(hi)?.as_const();
-                let (Some(l), Some(h)) = (lv, hv) else { return err(line, self.prog, "a loop without channel operations needs constant bounds to be unrolled") };
-                let h = if incl { h + 1 } else { h };
-                if h - l > 4096 { return err(line, self.prog, format!("{} iterations are too many to unroll", h - l)); }
-                for k in l..h {
-                    if let Pattern::Ident(n) = pat { self.declare(n, Some(Ty::Int { lo: l, hi: (h - 1).max(l) }), SVal::konst(k)); }
+            StmtKind::For { attr, pat, iter, body } => {
+                // a loop without channel operations: unrolled (the iterated values known at compile time)
+                let items = self.iterate(iter, line)?;
+                if items.len() > 4096 { return err(line, self.prog, format!("{} iterations are too many to unroll", items.len())); }
+                let commit = !matches!(attr, LoopAttr::Unroll(_));
+                for it in items {
+                    self.bind(pat, it, None, line)?;
                     self.stmts(&body.stmts)?;
                     if let Some(t) = &body.tail { self.eval(t)?; }
+                    if commit { self.commit_regs(); }
                 }
                 Ok(())
             }
@@ -167,13 +220,77 @@ impl<'p> Gen<'p> {
         }
     }
 
+    /// the values a pure loop goes through
+    fn iterate(&mut self, iter: &Expr, line: u32) -> R<Vec<HV>> {
+        if let ExprKind::Range(lo, hi, incl) = &iter.kind {
+            let (Some(l), Some(h)) = (self.scalar(lo)?.as_const(), self.scalar(hi)?.as_const()) else {
+                return err(line, self.prog, "a loop without channel operations needs constant bounds to be unrolled");
+            };
+            let h = if *incl { h + 1 } else { h };
+            return Ok((l..h).map(|k| HV::S(SVal::konst(k))).collect());
+        }
+        match self.eval(iter)? {
+            HV::A(xs) => Ok(xs),
+            HV::S(_) => err(line, self.prog, "a loop over something that is neither a range nor an array"),
+        }
+    }
+
+    /// `@reg` variables written in a loop body: their pending values (lowering writes them to
+    /// `NAME~p`) become current at the end of the iteration
+    pub fn commit_regs(&mut self) {
+        let pend: Vec<String> = self.env.keys().filter(|k| k.ends_with("~p")).cloned().collect();
+        for p in pend {
+            let v = self.env[&p].clone();
+            self.env.insert(p.trim_end_matches("~p").to_string(), v);
+        }
+    }
+
+    /// an assignment target: the variable and the path inside it
+    fn target(&mut self, e: &Expr) -> R<(String, Vec<PathStep>)> {
+        match &e.kind {
+            ExprKind::Path(p) if p.len() == 1 => Ok((p[0].clone(), vec![])),
+            ExprKind::Index(b, i) => {
+                let (n, mut path) = self.target(b)?;
+                let iv = self.scalar(i)?;
+                path.push(match iv.as_const() { Some(k) if k >= 0 => PathStep::Const(k as usize), _ => PathStep::Var(iv) });
+                Ok((n, path))
+            }
+            ExprKind::Field(b, f) => {
+                let (n, mut path) = self.target(b)?;
+                let k: usize = f.parse().map_err(|_| format!("{}: unknown field `{}`", self.here(e.line), f))?;
+                path.push(PathStep::Const(k));
+                Ok((n, path))
+            }
+            _ => err(e.line, self.prog, "invalid assignment target"),
+        }
+    }
+
+    /// the type of the part of variable `name` at `path`
+    fn part_ty(&self, name: &str, path: &[PathStep], line: u32) -> R<Ty> {
+        let mut t = self.vars.get(name).cloned().ok_or_else(|| format!("{}: wrapping operators need a typed variable on the left", self.here(line)))?;
+        for s in path {
+            t = match (t, s) {
+                (Ty::Array(e, _), _) => *e,
+                (Ty::Tuple(ts), PathStep::Const(k)) => ts[*k].clone(),
+                _ => return err(line, self.prog, "bad index"),
+            };
+        }
+        Ok(t)
+    }
+
     // ------------------------------------------------------------ expressions
 
-    pub fn eval(&mut self, e: &Expr) -> R<SVal> {
+    pub fn scalar(&mut self, e: &Expr) -> R<SVal> {
+        let v = self.eval(e)?;
+        v.s().cloned().map_err(|m| format!("{}: {}", self.here(e.line), m))
+    }
+
+    pub fn eval(&mut self, e: &Expr) -> R<HV> {
         let line = e.line;
         match &e.kind {
-            ExprKind::Int(n) => Ok(SVal::konst(*n)),
-            ExprKind::Bool(b) => Ok(SVal::bool_const(*b)),
+            ExprKind::Int(n) => Ok(HV::S(SVal::konst(*n))),
+            ExprKind::Bool(b) => Ok(HV::S(SVal::bool_const(*b))),
+            ExprKind::Float(_) => match self.konst(e) { Some(v) => self.value(&v, line), None => err(line, self.prog, "floating point is only for compile-time constants") },
             ExprKind::Path(p) => {
                 let n = p.last().unwrap();
                 if p.len() == 1 { if let Some(v) = self.env.get(n) { return Ok(v.clone()); } }
@@ -184,97 +301,139 @@ impl<'p> Gen<'p> {
                 }
             }
             ExprKind::Unary(c, x) => {
-                let v = self.eval(x)?;
-                Ok(match c {
+                let v = self.scalar(x)?;
+                Ok(HV::S(match c {
                     '-' => neg(&mut self.g, &v),
                     '!' => { let t = truth(&mut self.g, &v); SVal::bit(self.g.not(t)) }
                     _ => not_bits(&mut self.g, &v),
-                })
+                }))
             }
             ExprKind::Binary(op, l, r) => {
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let a = self.eval(l)?;
-                    let b = self.eval(r)?;
+                    let (a, b) = (self.scalar(l)?, self.scalar(r)?);
                     let (x, y) = (truth(&mut self.g, &a), truth(&mut self.g, &b));
-                    return Ok(SVal::bit(if *op == BinOp::And { self.g.and(x, y) } else { self.g.or(x, y) }));
+                    return Ok(HV::S(SVal::bit(if *op == BinOp::And { self.g.and(x, y) } else { self.g.or(x, y) })));
                 }
-                let a = self.eval(l)?;
-                let b = self.eval(r)?;
-                let left = match &l.kind { ExprKind::Path(p) if p.len() == 1 => Some(p[0].clone()), _ => None };
-                self.binop(*op, &a, &b, left.as_deref(), line)
+                let (a, b) = (self.scalar(l)?, self.scalar(r)?);
+                let wrap_ty = if matches!(op, BinOp::AddW | BinOp::SubW | BinOp::MulW) {
+                    let (n, path) = self.target(l).map_err(|_| format!("{}: wrapping operators need a typed variable on the left", self.here(line)))?;
+                    Some(self.part_ty(&n, &path, line)?)
+                } else { None };
+                Ok(HV::S(self.binop(*op, &a, &b, wrap_ty, line)?))
             }
             ExprKind::Cast(x, t) => {
                 let v = self.eval(x)?;
                 let t = self.ty(t, line)?;
-                Ok(wrap_to(&v, t))
+                self.convert_hv(&v, &t, Round::Trunc, Ovf::Wrap, line)
             }
             ExprKind::Call(c, a) => self.call(c, a, line),
             ExprKind::Method(r, n, t, a) => self.method(r, n, t, a, line),
+            ExprKind::Field(x, f) => {
+                let v = self.eval(x)?;
+                let k: usize = f.parse().map_err(|_| format!("{}: unknown field `{}`", self.here(line), f))?;
+                match v { HV::A(xs) if k < xs.len() => Ok(xs[k].clone()), _ => err(line, self.prog, format!("no field `{}`", f)) }
+            }
             ExprKind::Index(x, i) => {
                 let v = self.eval(x)?;
-                let k = self.eval(i)?;
-                match k.as_const() {
-                    Some(k) if k >= 0 => Ok(SVal::of_ty(vec![v.ext(k as usize + 1)[k as usize]], Ty::Int { lo: 0, hi: 1 })),
-                    _ => {
-                        let s = shift(&mut self.g, &v, &k, false)?;
-                        Ok(SVal::of_ty(vec![s.bits[0]], Ty::Int { lo: 0, hi: 1 }))
-                    }
+                // a slice x[a..b] of an array
+                if let ExprKind::Range(lo, hi, incl) = &i.kind {
+                    let (Some(l), Some(h)) = (self.scalar(lo)?.as_const(), self.scalar(hi)?.as_const()) else { return err(line, self.prog, "a slice needs constant bounds") };
+                    let h = if *incl { h + 1 } else { h };
+                    return match v {
+                        HV::A(xs) if l >= 0 && h >= l && (h as usize) <= xs.len() => Ok(HV::A(xs[l as usize..h as usize].to_vec())),
+                        _ => err(line, self.prog, format!("slice {}..{} out of bounds", l, h)),
+                    };
+                }
+                let k = self.scalar(i)?;
+                match v {
+                    HV::A(xs) => self.index(&xs, &k, line),
+                    HV::S(s) => match k.as_const() {
+                        Some(k) if k >= 0 => Ok(HV::S(SVal::of_ty(vec![s.ext(k as usize + 1)[k as usize]], &Ty::Int { lo: 0, hi: 1 }))),
+                        _ => { let sh = shift(&mut self.g, &s, &k, false)?; Ok(HV::S(SVal::of_ty(vec![sh.bits[0]], &Ty::Int { lo: 0, hi: 1 }))) }
+                    },
                 }
             }
             ExprKind::Slice(x, h, l) => {
-                let v = self.eval(x)?;
-                let (Some(h), Some(l)) = (self.eval(h)?.as_const(), self.eval(l)?.as_const()) else { return err(line, self.prog, "a bit slice needs constant bounds") };
+                let v = self.scalar(x)?;
+                let (Some(h), Some(l)) = (self.scalar(h)?.as_const(), self.scalar(l)?.as_const()) else { return err(line, self.prog, "a bit slice needs constant bounds") };
                 if l < 0 || h < l { return err(line, self.prog, format!("invalid bit slice [{}:{}]", h, l)); }
                 let w = (h - l + 1) as usize;
                 let bits = v.ext(h as usize + 1)[l as usize..=h as usize].to_vec();
-                Ok(SVal::of_ty(bits, Ty::Int { lo: 0, hi: (1i128 << w) - 1 }))
+                Ok(HV::S(SVal::of_ty(bits, &Ty::Int { lo: 0, hi: (1i128 << w) - 1 })))
+            }
+            ExprKind::Range(lo, hi, incl) => {
+                let (Some(l), Some(h)) = (self.scalar(lo)?.as_const(), self.scalar(hi)?.as_const()) else { return err(line, self.prog, "a range used as a value needs constant bounds") };
+                let h = if *incl { h + 1 } else { h };
+                Ok(HV::A((l..h).map(|k| HV::S(SVal::konst(k))).collect()))
+            }
+            ExprKind::Array(xs) | ExprKind::Tuple(xs) => Ok(HV::A(xs.iter().map(|x| self.eval(x)).collect::<R<_>>()?)),
+            ExprKind::Repeat(x, n) => {
+                let v = self.eval(x)?;
+                let Some(n) = self.scalar(n)?.as_const() else { return err(line, self.prog, "[x; n] needs a constant n") };
+                Ok(HV::A(vec![v; n.max(0) as usize]))
             }
             ExprKind::Block(b) => {
                 self.stmts(&b.stmts)?;
-                match &b.tail { Some(t) => self.eval(t), None => Ok(SVal::konst(0)) }
+                match &b.tail { Some(t) => self.eval(t), None => Ok(HV::S(SVal::konst(0))) }
             }
             ExprKind::Comptime(_) => match self.konst(e) {
                 Some(v) => self.value(&v, line),
                 None => err(line, self.prog, "comptime block that reads run-time values"),
             },
             ExprKind::If(c, t, el) => {
-                let cv = self.eval(c)?;
+                let cv = self.scalar(c)?;
                 let cb = truth(&mut self.g, &cv);
                 let before = self.env.clone();
-                let tv = { self.stmts(&t.stmts)?; match &t.tail { Some(x) => self.eval(x)?, None => SVal::konst(0) } };
+                let tv = { self.stmts(&t.stmts)?; match &t.tail { Some(x) => self.eval(x)?, None => HV::S(SVal::konst(0)) } };
                 let after_t = std::mem::replace(&mut self.env, before);
-                let fv = match el { Some(x) => self.eval(x)?, None => SVal::konst(0) };
+                let fv = match el { Some(x) => self.eval(x)?, None => HV::S(SVal::konst(0)) };
                 let after_f = std::mem::take(&mut self.env);
-                self.env = self.merge(cb, after_t, after_f);
-                Ok(select(&mut self.g, cb, &tv, &fv))
+                self.env = self.merge(cb, after_t, after_f)?;
+                Ok(select_hv(&mut self.g, cb, &tv, &fv).unwrap_or(tv))
             }
             ExprKind::Match(s, arms) => self.matching(s, arms, line),
-            ExprKind::Str(_) => Ok(SVal::konst(0)),
+            ExprKind::Str(_) => Ok(HV::S(SVal::konst(0))),
             _ => err(line, self.prog, "this expression is not synthesized yet"),
         }
     }
 
+    /// element `k` of `xs` (a run-time index: a multiplexer over the elements)
+    fn index(&mut self, xs: &[HV], k: &SVal, line: u32) -> R<HV> {
+        if let Some(c) = k.as_const() {
+            return xs.get(c as usize).cloned().ok_or_else(|| format!("{}: index {} out of bounds (length {})", self.here(line), c, xs.len()));
+        }
+        if xs.is_empty() { return err(line, self.prog, "indexing an empty array"); }
+        let t = xs.iter().skip(1).fold(xs[0].ty(), |a, b| widen(Some(a), b.ty()));
+        let mut out = fit_hv(&mut self.g, &xs[0], &t)?;
+        for (j, x) in xs.iter().enumerate().skip(1) {
+            if k.hi < j as i128 || k.lo > j as i128 { continue; }
+            let hit = compare(&mut self.g, k, &SVal::konst(j as i128), "==").bits[0];
+            let xv = fit_hv(&mut self.g, x, &t)?;
+            out = select_hv(&mut self.g, hit, &xv, &out)?;
+        }
+        Ok(out)
+    }
+
     /// the variables after `c ? then : else`
-    fn merge(&mut self, c: Bit, t: HashMap<String, SVal>, f: HashMap<String, SVal>) -> HashMap<String, SVal> {
+    fn merge(&mut self, c: Bit, t: HashMap<String, HV>, f: HashMap<String, HV>) -> R<HashMap<String, HV>> {
         let mut out = HashMap::new();
         for (k, tv) in &t {
             match f.get(k) {
-                Some(fv) if fv.bits == tv.bits => { out.insert(k.clone(), tv.clone()); }
+                Some(fv) if fv.flat() == tv.flat() => { out.insert(k.clone(), tv.clone()); }
                 Some(fv) => {
-                    let ty = self.vars.get(k).copied().unwrap_or(tv.ty());
-                    let v = select(&mut self.g, c, tv, fv);
-                    out.insert(k.clone(), wrap_to(&v, ty));
+                    let ty = self.vars.get(k).cloned().unwrap_or(tv.ty());
+                    let (a, b) = (fit_hv(&mut self.g, tv, &ty)?, fit_hv(&mut self.g, fv, &ty)?);
+                    out.insert(k.clone(), select_hv(&mut self.g, c, &a, &b)?);
                 }
                 None => { out.insert(k.clone(), tv.clone()); }
             }
         }
         for (k, fv) in f { out.entry(k).or_insert(fv); }
-        out
+        Ok(out)
     }
 
-    fn matching(&mut self, s: &Expr, arms: &[Arm], line: u32) -> R<SVal> {
-        let sv = self.eval(s)?;
-        // arms from the last to the first: each one a condition in front of the rest
+    fn matching(&mut self, s: &Expr, arms: &[Arm], line: u32) -> R<HV> {
+        let sv = self.scalar(s)?;
         let mut conds = vec![];
         let mut vals = vec![];
         let mut envs = vec![];
@@ -283,10 +442,16 @@ impl<'p> Gen<'p> {
             self.env = start.clone();
             let c = match &a.pat {
                 MatchPat::Wild => Bit::C1,
-                MatchPat::Bind(n) => { self.declare(n, None, sv.clone()); Bit::C1 }
-                MatchPat::Lit(e) => { let v = self.eval(e)?; compare(&mut self.g, &sv, &v, "==").bits[0] }
+                MatchPat::Bind(n) => {
+                    let c = self.prog.consts.read().unwrap().get(n).cloned();
+                    match c {
+                        Some(v) => { let k = self.value(&v, line)?; compare(&mut self.g, &sv, k.s()?, "==").bits[0] }
+                        None => { self.declare(n, None, HV::S(sv.clone()))?; Bit::C1 }
+                    }
+                }
+                MatchPat::Lit(e) => { let v = self.scalar(e)?; compare(&mut self.g, &sv, &v, "==").bits[0] }
                 MatchPat::Range(lo, hi, incl) => {
-                    let (l, h) = (self.eval(lo)?, self.eval(hi)?);
+                    let (l, h) = (self.scalar(lo)?, self.scalar(hi)?);
                     let a1 = compare(&mut self.g, &sv, &l, ">=").bits[0];
                     let a2 = compare(&mut self.g, &sv, &h, if *incl { "<=" } else { "<" }).bits[0];
                     self.g.and(a1, a2)
@@ -294,7 +459,7 @@ impl<'p> Gen<'p> {
                 MatchPat::Tuple(_) => return err(line, self.prog, "tuple patterns are not synthesized yet"),
             };
             let c = match &a.guard {
-                Some(g) => { let gv = self.eval(g)?; let gb = truth(&mut self.g, &gv); self.g.and(c, gb) }
+                Some(g) => { let gv = self.scalar(g)?; let gb = truth(&mut self.g, &gv); self.g.and(c, gb) }
                 None => c,
             };
             let v = self.eval(&a.body)?;
@@ -309,30 +474,30 @@ impl<'p> Gen<'p> {
         while let Some(c) = conds.pop() {
             let tv = vals.pop().unwrap();
             let te = envs.pop().unwrap();
-            v = select(&mut self.g, c, &tv, &v);
-            env = self.merge(c, te, env);
+            v = select_hv(&mut self.g, c, &tv, &v)?;
+            env = self.merge(c, te, env)?;
         }
         self.env = env;
         Ok(v)
     }
 
-    fn binop(&mut self, op: BinOp, a: &SVal, b: &SVal, left: Option<&str>, line: u32) -> R<SVal> {
+    fn binop(&mut self, op: BinOp, a: &SVal, b: &SVal, wrap_ty: Option<Ty>, line: u32) -> R<SVal> {
+        let at = self.here(line);
         let g = &mut self.g;
         Ok(match op {
             BinOp::Add => add(g, a, b),
             BinOp::Sub => sub(g, a, b),
             BinOp::Mul => mul(g, a, b),
-            BinOp::Div => divrem(g, a, b).map_err(|m| format!("{}: {}", self.prog.loc(line), m))?.0,
-            BinOp::Rem => divrem(g, a, b).map_err(|m| format!("{}: {}", self.prog.loc(line), m))?.1,
+            BinOp::Div => divrem(g, a, b).map_err(|m| format!("{}: {}", at, m))?.0,
+            BinOp::Rem => divrem(g, a, b).map_err(|m| format!("{}: {}", at, m))?.1,
             BinOp::AddW | BinOp::SubW | BinOp::MulW => {
-                let t = left.and_then(|n| self.vars.get(n).copied()).ok_or_else(|| format!("{}: wrapping operators need a typed variable on the left", self.prog.loc(line)))?;
-                let g = &mut self.g;
+                let t = wrap_ty.ok_or_else(|| format!("{}: wrapping operators need a typed variable on the left", at))?;
                 let v = match op { BinOp::AddW => add(g, a, b), BinOp::SubW => sub(g, a, b), _ => mul(g, a, b) };
-                wrap_to(&v, t)
+                convert(g, &v, &t, Round::Trunc, Ovf::Wrap)
             }
             BinOp::Shl | BinOp::Shr => match b.as_const() {
                 Some(k) if (0..=120).contains(&k) => if op == BinOp::Shl { shl_const(a, k as u32) } else { shr_const(a, k as u32) },
-                _ => shift(g, a, b, op == BinOp::Shl).map_err(|m| format!("{}: {}", self.prog.loc(line), m))?,
+                _ => shift(g, a, b, op == BinOp::Shl).map_err(|m| format!("{}: {}", at, m))?,
             },
             BinOp::BitAnd => bitop(g, a, b, '&'),
             BinOp::BitOr => bitop(g, a, b, '|'),
@@ -347,55 +512,134 @@ impl<'p> Gen<'p> {
         })
     }
 
+    /// `v` converted to `t` leaf by leaf
+    fn convert_hv(&mut self, v: &HV, t: &Ty, r: Round, o: Ovf, line: u32) -> R<HV> {
+        match (v, t) {
+            (HV::S(s), t) if t.is_scalar() => Ok(HV::S(convert(&mut self.g, s, t, r, o))),
+            (HV::A(xs), Ty::Array(e, _)) => Ok(HV::A(xs.iter().map(|x| self.convert_hv(x, e, r, o, line)).collect::<R<_>>()?)),
+            (HV::A(xs), t) if t.is_scalar() => Ok(HV::A(xs.iter().map(|x| self.convert_hv(x, t, r, o, line)).collect::<R<_>>()?)),
+            _ => err(line, self.prog, "cannot convert this value to that type"),
+        }
+    }
+
     /// `T` of `x.to::<T>()` and friends
     fn targ_ty(&mut self, t: &[TArg], line: u32) -> R<Ty> {
         match t.first() { Some(TArg::Ty(t)) => self.ty(t, line), _ => err(line, self.prog, "expected a type argument, e.g. `.sat::<u8>()`") }
     }
 
-    fn method(&mut self, r: &Expr, n: &str, t: &[TArg], a: &[Arg], line: u32) -> R<SVal> {
+    /// the rounding and overflow modes of `.to::<T>(round = r, ovf = o)` (the type's own by default)
+    fn modes(&self, t: &Ty, a: &[Arg], ovf_default: Option<Ovf>) -> (Round, Ovf) {
+        let (mut r, mut o) = match t { Ty::Fixed { round, ovf, .. } => (*round, *ovf), _ => (Round::Trunc, Ovf::Check) };
+        if let Some(d) = ovf_default { o = d; }
+        for x in a {
+            let name = match &x.value.kind { ExprKind::Path(p) => p.last().cloned().unwrap_or_default(), _ => continue };
+            match (x.name.as_deref(), name.as_str()) {
+                (Some("round"), "trunc") => r = Round::Trunc,
+                (Some("round"), "nearest") => r = Round::Nearest,
+                (Some("round"), "even") => r = Round::Even,
+                (Some("ovf"), "sat") => o = Ovf::Sat,
+                (Some("ovf"), "wrap") => o = Ovf::Wrap,
+                (Some("ovf"), "check") => o = Ovf::Check,
+                _ => {}
+            }
+        }
+        (r, o)
+    }
+
+    fn method(&mut self, r: &Expr, n: &str, t: &[TArg], a: &[Arg], line: u32) -> R<HV> {
         let v = self.eval(r)?;
-        match n {
-            "wrap" => { let t = self.targ_ty(t, line)?; Ok(wrap_to(&v, t)) }
-            "sat" => { let t = self.targ_ty(t, line)?; Ok(sat_to(&mut self.g, &v, t)) }
-            "to" | "quantize" => {
-                let t = self.targ_ty(t, line)?;
-                let ovf = a.iter().find(|x| x.name.as_deref() == Some("ovf")).and_then(|x| match &x.value.kind { ExprKind::Path(p) => p.last().cloned(), _ => None });
-                Ok(if ovf.as_deref() == Some("sat") { sat_to(&mut self.g, &v, t) } else { wrap_to(&v, t) })
+        match (n, &v) {
+            ("to" | "quantize", _) => { let ty = self.targ_ty(t, line)?; let (rr, o) = self.modes(&ty, a, None); self.convert_hv(&v, &ty, rr, o, line) }
+            ("sat", _) => { let ty = self.targ_ty(t, line)?; let (rr, o) = self.modes(&ty, a, Some(Ovf::Sat)); self.convert_hv(&v, &ty, rr, o, line) }
+            ("wrap", _) => { let ty = self.targ_ty(t, line)?; let (rr, o) = self.modes(&ty, a, Some(Ovf::Wrap)); self.convert_hv(&v, &ty, rr, o, line) }
+            ("len", HV::A(xs)) => Ok(HV::S(SVal::konst(xs.len() as i128))),
+            ("rev", HV::A(xs)) => Ok(HV::A(xs.iter().rev().cloned().collect())),
+            ("unrolled" | "iter" | "collect", HV::A(_)) => Ok(v),
+            ("enumerate", HV::A(xs)) => Ok(HV::A(xs.iter().enumerate().map(|(i, x)| HV::A(vec![HV::S(SVal::konst(i as i128)), x.clone()])).collect())),
+            ("map", HV::A(xs)) => { let xs = xs.clone(); let f = a.first().ok_or("map() takes a lambda")?.value.clone(); Ok(HV::A(self.lambda(&f, xs, line)?)) }
+            ("sum", HV::A(xs)) => {
+                let mut it = xs.iter();
+                let mut acc = it.next().ok_or_else(|| format!("{}: sum of an empty array", self.here(line)))?.s()?.clone();
+                for x in it { acc = add(&mut self.g, &acc, x.s()?); }
+                Ok(HV::S(acc))
             }
-            "abs" => {
-                let ng = neg(&mut self.g, &v);
-                let s = compare(&mut self.g, &v, &SVal::konst(0), "<").bits[0];
-                let r = select(&mut self.g, s, &ng, &v);
-                Ok(SVal { lo: 0.max(v.lo.min(0).abs().min(v.lo.max(0))), hi: v.lo.abs().max(v.hi.abs()), ..r }.normalized())
+            ("tree_sum", HV::A(xs)) => {
+                let mut items: Vec<SVal> = xs.iter().map(|x| x.s().cloned()).collect::<R<_>>()?;
+                if items.is_empty() { return err(line, self.prog, "sum of an empty array"); }
+                while items.len() > 1 {
+                    let mut next = vec![];
+                    for ch in items.chunks(2) { next.push(if ch.len() == 2 { add(&mut self.g, &ch[0], &ch[1]) } else { ch[0].clone() }); }
+                    items = next;
+                }
+                Ok(HV::S(items.remove(0)))
             }
-            "xor_reduce" => Ok(SVal::of_ty(vec![self.g.reduce_xor(&v.bits)], Ty::Int { lo: 0, hi: 1 })),
-            "popcount" => {
+            ("abs", HV::S(s)) => {
+                let s = s.clone();
+                let ng = neg(&mut self.g, &s);
+                let lt = compare(&mut self.g, &s, &SVal { frac: s.frac, ..SVal::konst(0) }, "<").bits[0];
+                let x = select(&mut self.g, lt, &ng, &s);
+                let hi = s.lo.abs().max(s.hi.abs());
+                let lo = if s.lo >= 0 { s.lo } else if s.hi <= 0 { -s.hi } else { 0 };
+                Ok(HV::S(SVal { lo, hi, ..x }.normalized()))
+            }
+            ("xor_reduce", HV::S(s)) => Ok(HV::S(SVal::of_ty(vec![self.g.reduce_xor(&s.bits)], &Ty::Int { lo: 0, hi: 1 }))),
+            ("popcount", HV::S(s)) => {
                 let mut acc = SVal::konst(0);
-                for b in v.bits.clone() { let x = SVal::of_ty(vec![b], Ty::Int { lo: 0, hi: 1 }); acc = add(&mut self.g, &acc, &x); }
-                Ok(acc)
+                for b in s.bits.clone() { let x = SVal::of_ty(vec![b], &Ty::Int { lo: 0, hi: 1 }); acc = add(&mut self.g, &acc, &x); }
+                Ok(HV::S(acc))
             }
-            other => err(line, self.prog, format!("method `{}` is not synthesized", other)),
+            (other, _) => err(line, self.prog, format!("method `{}` is not synthesized here", other)),
         }
     }
 
-    fn call(&mut self, c: &Expr, a: &[Arg], line: u32) -> R<SVal> {
+    /// a lambda `|x| ..` (or `|i, x| ..` over pairs) applied to each item
+    fn lambda(&mut self, lam: &Expr, items: Vec<HV>, line: u32) -> R<Vec<HV>> {
+        let (ps, body) = match &lam.kind { ExprKind::Lambda(p, b) => (p.clone(), b.clone()), _ => return err(line, self.prog, "expected a lambda such as `|x| x * 2`") };
+        let mut out = vec![];
+        for it in items {
+            if ps.len() == 1 { self.declare(&ps[0], None, it)?; }
+            else if let HV::A(xs) = it { for (p, x) in ps.iter().zip(xs) { self.declare(p, None, x)?; } }
+            out.push(self.eval(&body)?);
+        }
+        Ok(out)
+    }
+
+    fn call(&mut self, c: &Expr, a: &[Arg], line: u32) -> R<HV> {
         let name = match &c.kind { ExprKind::Path(p) | ExprKind::PathT(p, _) => p.last().unwrap().clone(), _ => return err(line, self.prog, "callee must be a function name") };
         match name.as_str() {
-            "print" => return Ok(SVal::konst(0)),
+            "print" => return Ok(HV::S(SVal::konst(0))),
             "min" | "max" if a.len() == 2 => {
-                let (x, y) = (self.eval(&a[0].value)?, self.eval(&a[1].value)?);
+                let (x, y) = (self.scalar(&a[0].value)?, self.scalar(&a[1].value)?);
                 let lt = compare(&mut self.g, &x, &y, "<").bits[0];
-                return Ok(if name == "min" { select(&mut self.g, lt, &x, &y) } else { select(&mut self.g, lt, &y, &x) });
+                return Ok(HV::S(if name == "min" { select(&mut self.g, lt, &x, &y) } else { select(&mut self.g, lt, &y, &x) }));
             }
             "abs" if a.len() == 1 => {
                 let r = Expr { kind: ExprKind::Method(Box::new(a[0].value.clone()), "abs".into(), vec![], vec![]), line };
                 return self.eval(&r);
             }
+            "concat" => {
+                let mut out = vec![];
+                for x in a { match self.eval(&x.value)? { HV::A(xs) => out.extend(xs), _ => return err(line, self.prog, "concat expects arrays") } }
+                return Ok(HV::A(out));
+            }
+            "len" if a.len() == 1 => return match self.eval(&a[0].value)? { HV::A(xs) => Ok(HV::S(SVal::konst(xs.len() as i128))), _ => err(line, self.prog, "len() expects an array") },
+            "zip" if a.len() == 2 => {
+                let (x, y) = (self.eval(&a[0].value)?, self.eval(&a[1].value)?);
+                return match (x, y) { (HV::A(xs), HV::A(ys)) => Ok(HV::A(xs.into_iter().zip(ys).map(|(p, q)| HV::A(vec![p, q])).collect())), _ => err(line, self.prog, "zip() expects two arrays") };
+            }
+            "array" if a.len() == 2 => {
+                let Some(n) = self.scalar(&a[0].value)?.as_const() else { return err(line, self.prog, "array(n, ..) needs a constant n") };
+                let items = (0..n).map(|k| HV::S(SVal::konst(k))).collect();
+                return Ok(HV::A(self.lambda(&a[1].value, items, line)?));
+            }
             _ => {}
         }
         let decl = match self.prog.fns.get(&name).cloned() {
             Some(d) => d,
-            None => return err(line, self.prog, format!("`{}` is not synthesized", name)),
+            None => return match self.konst(&Expr { kind: ExprKind::Call(Box::new(c.clone()), a.to_vec()), line }) {
+                Some(v) => self.value(&v, line),
+                None => err(line, self.prog, format!("`{}` is not synthesized", name)),
+            },
         };
         if decl.kind == FnKind::Task { return err(line, self.prog, format!("`{}` is a task: spawn it", name)); }
         if self.depth > 32 { return err(line, self.prog, "recursion is not synthesized"); }
@@ -408,28 +652,26 @@ impl<'p> Gen<'p> {
         for (p, u) in decl.params.iter().zip(&params) {
             let v = match vals.iter().find(|(n, _)| n.as_deref() == Some(p.name.as_str())) { Some((_, v)) => v.clone(), None => match positional.next() { Some(v) => v, None => return err(line, self.prog, format!("missing argument `{}`", p.name)) } };
             let t = self.ty(&p.ty, line)?;
-            self.declare(u, Some(t), v);
+            self.declare(u, Some(t), v)?;
         }
         self.depth += 1;
         let mut stmts = body.stmts.clone();
         let mut tail = body.tail.clone();
-        // `return e` as the last statement is the tail
         if tail.is_none() {
             if let Some(Stmt { kind: StmtKind::Return(Some(e)), .. }) = stmts.last() { tail = Some(Box::new(e.clone())); stmts.pop(); }
         }
-        let r = self.stmts(&stmts).and_then(|_| match &tail { Some(t) => self.eval(t), None => Ok(SVal::konst(0)) });
+        let r = self.stmts(&stmts).and_then(|_| match &tail { Some(t) => self.eval(t), None => Ok(HV::S(SVal::konst(0))) });
         self.depth -= 1;
         let v = r?;
-        match &decl.ret { Some(rt) => { let t = self.ty(rt, line)?; Ok(wrap_to(&v, t)) } None => Ok(v) }
+        match &decl.ret { Some(rt) => { let t = self.ty(rt, line)?; fit_hv(&mut self.g, &v, &t) } None => Ok(v) }
     }
 }
 
-fn widen(cur: Option<Ty>, t: Ty) -> Ty {
-    match (cur, t) {
-        (None, t) => t,
-        (Some(Ty::Bool), Ty::Bool) => Ty::Bool,
-        (Some(a), b) => { let ((l1, h1), (l2, h2)) = (a.range(), b.range()); Ty::Int { lo: l1.min(l2), hi: h1.max(h2) } }
-    }
+/// a step into an array or tuple: a constant index, or one known only at run time
+#[derive(Clone)]
+pub enum PathStep {
+    Const(usize),
+    Var(SVal),
 }
 
 /// the source name of a unique name (`x.3` → `x`)
@@ -442,50 +684,53 @@ struct Chan { ty: Ty, out: bool }
 /// the task `decl` lowered to `cfg` as a netlist; `params` fixes scalar parameters to constants
 pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &HashMap<String, i128>) -> R<crate::Synth> {
     let mut warnings = vec![];
-    // the parameters
     let mut gen = Gen::new(prog);
     let mut hw = vec![];
     for (p, u) in decl.params.iter().zip(&cfg.params) {
         let h = match &p.ty {
             TypeExpr::Chan(t, _) => {
                 let ty = gen.ty(t, decl.line)?;
+                if !ty.is_scalar() { return Err(format!("{}: channel `{}`: channels of arrays or tuples are not synthesized yet", prog.loc(decl.line), p.name)); }
                 match crate::dir_of(decl, &p.name) {
                     Some(true) => ParamHw::OutChan(ty),
                     Some(false) => ParamHw::InChan(ty),
                     None => { warnings.push(format!("channel `{}` is never used", p.name)); ParamHw::InChan(ty) }
                 }
             }
-            t => ParamHw::Scalar(gen.ty(t, decl.line)?, params.get(&p.name).copied()),
+            t => {
+                let ty = gen.ty(t, decl.line)?;
+                if !ty.is_scalar() { return Err(format!("{}: parameter `{}`: arrays as parameters are not synthesized yet", prog.loc(decl.line), p.name)); }
+                ParamHw::Scalar(ty, params.get(&p.name).copied())
+            }
         };
         hw.push((p.name.clone(), u.clone(), h));
     }
     let chans: HashMap<String, Chan> = hw.iter().filter_map(|(_, u, h)| match h {
-        ParamHw::InChan(t) => Some((u.clone(), Chan { ty: *t, out: false })),
-        ParamHw::OutChan(t) => Some((u.clone(), Chan { ty: *t, out: true })),
+        ParamHw::InChan(t) => Some((u.clone(), Chan { ty: t.clone(), out: false })),
+        ParamHw::OutChan(t) => Some((u.clone(), Chan { ty: t.clone(), out: true })),
         _ => None,
     }).collect();
 
     // the type pass: the widths of the variables, untyped ones widened until nothing grows
     let mut vars: HashMap<String, Ty> = HashMap::new();
-    let mut untyped = Default::default();
+    let mut untyped: HashSet<String> = Default::default();
     for round in 0.. {
-        if round == 12 {
-            let grow: Vec<&str> = gen.untyped.iter().map(|n| base(n)).collect();
-            return Err(format!("{}: variable(s) {} keep growing with every assignment: give them a type (or use `carry`)", decl.name, grow.join(", ")));
-        }
         let mut t = Gen::new(prog);
         t.vars = vars.clone();
-        t.untyped = untyped;
+        t.untyped = untyped.clone();
         temps(&mut t, cfg, &chans, &hw)?;
         for b in &cfg.blocks {
             t.env = scratch_env(&mut t, &hw);
             t.stmts(&b.stmts)?;
             term_values(&mut t, &b.term, &chans)?;
         }
-        vars = t.vars.clone();
-        untyped = t.untyped.clone();
-        if !t.grew { break; }
-        gen.untyped = t.untyped.clone();
+        if !t.grew { vars = t.vars; untyped = t.untyped; break; }
+        if round == 12 {
+            let grow: Vec<&str> = t.untyped.iter().map(|n| base(n)).collect();
+            return Err(format!("{}: variable(s) {} keep growing with every assignment: give them a type (or use `carry`)", decl.name, grow.join(", ")));
+        }
+        vars = t.vars;
+        untyped = t.untyped;
     }
 
     // the circuit
@@ -495,10 +740,9 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     let clk = g.g.wire();
     let rst = g.g.wire();
     let mut ports = vec![Port { name: "clk".into(), dir: Dir::In, bits: vec![clk] }, Port { name: "rst".into(), dir: Dir::In, bits: vec![rst] }];
-    // inputs
     struct ChanPorts { data: Vec<Bit>, close: Bit, valid: Bit, ready: Bit }
     let mut cp: HashMap<String, ChanPorts> = HashMap::new();
-    let mut scalars: HashMap<String, SVal> = HashMap::new();
+    let mut scalars: HashMap<String, HV> = HashMap::new();
     for (n, u, h) in &hw {
         match h {
             ParamHw::InChan(t) => {
@@ -513,18 +757,18 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 ports.push(Port { name: format!("{}_ready", n), dir: Dir::In, bits: vec![ready] });
                 cp.insert(u.clone(), ChanPorts { data: vec![], close: Bit::C0, valid: Bit::C0, ready });
             }
-            ParamHw::Scalar(t, Some(k)) => { scalars.insert(u.clone(), wrap_to(&SVal::konst(*k), *t)); }
+            ParamHw::Scalar(t, Some(k)) => { let v = fit(&mut g.g, &SVal::konst(*k), t); scalars.insert(u.clone(), HV::S(v)); }
             ParamHw::Scalar(t, None) => {
                 let bits = g.g.wires(t.width() as u32);
                 ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
-                scalars.insert(u.clone(), SVal::of_ty(bits, *t));
+                scalars.insert(u.clone(), HV::S(SVal::of_ty(bits, t)));
             }
         }
     }
     // registers: the variables, the state, which channels are closed
     let mut names: Vec<String> = vars.keys().cloned().collect();
     names.sort();
-    let q: HashMap<String, SVal> = names.iter().map(|n| { let t = vars[n]; (n.clone(), SVal::of_ty(g.g.wires(t.width() as u32), t)) }).collect();
+    let q: HashMap<String, HV> = names.iter().map(|n| { let t = &vars[n]; let w = g.g.wires(t.width() as u32); (n.clone(), HV::of_ty(&w, t)) }).collect();
     let nst = cfg.blocks.len();
     let sw = bits_for(nst).max(1);
     let state = g.g.wires(sw as u32);
@@ -537,7 +781,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     // what each output channel offers: (state active, data, close flag)
     let mut offers: HashMap<String, Vec<(Bit, Vec<Bit>, Bit)>> = HashMap::new();
     let mut readies: HashMap<String, Vec<Bit>> = HashMap::new();
-    let konst = |g: &mut Builder, k: usize| -> Vec<Bit> { let _ = g; (0..sw).map(|i| Bit::of((k >> i) & 1 == 1)).collect() };
+    let konst = |k: usize| -> Vec<Bit> { (0..sw).map(|i| Bit::of((k >> i) & 1 == 1)).collect() };
 
     temps(&mut g, cfg, &chans, &hw)?;
     for (s, b) in cfg.blocks.iter().enumerate() {
@@ -546,13 +790,12 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         for (u, v) in &scalars { g.env.insert(u.clone(), v.clone()); }
         g.stmts(&b.stmts)?;
         let (fire, next): (Bit, Vec<Bit>) = match &b.term {
-            Term::Goto(t) => (Bit::C1, konst(&mut g.g, *t)),
-            Term::Halt => (Bit::C0, konst(&mut g.g, s)),
+            Term::Goto(t) => (Bit::C1, konst(*t)),
+            Term::Halt => (Bit::C0, konst(s)),
             Term::Branch(c, t, f) => {
-                let cv = g.eval(c)?;
+                let cv = g.scalar(c)?;
                 let cb = truth(&mut g.g, &cv);
-                let (kt, kf) = (konst(&mut g.g, *t), konst(&mut g.g, *f));
-                (Bit::C1, g.g.muxv(cb, &kf, &kt))
+                (Bit::C1, g.g.muxv(cb, &konst(*f), &konst(*t)))
             }
             Term::Recv { dst, ch, closed: on_close, next } => {
                 let c = &cp[ch];
@@ -564,23 +807,25 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 readies.entry(ch.clone()).or_default().push(rdy);
                 let take_close = { let x = g.g.and(is_s, c.valid); let y = g.g.and(x, c.close); g.g.and(y, nc) };
                 closed_set.entry(ch.clone()).or_default().push(take_close);
-                let t = vars[dst];
-                g.env.insert(dst.clone(), wrap_to(&SVal::of_ty(c.data.clone(), chans[ch].ty), t));
-                let kn = konst(&mut g.g, *next);
-                let nx = match on_close { Some(x) => { let kx = konst(&mut g.g, *x); g.g.muxv(is_close, &kn, &kx) } None => kn };
+                let t = vars[dst].clone();
+                let v = HV::S(SVal::of_ty(c.data.clone(), &chans[ch].ty));
+                let v = fit_hv(&mut g.g, &v, &t)?;
+                g.env.insert(dst.clone(), v);
+                let kn = konst(*next);
+                let nx = match on_close { Some(x) => g.g.muxv(is_close, &kn, &konst(*x)), None => kn };
                 (valid, nx)
             }
             Term::Send { ch, val, next } => {
-                let v = g.eval(val)?;
-                let v = wrap_to(&v, chans[ch].ty);
+                let v = g.scalar(val)?;
+                let v = fit(&mut g.g, &v, &chans[ch].ty);
                 offers.entry(ch.clone()).or_default().push((is_s, v.bits.clone(), Bit::C0));
-                (cp[ch].ready, konst(&mut g.g, *next))
+                (cp[ch].ready, konst(*next))
             }
             Term::Close { ch, next } => {
                 offers.entry(ch.clone()).or_default().push((is_s, vec![], Bit::C1));
                 let fired = g.g.and(is_s, cp[ch].ready);
                 closed_set.entry(ch.clone()).or_default().push(fired);
-                (cp[ch].ready, konst(&mut g.g, *next))
+                (cp[ch].ready, konst(*next))
             }
             Term::CloseOwned { ch, next } => {
                 let cl = closed[ch];
@@ -589,28 +834,28 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 offers.entry(ch.clone()).or_default().push((act, vec![], Bit::C1));
                 let fired = g.g.and(act, cp[ch].ready);
                 closed_set.entry(ch.clone()).or_default().push(fired);
-                (g.g.or(cp[ch].ready, cl), konst(&mut g.g, *next))
+                (g.g.or(cp[ch].ready, cl), konst(*next))
             }
         };
         let go = g.g.and(is_s, fire);
         state_d.push((go, next));
         for n in &names {
-            let v = &g.env[n];
-            if v.bits != q[n].bits { var_d.entry(n.clone()).or_default().push((go, v.bits.clone())); }
+            let Some(v) = g.env.get(n).cloned() else { continue };
+            let v = fit_hv(&mut g.g, &v, &vars[n])?;
+            let vb = v.flat();
+            if vb != q[n].flat() { var_d.entry(n.clone()).or_default().push((go, vb)); }
         }
     }
 
-    // flip-flops
+    // flip-flops (a register never written keeps its power-up 0)
     let ff = |g: &mut Builder, d: Bit, qb: Bit| g.ff("$_DFF_P_".into(), vec![("C", clk), ("D", d), ("Q", qb)]);
     let ffr = |g: &mut Builder, d: Bit, qb: Bit| g.ff("$_SDFF_PP0_".into(), vec![("C", clk), ("D", d), ("R", rst), ("Q", qb)]);
     let mut nets = vec![];
     for n in &names {
-        let qb = q[n].bits.clone();
+        let qb = q[n].flat();
         let mut d = qb.clone();
         for (c, v) in var_d.get(n).into_iter().flatten() { d = g.g.muxv(*c, &d, v); }
-        for (i, b) in qb.iter().enumerate() { if d[i] != *b { ff(&mut g.g, d[i], *b); } }
-        // a register never written keeps its power-up 0
-        for (i, b) in qb.iter().enumerate() { if d[i] == *b { ff(&mut g.g, Bit::C0, *b); } }
+        for (i, b) in qb.iter().enumerate() { ff(&mut g.g, if d[i] == *b { Bit::C0 } else { d[i] }, *b); }
         nets.push((n.clone(), qb));
     }
     let mut sd = state.clone();
@@ -634,8 +879,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             }
             ParamHw::OutChan(t) => {
                 let os = offers.get(u).cloned().unwrap_or_default();
-                let w = t.width();
-                let mut data = vec![Bit::C0; w];
+                let mut data = vec![Bit::C0; t.width()];
                 let mut close = Bit::C0;
                 let mut valid = Bit::C0;
                 for (act, d, c) in &os {
@@ -654,9 +898,9 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     let mut iface = crate::hw::Iface::default();
     for (n, _, h) in &hw {
         match h {
-            ParamHw::InChan(t) => iface.ins.push((n.clone(), *t)),
-            ParamHw::OutChan(t) => iface.outs.push((n.clone(), *t)),
-            ParamHw::Scalar(t, None) => iface.scalars.push((n.clone(), *t)),
+            ParamHw::InChan(t) => iface.ins.push((n.clone(), t.clone())),
+            ParamHw::OutChan(t) => iface.outs.push((n.clone(), t.clone())),
+            ParamHw::Scalar(t, None) => iface.scalars.push((n.clone(), t.clone())),
             ParamHw::Scalar(_, Some(_)) => {}
         }
     }
@@ -669,12 +913,12 @@ fn temps(g: &mut Gen, cfg: &Cfg, chans: &HashMap<String, Chan>, hw: &[(String, S
     for (n, t) in &cfg.temps {
         if g.vars.contains_key(n) && !g.untyped.contains(n) { continue; }
         match t {
-            Temp::ChanElem(ch) => { let ty = chans.get(ch).map(|c| c.ty).ok_or_else(|| format!("`{}` is not a channel parameter of the task", base(ch)))?; g.vars.insert(n.clone(), ty); }
+            Temp::ChanElem(ch) => { let ty = chans.get(ch).map(|c| c.ty.clone()).ok_or_else(|| format!("`{}` is not a channel parameter of the task", base(ch)))?; g.vars.insert(n.clone(), ty); }
             Temp::Like(e) => {
                 let fresh = scratch_env(g, hw);
                 let saved = std::mem::replace(&mut g.env, fresh);
                 let r = match &e.kind {
-                    ExprKind::Range(lo, hi, incl) => g.eval(lo).and_then(|l| g.eval(hi).map(|h| (l, h, *incl))).map(|(l, h, incl)| Ty::Int { lo: l.lo.min(h.lo), hi: (h.hi + incl as i128).max(l.hi) }),
+                    ExprKind::Range(lo, hi, incl) => g.scalar(lo).and_then(|l| g.scalar(hi).map(|h| (l, h, *incl))).map(|(l, h, incl)| Ty::Int { lo: l.lo.min(h.lo), hi: (h.hi + incl as i128).max(l.hi) }),
                     _ => g.eval(e).map(|v| v.ty()),
                 };
                 g.env = saved;
@@ -690,14 +934,14 @@ fn temps(g: &mut Gen, cfg: &Cfg, chans: &HashMap<String, Chan>, hw: &[(String, S
 }
 
 /// values standing for the registers in the type pass (fresh wires of each variable's width)
-fn scratch_env(g: &mut Gen, hw: &[(String, String, ParamHw)]) -> HashMap<String, SVal> {
+fn scratch_env(g: &mut Gen, hw: &[(String, String, ParamHw)]) -> HashMap<String, HV> {
     let mut env = HashMap::new();
-    let vars: Vec<(String, Ty)> = g.vars.iter().map(|(k, v)| (k.clone(), *v)).collect();
-    for (n, t) in vars { let w = g.g.wires(t.width() as u32); env.insert(n, SVal::of_ty(w, t)); }
+    let vars: Vec<(String, Ty)> = g.vars.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    for (n, t) in vars { let w = g.g.wires(t.width() as u32); env.insert(n, HV::of_ty(&w, &t)); }
     for (_, u, h) in hw {
         if let ParamHw::Scalar(t, k) = h {
-            let v = match k { Some(k) => wrap_to(&SVal::konst(*k), *t), None => SVal::of_ty(g.g.wires(t.width() as u32), *t) };
-            env.insert(u.clone(), v);
+            let v = match k { Some(k) => fit(&mut g.g, &SVal::konst(*k), t), None => SVal::of_ty(g.g.wires(t.width() as u32), t) };
+            env.insert(u.clone(), HV::S(v));
         }
     }
     env
@@ -711,8 +955,8 @@ fn term_values(g: &mut Gen, t: &Term, chans: &HashMap<String, Chan>) -> R<()> {
         Term::Recv { dst, ch, .. } => {
             let c = chans.get(ch).ok_or_else(|| format!("recv on `{}`, which is not a channel parameter", base(ch)))?;
             if c.out { return Err(format!("recv on `{}`, an output channel", base(ch))); }
-            let v = SVal::of_ty(g.g.wires(c.ty.width() as u32), c.ty);
-            g.env.insert(dst.clone(), v);
+            let v = SVal::of_ty(g.g.wires(c.ty.width() as u32), &c.ty);
+            g.env.insert(dst.clone(), HV::S(v));
         }
         _ => {}
     }

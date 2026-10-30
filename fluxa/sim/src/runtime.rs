@@ -629,7 +629,8 @@ impl Shared {
             if self.stopped() {
                 return Err(RtErr::Shutdown);
             }
-            let (offer, room): (Vec<Option<HwTok>>, Vec<bool>) = {
+            // the epoch with the snapshot: a change after it (another task sending) wakes the wait below
+            let (offer, room, e0): (Vec<Option<HwTok>>, Vec<bool>, u64) = {
                 let w = self.lock();
                 (
                     ins.iter().map(|&c| {
@@ -637,6 +638,7 @@ impl Shared {
                         match ch.queue.front() { Some(v) => Some(HwTok::Data(hw_int(v))), None if ch.closed => Some(HwTok::Close), None => None }
                     }).collect(),
                     outs.iter().map(|&c| { let ch = &w.chans[c]; !ch.closed && ch.queue.len() < ch.depth }).collect(),
+                    w.epoch,
                 )
             };
             let (taken, sent, changed) = hw.cycle(&offer, &room);
@@ -679,7 +681,6 @@ impl Shared {
             if !outs.is_empty() && outs.iter().all(|&c| self.lock().chans[c].closed) {
                 return Ok(());
             }
-            let e0 = self.lock().epoch;
             self.wait_until(task, &|_| "hardware (gate-level) waiting on its channels".to_string(), |w| if w.epoch != e0 { Some(Ok(())) } else { None }).await?;
         }
     }

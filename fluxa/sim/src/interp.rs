@@ -1081,6 +1081,16 @@ impl Interp {
                     let c = self.sh.new_chan_owned(id, self.task, format!("broadcast#{}.out{}", id, k), elem.clone(), depth);
                     outs.push(c);
                 }
+                // a hardware provider may take broadcast too (graph synthesis records it as `$broadcast`)
+                if let Some(p) = self.sh.hw.clone() {
+                    let args = [("rx".to_string(), Value::Rx(src)), ("outs".to_string(), Value::Array(outs.iter().map(|c| Value::Tx(*c)).collect()))];
+                    if let Some(r) = p.start("$broadcast", &args) {
+                        let hw = r.map_err(|m| self.me(m))?;
+                        let sh2 = self.sh.clone();
+                        self.sh.launch(id, sh2.run_hw(id, vec![src], outs.clone(), hw));
+                        return Ok(Value::Array(outs.into_iter().map(Value::Rx).collect()));
+                    }
+                }
                 let sh2 = self.sh.clone();
                 let outs2 = outs.clone();
                 self.sh.launch(id, async move {
