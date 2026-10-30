@@ -71,7 +71,7 @@ pub struct World {
 }
 
 impl World {
-    fn bump(&mut self) {
+    pub(crate) fn bump(&mut self) {
         self.epoch += 1;
         self.blocked = 0;
         self.seq += 1;
@@ -91,10 +91,34 @@ pub struct Shared {
     spawned: Mutex<Vec<(usize, BoxFut<'static, R<()>>)>>,
     /// 協作式：`print` 與 `--trace` 的輸出
     out: Mutex<String>,
+    /// 以硬體（合成後的網表）取代的任務：spawn 時先問它
+    pub hw: Option<Arc<dyn HwProvider>>,
+}
+
+/// 硬體任務的通道 token：一個值，或串流結束（close）
+#[derive(Clone, Debug, PartialEq)]
+pub enum HwTok {
+    Data(i128),
+    Close,
+}
+
+/// 一個以硬體執行的任務（例如合成後的網表在閘級模擬器裡）：每呼叫一次走一個時脈
+pub trait HwTask: Send {
+    /// `offer`：每條輸入通道提供的 token；`room`：每條輸出通道還能不能收。
+    /// 回傳：哪些輸入 token 被收下、每條輸出通道送出了什麼、內部狀態有沒有改變
+    fn cycle(&mut self, offer: &[Option<HwTok>], room: &[bool]) -> (Vec<bool>, Vec<Option<HwTok>>, bool);
+}
+
+/// 決定哪些任務以硬體執行：`start` 對要取代的任務回傳 Some（參數依宣告順序：名稱與值）
+pub trait HwProvider: Send + Sync {
+    fn start(&self, task: &str, args: &[(String, Value)]) -> Option<Result<Box<dyn HwTask>, String>>;
 }
 
 impl Shared {
-    pub fn new(program: Arc<Program>, trace: bool, coop: bool) -> Arc<Shared> {
+    pub fn new(program: Arc<Program>, trace: bool, coop: bool) -> Arc<Shared> { Shared::with_hw(program, trace, coop, None) }
+
+    /// 同 `new`，另外指定以硬體執行的任務
+    pub fn with_hw(program: Arc<Program>, trace: bool, coop: bool, hw: Option<Arc<dyn HwProvider>>) -> Arc<Shared> {
         let mut w = World { next_task: 1, live: 1, ..Default::default() }; // 任務 0 = test 主體
         w.task_names.insert(0, "test".to_string());
         Arc::new(Shared {
@@ -107,6 +131,7 @@ impl Shared {
             coop,
             spawned: Mutex::new(Vec::new()),
             out: Mutex::new(String::new()),
+            hw,
         })
     }
 
@@ -582,5 +607,80 @@ pub fn block_on<T>(fut: impl Future<Output = T>) -> T {
             return v;
         }
         std::thread::yield_now();
+    }
+}
+
+/// 通道裡的值作為硬體 token 的整數（bool 為 0 / 1）
+fn hw_int(v: &Value) -> i128 {
+    match v { Value::Int(n) => *n, Value::Bool(b) => *b as i128, Value::Fixed(r, _) => *r, _ => 0 }
+}
+
+/// 硬體送出的整數放進型別為 `t` 的通道
+fn hw_value(n: i128, t: &RtType) -> Value {
+    match t { RtType::Bool => Value::Bool(n != 0), RtType::Fixed { f, .. } => Value::Fixed(n, *f), _ => Value::Int(n) }
+}
+
+impl Shared {
+    /// 硬體任務 `task`：一個時脈一個時脈地把 KPN 通道接到它的 valid / ready 埠。
+    /// 沒有握手、內部也沒變時它閒著，等任何通道有變化（和其他任務一樣參與死結偵測）；
+    /// 所有輸出通道都關了又閒著時，任務結束。
+    pub async fn run_hw(self: Arc<Self>, task: usize, ins: Vec<usize>, outs: Vec<usize>, mut hw: Box<dyn HwTask>) -> R<()> {
+        loop {
+            if self.stopped() {
+                return Err(RtErr::Shutdown);
+            }
+            let (offer, room): (Vec<Option<HwTok>>, Vec<bool>) = {
+                let w = self.lock();
+                (
+                    ins.iter().map(|&c| {
+                        let ch = &w.chans[c];
+                        match ch.queue.front() { Some(v) => Some(HwTok::Data(hw_int(v))), None if ch.closed => Some(HwTok::Close), None => None }
+                    }).collect(),
+                    outs.iter().map(|&c| { let ch = &w.chans[c]; !ch.closed && ch.queue.len() < ch.depth }).collect(),
+                )
+            };
+            let (taken, sent, changed) = hw.cycle(&offer, &room);
+            let mut moved = false;
+            {
+                let mut w = self.lock();
+                for (k, &c) in ins.iter().enumerate() {
+                    if taken.get(k).copied().unwrap_or(false) {
+                        if let Some(HwTok::Data(_)) = offer[k] {
+                            w.chans[c].queue.pop_front();
+                            w.chans[c].received += 1;
+                        }
+                        moved = true;
+                    }
+                }
+                for (k, &c) in outs.iter().enumerate() {
+                    match sent.get(k).cloned().flatten() {
+                        Some(HwTok::Data(n)) => {
+                            let v = hw_value(n, &w.chans[c].elem);
+                            if self.trace { self.trace_line(format!("[{:>6}] {:<24} send {}", w.seq, w.chans[c].name, v)); }
+                            let ch = &mut w.chans[c];
+                            ch.queue.push_back(v);
+                            ch.sent += 1;
+                            ch.max_occ = ch.max_occ.max(ch.queue.len());
+                            moved = true;
+                        }
+                        Some(HwTok::Close) => { w.chans[c].closed = true; moved = true; }
+                        None => {}
+                    }
+                }
+                if moved { w.bump(); }
+            }
+            if moved {
+                self.cv.notify_all();
+                continue;
+            }
+            if changed {
+                continue;
+            }
+            if !outs.is_empty() && outs.iter().all(|&c| self.lock().chans[c].closed) {
+                return Ok(());
+            }
+            let e0 = self.lock().epoch;
+            self.wait_until(task, &|_| "hardware (gate-level) waiting on its channels".to_string(), |w| if w.epoch != e0 { Some(Ok(())) } else { None }).await?;
+        }
     }
 }

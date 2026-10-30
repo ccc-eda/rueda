@@ -17,12 +17,15 @@ use runtime::{block_on, RtErr, Shared};
 use std::sync::Arc;
 use value::coerce;
 
+#[derive(Clone, Default)]
 pub struct Options {
     pub trace: bool,
     pub stats: bool,
     /// 協作式排程：所有任務在同一條執行緒上輪流執行，`print` / `--trace` 的輸出收進
     /// `TestResult::output`（WebAssembly 一律如此，因為沒有執行緒）
     pub coop: bool,
+    /// 以硬體執行的任務（閘級共模擬：`reda gatesim … x.fx`）
+    pub hw: Option<std::sync::Arc<dyn runtime::HwProvider>>,
 }
 
 pub struct TestResult {
@@ -76,7 +79,7 @@ pub fn load_many(files: &[(String, String)]) -> Result<Arc<Program>, String> {
 
 pub fn run_test(prog: &Arc<Program>, t: &TestDecl, opts: &Options) -> TestResult {
     let coop = opts.coop || cfg!(target_arch = "wasm32");
-    let sh = Shared::new(prog.clone(), opts.trace, coop);
+    let sh = Shared::with_hw(prog.clone(), opts.trace, coop, opts.hw.clone());
     let mut it = Interp::new(sh.clone(), 0, format!("test:{}", t.name));
     let start = Clock::now();
     let r = if coop { sh.run_coop(Box::pin(it.exec_block(&t.body))) } else { block_on(it.exec_block(&t.body)) };

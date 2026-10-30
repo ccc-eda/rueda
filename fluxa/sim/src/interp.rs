@@ -888,6 +888,23 @@ impl Interp {
                 return Err(e);
             }
         }
+        // a task replaced by hardware (gate-level co-simulation): its channels go to the netlist
+        if let Some(p) = self.sh.hw.clone() {
+            let mut positional = argv.iter().filter(|(n, _)| n.is_none()).map(|(_, v)| v.clone());
+            let mut ordered = vec![];
+            for prm in &decl.params {
+                let v = argv.iter().find(|(n, _)| n.as_deref() == Some(prm.name.as_str())).map(|(_, v)| v.clone()).or_else(|| positional.next());
+                if let Some(v) = v { ordered.push((prm.name.clone(), v)); }
+            }
+            if let Some(r) = p.start(&decl.name, &ordered) {
+                let hw = r.map_err(|m| self.me(m))?;
+                let ins = ordered.iter().filter_map(|(_, v)| if let Value::Rx(c) = v { Some(*c) } else { None }).collect();
+                let outs = ordered.iter().filter_map(|(_, v)| if let Value::Tx(c) = v { Some(*c) } else { None }).collect();
+                let sh2 = self.sh.clone();
+                self.sh.launch(id, sh2.run_hw(id, ins, outs, hw));
+                return Ok(id);
+            }
+        }
         let sh2 = self.sh.clone();
         let tname = decl.name.clone();
         self.sh.launch(id, async move {

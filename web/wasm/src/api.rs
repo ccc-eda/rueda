@@ -732,7 +732,7 @@ fn fluxa_run(v: &Value) -> R<Value> {
     let prog = fluxa::load_many(&files(v)?)?;
     let only: Option<Vec<&str>> = v.get("tests").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect());
     let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
-    let opts = fluxa::Options { trace: flag("trace"), stats: flag("stats"), coop: true };
+    let opts = fluxa::Options { trace: flag("trace"), stats: flag("stats"), coop: true, hw: None };
     let mut results = vec![];
     for t in prog.tests.iter().filter(|t| only.as_ref().is_none_or(|o| o.contains(&t.name.as_str()))) {
         let r = fluxa::run_test(&prog, t, &opts);

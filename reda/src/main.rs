@@ -84,12 +84,14 @@ Maps to standard cells, places them in rows, builds the clock tree and power gri
   -v                      details (critical path, DRC examples)
 example: reda asic --pdk sky130 --gds alu.gds --def alu.def alu.veryl"),
     ("gatesim", "run the testbenches on the synthesized netlist", "\
-usage: reda gatesim opt|ice40|ecp5|asic|sky130 [--top MODULE] FILE.veryl...
+usage: reda gatesim opt|ice40|ecp5|asic|sky130 [--top MODULE] FILE.veryl...|FILE.fx...
 
 Post-synthesis simulation: MODULE (default: the last non-#[test] module) is replaced by its
 synthesized netlist (opt: generic gates, ice40: LUTs / block RAM, ecp5: ECP5 LUTs / carries,
 asic: vlib cells, sky130: SKY130 cells) and its #[test] testbenches run against it.
-example: reda gatesim ice40 fifo.veryl"),
+Fluxa (FILE.fx...): the program's tests run with TASK (--top, default the last task) replaced
+by its synthesized netlist; its channels are connected to the netlist's stream ports.
+examples: reda gatesim ice40 fifo.veryl     reda gatesim asic fluxa/examples/mac.fx"),
     ("emu", "compile a Veryl design to WebAssembly (fast cycle-based simulation)", "\
 usage: reda emu [--top MODULE] [--stop SIGNAL,...] [-o OUT.wasm] FILE.veryl...
 

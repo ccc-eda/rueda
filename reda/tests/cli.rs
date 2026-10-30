@@ -67,6 +67,8 @@ fn fluxa_and_riscv() {
     assert!(c == 0 && o.contains("=== Mac ===") && o.contains("a_valid"), "{}", o);
     let (c, o) = fx(&["asic", "examples/mac.fx"]);
     assert!(c == 0 && o.contains("timing: critical path"), "{}", o);
+    let (c, o) = fx(&["gatesim", "ice40", "examples/mac.fx"]);
+    assert!(c == 0 && o.contains("gate-level simulation: Mac") && o.contains("[PASS] mac_dot_product"), "{}", o);
     let (c, o) = fx(&["synth", "examples/fir.fx"]);
     assert!(c == 1 && o.contains("not synthesized yet"), "{}", o);
     assert_eq!(fx(&["sim", "examples/fir.fx", "../veryl/examples/src/adder.veryl"]).0, 2);

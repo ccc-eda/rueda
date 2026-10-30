@@ -12,7 +12,7 @@ fn run_files(files: &[&str]) -> Vec<(String, bool, String)> {
         .collect();
     let prog = load_many(&srcs).unwrap_or_else(|e| panic!("{}", e));
     let run = |coop: bool| -> Vec<(String, bool, String)> {
-        let opts = Options { trace: false, stats: false, coop };
+        let opts = Options { coop, ..Default::default() };
         prog.tests
             .iter()
             .map(|t| {

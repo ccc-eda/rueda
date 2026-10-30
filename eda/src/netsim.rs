@@ -265,3 +265,17 @@ impl<'n> NetSim<'n> {
         self.settle();
     }
 }
+
+/// a netlist for gate-level simulation of the given kind: "opt" (the generic gates as they
+/// are), "ice40" (LUTs, carries, block RAM), "ecp5", "asic" (vlib cells), "sky130"
+/// (SKY130 cells; no SRAM macros, memories are flip-flops)
+pub fn mapped(nl: &Netlist, kind: &str) -> Result<Netlist, String> {
+    match kind {
+        "opt" | "gate" => Ok(nl.clone()),
+        "ice40" => crate::fpga::ice40::map(nl),
+        "ecp5" => crate::fpga::ecp5::map(nl),
+        "asic" => crate::asic::map::map(nl),
+        "sky130" => crate::pdk::with_tech(crate::pdk::sky130_builtin()?, || crate::asic::map::map(nl)),
+        k => Err(format!("unknown netlist kind '{}' (opt, ice40, ecp5, asic, sky130)", k)),
+    }
+}

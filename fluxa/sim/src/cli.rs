@@ -22,7 +22,7 @@ pub fn main(args: &[String]) {
     let mut files: Vec<String> = Vec::new();
     let mut only: Vec<String> = Vec::new();
     let mut list = false;
-    let mut opts = Options { trace: false, stats: false, coop: false };
+    let mut opts = Options::default();
     let mut args = args.iter().cloned();
     while let Some(a) = args.next() {
         match a.as_str() {

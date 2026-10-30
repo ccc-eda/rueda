@@ -3,15 +3,14 @@
 //! with the task replaced by its gates) use it.
 
 use crate::ty::Ty;
-use eda::netlist::Netlist;
+use eda::netlist::{Bit, Netlist};
 use eda::netsim::NetSim;
+use fluxa::runtime::{HwProvider, HwTask};
+use fluxa::value::Value;
+use std::sync::Arc;
 
 /// a token on a channel: a value, or the end of the stream
-#[derive(Clone, Debug, PartialEq)]
-pub enum Tok {
-    Data(i128),
-    Close,
-}
+pub use fluxa::runtime::HwTok as Tok;
 
 /// a synthesized task's ports, by parameter
 #[derive(Clone, Debug, Default)]
@@ -25,6 +24,10 @@ pub struct Iface {
 pub struct HwSim<'n> {
     sim: NetSim<'n>,
     io: &'n Iface,
+    /// the flip-flops' outputs: a cycle that changes none of them, with no handshake, is idle
+    state: Vec<Bit>,
+    /// whether the last cycle changed the state
+    pub changed: bool,
 }
 
 fn to_bits(v: i128, t: Ty) -> u128 {
@@ -47,7 +50,8 @@ impl<'n> HwSim<'n> {
         sim.set("rst", 1);
         sim.step();
         sim.set("rst", 0);
-        HwSim { sim, io }
+        let state = nl.cells.iter().filter(|c| c.is_ff()).map(|c| c.out()).collect();
+        HwSim { sim, io, state, changed: true }
     }
 
     /// one clock: `offer` is the token each input channel offers (None: nothing),
@@ -67,7 +71,10 @@ impl<'n> HwSim<'n> {
             if !*r || self.sim.get(&format!("{}_valid", n)) == 0 { return None; }
             Some(if self.sim.get(&format!("{}_close", n)) == 1 { Tok::Close } else { Tok::Data(from_bits(self.sim.get(&format!("{}_data", n)), *t)) })
         }).collect();
+        let before: Vec<bool> = self.state.iter().map(|b| self.sim.bit(*b)).collect();
         self.sim.step();
+        self.sim.settle();
+        self.changed = self.state.iter().zip(&before).any(|(b, v)| self.sim.bit(*b) != *v);
         (taken, sent)
     }
 
@@ -85,5 +92,53 @@ impl<'n> HwSim<'n> {
             if outs.iter().all(|o| o.last() == Some(&Tok::Close)) { break; }
         }
         outs
+    }
+}
+
+/// a task replaced by its synthesized netlist in the Fluxa simulator (`reda gatesim KIND x.fx`):
+/// every `spawn` of `top` runs the netlist instead of the interpreter
+pub struct Provider {
+    top: String,
+    nl: &'static Netlist,
+    io: &'static Iface,
+    /// cells in the netlist (for the report)
+    pub cells: usize,
+}
+
+impl Provider {
+    /// synthesize `top` (scalar parameters as input ports) and map it to `kind`
+    /// (opt, ice40, ecp5, asic, sky130)
+    pub fn new(prog: &Arc<fluxa::ast::Program>, top: &str, kind: &str) -> Result<Provider, String> {
+        let s = crate::synthesize(prog, top, &Default::default())?;
+        let nl = eda::netsim::mapped(&s.netlist, kind)?;
+        let cells = nl.cells.len();
+        // one netlist for the whole run: every spawn of the task simulates it
+        let nl: &'static Netlist = Box::leak(Box::new(nl));
+        let io: &'static Iface = Box::leak(Box::new(s.iface));
+        Ok(Provider { top: top.to_string(), nl, io, cells })
+    }
+}
+
+struct Running(HwSim<'static>);
+
+impl HwTask for Running {
+    fn cycle(&mut self, offer: &[Option<Tok>], room: &[bool]) -> (Vec<bool>, Vec<Option<Tok>>, bool) {
+        let (t, s) = self.0.cycle(offer, room);
+        (t, s, self.0.changed)
+    }
+}
+
+impl HwProvider for Provider {
+    fn start(&self, task: &str, args: &[(String, Value)]) -> Option<Result<Box<dyn HwTask>, String>> {
+        if task != self.top { return None; }
+        let mut scalars = vec![];
+        for (n, _) in &self.io.scalars {
+            match args.iter().find(|(a, _)| a == n).map(|(_, v)| v) {
+                Some(Value::Int(k)) => scalars.push(*k),
+                Some(Value::Bool(b)) => scalars.push(*b as i128),
+                _ => return Some(Err(format!("hardware `{}`: parameter `{}` needs an integer", task, n))),
+            }
+        }
+        Some(Ok(Box::new(Running(HwSim::new(self.nl, self.io, &scalars)))))
     }
 }

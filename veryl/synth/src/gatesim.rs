@@ -31,15 +31,7 @@ pub fn netlist_for(lib: &crate::elab::Lib, top: &str, kind: &str) -> Result<Netl
 /// `netlist_for` with `top`'s parameters overridden
 pub fn netlist_with(lib: &crate::elab::Lib, top: &str, ov: &HashMap<String, Val>, kind: &str) -> Result<Netlist, String> {
     let (nl, _) = crate::elab::synthesize_with(lib, top, ov)?;
-    match kind {
-        "opt" | "gate" => Ok(nl),
-        "ice40" => eda::fpga::ice40::map(&nl),
-        "ecp5" => eda::fpga::ecp5::map(&nl),
-        "asic" => eda::asic::map::map(&nl),
-        // SKY130 mapping (no SRAM macros, negative-edge flip-flops with a clock inverter)
-        "sky130" => eda::pdk::with_tech(eda::pdk::sky130_builtin()?, || eda::asic::map::map(&nl)),
-        k => Err(format!("unknown netlist kind '{}' (opt, ice40, ecp5, asic, sky130)", k)),
-    }
+    eda::netsim::mapped(&nl, kind)
 }
 
 /// A gate provider for `veryl_sim::run_gates`: every instance of `top`, with
