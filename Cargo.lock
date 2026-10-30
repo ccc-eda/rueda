@@ -1072,10 +1072,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rueda-veryl-wasm"
+name = "rueda-wasm"
 version = "0.1.0"
 dependencies = [
  "rueda-eda",
+ "rueda-fluxa",
  "rueda-rvtools",
  "rueda-veryl-emu",
  "rueda-veryl-sim",

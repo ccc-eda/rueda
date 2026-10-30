@@ -9,8 +9,8 @@ members = [
     "veryl/sim",
     "veryl/synth",
     "veryl/emu",
-    "veryl/wasm",
     "fluxa/sim",
+    "web/wasm",
 ]
 
 [workspace.package]
@@ -25,7 +25,7 @@ veryl-parser = "0.22"
 [profile.release]
 opt-level = 3
 
-# the web build (veryl/wasm, riscv/rvemu as wasm32): `cargo build --profile web`
+# the web build (web/wasm, riscv/rvemu as wasm32): `cargo build --profile web`
 [profile.web]
 inherits = "release"
 debug = false

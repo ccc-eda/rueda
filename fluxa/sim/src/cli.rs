@@ -11,6 +11,7 @@ fn usage() -> ! {
            --list        list tests and exit\n  \
            --stats       print per-channel statistics (tokens, max FIFO occupancy)\n  \
            --trace       print every channel send/recv\n  \
+           --coop        run the tasks on one thread, taking turns (the browser's scheduler)\n  \
            -h, --help    show this help"
     );
     exit(2)
@@ -21,7 +22,7 @@ pub fn main(args: &[String]) {
     let mut files: Vec<String> = Vec::new();
     let mut only: Vec<String> = Vec::new();
     let mut list = false;
-    let mut opts = Options { trace: false, stats: false };
+    let mut opts = Options { trace: false, stats: false, coop: false };
     let mut args = args.iter().cloned();
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -29,6 +30,7 @@ pub fn main(args: &[String]) {
             "--list" => list = true,
             "--stats" => opts.stats = true,
             "--trace" => opts.trace = true,
+            "--coop" => opts.coop = true,
             "-h" | "--help" => usage(),
             s if s.starts_with('-') => {
                 eprintln!("fluxa: unknown option `{}`", s);
@@ -77,6 +79,7 @@ pub fn main(args: &[String]) {
     let (mut pass, mut fail) = (0, 0);
     for t in tests {
         let r = run_test(&prog, t, &opts);
+        print!("{}", r.output);
         if r.passed {
             pass += 1;
             println!("[PASS] {} ({:.3}s)", r.name, r.secs);

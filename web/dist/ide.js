@@ -4684,6 +4684,9 @@ ${lines.join("\n")}
   var C_KEYWORDS = new Set("if else while for do switch case default break continue return goto sizeof typedef struct union enum static extern const volatile register".split(" "));
   var C_TYPES = new Set("void char short int long signed unsigned float double va_list".split(" "));
   var C_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)|(^\s*#\s*\w+)|([A-Za-z_]\w*)/g;
+  var FX_KEYWORDS = new Set("task fn test let mut const carry spawn parallel pipeline schedule unroll serial for in if else match return assert eventually always comptime stage comb type use pub iface as true false in out".split(" "));
+  var FX_TYPES = new Set("bit bits bool int fixed chan mem u8 u16 u32 u64 i8 i16 i32 i64".split(" "));
+  var FX_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*")|(\b0[xXbB][0-9a-fA-F_]+|\b\d[\d_]*(?:\.\d+)?)|(@\w+)|([A-Za-z_]\w*)/g;
   var ASM_TOKEN = /(#.*|\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(-?0[xX][0-9a-fA-F]+|-?\d+)|(\.[A-Za-z_]\w*)|([A-Za-z_.$][\w.$]*:)|([A-Za-z_]\w*)/g;
   var REGS = /^(x([12]?\d|3[01])|zero|ra|sp|gp|tp|fp|t[0-6]|s([0-9]|1[01])|a[0-7])$/;
   var PY_KEYWORDS = new Set("and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" "));
@@ -4693,6 +4696,7 @@ ${lines.join("\n")}
   var SH_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'[^']*')|(\b\d+\b)|(\$\{[^}]*\}|\$\(\(|\$[\w#?@*!$-])|([A-Za-z_][\w-]*)/g;
   function langOf(name) {
     if (name.endsWith(".veryl")) return "veryl";
+    if (name.endsWith(".fx")) return "fx";
     if (/\.[ch]$/.test(name)) return "c";
     if (/\.(s|S|asm)$/.test(name)) return "asm";
     if (name.endsWith(".py")) return "py";
@@ -4701,7 +4705,7 @@ ${lines.join("\n")}
   }
   function highlight(src, lang = "veryl") {
     if (lang === "text") return src.split("\n").map(esc3);
-    if (lang === "c" || lang === "asm") return highlightC(src, lang);
+    if (lang === "c" || lang === "asm" || lang === "fx") return highlightC(src, lang);
     if (lang === "py" || lang === "sh") return highlightScript(src, lang);
     const out = [];
     let inBlock = false;
@@ -4753,7 +4757,7 @@ ${lines.join("\n")}
   function highlightC(src, lang) {
     const out = [];
     let inBlock = false;
-    const re = lang === "c" ? C_TOKEN : ASM_TOKEN;
+    const re = lang === "c" ? C_TOKEN : lang === "fx" ? FX_TOKEN : ASM_TOKEN;
     for (const line of src.split("\n")) {
       let h = "";
       let i = 0;
@@ -4785,7 +4789,13 @@ ${lines.join("\n")}
           continue;
         } else if (m[3]) h += `<span class="t-str">${esc3(t)}</span>`;
         else if (m[4]) h += `<span class="t-num">${esc3(t)}</span>`;
-        else if (lang === "c") {
+        else if (lang === "fx") {
+          if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
+          else if (FX_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
+          else if (FX_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
+          else if (/^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
+          else h += t;
+        } else if (lang === "c") {
           if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
           else if (C_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
           else if (C_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
@@ -5039,9 +5049,11 @@ ${lines.join("\n")}
     }
   }
   var boardProgram = (n) => /\.(py|sh|c)$/.test(n);
-  var hasTests = (i) => i.mods ? i.mods.some((m) => m.test) : i.files.some((f) => f.name.endsWith(".veryl") && /#\[test\b/.test(f.src));
+  var isFluxa = (files) => files.some((f) => f.name.endsWith(".fx")) && !files.some((f) => f.name.endsWith(".veryl"));
+  var hasTests = (i) => i.mods ? i.mods.some((m) => m.test) : i.files.some((f) => f.name.endsWith(".veryl") && /#\[test\b/.test(f.src) || f.name.endsWith(".fx") && /^\s*test\s+\w+/m.test(f.src));
   var hasPcf = (i) => i.files.some((f) => f.name.endsWith(".pcf"));
   function caps(i) {
+    if (isFluxa(i.files)) return fluxaCaps(i);
     const m = machine(i.files);
     const tests = hasTests(i);
     const program = i.files.some((f) => boardProgram(f.name)) && !!m?.files;
@@ -5061,6 +5073,17 @@ ${lines.join("\n")}
       board: m ? { on: false, why: tr("\u9019\u500B\u5C08\u6848\u662F\u4E00\u53F0\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u653E\u4E0D\u9032\u865B\u64EC iCEBreaker \u7684 FPGA\u3002\u8ACB\u7528\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D\u3002", `This project is a machine (machine.json): it does not fit the virtual iCEBreaker's FPGA. Use "\u{1F5A5} Emulator".`), fix: ["emu"] } : !i.top ? { on: false, why: tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF1A#[test] \u6A21\u7D44\uFF08testbench\uFF09\u4E0D\u80FD\u71D2\u9304\u3002", "No synthesizable module: #[test] modules (testbenches) cannot be flashed.") } : !hasPcf(i) ? { on: false, why: tr("\u9019\u500B\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF08.pcf\uFF09\uFF0C\u4E0D\u77E5\u9053\u8A2D\u8A08\u7684\u57E0\u63A5\u5230\u677F\u5B50\u7684\u54EA\u652F\u8173\u3002\u4ECD\u8981\u71D2\u9304\u7684\u8A71\u6703\u7528 iCEBreaker \u7684\u9810\u8A2D\u8173\u4F4D\uFF08i_clk\u3001i_rst\u3001o_led[0..4]\u3001i_btn\u3001o_ledr\u3001o_ledg\u3001i_rx\u3001o_tx\uFF09\uFF0C\u540D\u5B57\u4E0D\u540C\u7684\u57E0\u4E0D\u6703\u63A5\u5230\u4EFB\u4F55\u6771\u897F\u3002", "This project has no pin file (.pcf): the design's ports are not assigned to the board's pins. Flashing anyway uses the iCEBreaker defaults (i_clk, i_rst, o_led[0..4], i_btn, o_ledr, o_ledg, i_rx, o_tx); ports with other names stay unconnected."), fix: ["addPcf", "flashAnyway"] } : { on: true },
       emu: m ? { on: true } : { on: false, why: tr("\u6A21\u64EC\u6A5F\u8981\u6709 machine.json\uFF08\u8AAA\u660E\u6A5F\u5668\u7684\u9802\u5C64\u3001UART\u3001RAM \u8207\u8981\u8F09\u5165\u7684\u6620\u50CF\uFF09\u3002\u7BC4\u4F8B\u300CRV64 \u958B\u767C\u677F\u300D\u5C31\u662F\u4E00\u53F0\u3002", `The emulator needs a machine.json (the machine's top, UART, RAM and the images to load). The "RV64 board" example is one.`), fix: ["openBoardExample"] },
       synth: i.top ? { on: true } : { on: false, why: tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08\u53EA\u6709 #[test] \u6A21\u7D44\uFF09\u3002", "No synthesizable module (only #[test] modules).") }
+    };
+  }
+  function fluxaCaps(i) {
+    const noSynth = tr("Fluxa \u76EE\u524D\u53EA\u6709\u884C\u70BA\u6A21\u64EC\uFF08\u25B6 \u57F7\u884C\u5B83\u7684 test\uFF09\uFF1B\u5408\u6210\u5230\u9598\u7D1A\u3001FPGA\u3001ASIC \u9084\u6C92\u6709\u3002", "Fluxa has behavioral simulation only for now (\u25B6 Run its tests); synthesis to gates, FPGA and ASIC are not there yet.");
+    const off = { on: false, why: noSynth };
+    return {
+      test: hasTests(i) ? { on: true } : { on: false, why: tr("\u9019\u500B Fluxa \u7A0B\u5F0F\u6C92\u6709 test \u5340\u584A\uFF0C\u6C92\u6709\u6771\u897F\u53EF\u4EE5\u6E2C\u8A66\u3002", "This Fluxa program has no test block: nothing to test.") },
+      verify: off,
+      board: off,
+      emu: off,
+      synth: off
     };
   }
   function start(i) {
@@ -5147,6 +5170,28 @@ ${lines.join("\n")}
     const f = `${top.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}.veryl`;
     return { id: uid(), name, files: [{ name: f, src: newModule(top) }], synth: top, open: [f], active: f };
   }
+  var FX_TEMPLATE = (task) => `// A Fluxa program: tasks connected by channels (bounded FIFOs). \u25B6 Run runs its tests.
+task ${task}(x: in chan<i16>, y: out chan<i16>) {
+    for v in x {
+        y.send(v * 2);
+    }
+}
+
+test ${task.toLowerCase()}_doubles {
+    let (tx, rx) = chan::<i16>(depth = 4);
+    let (ty, ry) = chan::<i16>(depth = 4);
+    spawn ${task}(rx, ty);
+    for k in 0..3 { tx.send(k); }
+    tx.close();
+    for k in 0..3 { assert ry.recv() == 2 * k; }
+}
+`;
+  function blankFluxaProject(name) {
+    const m = name.replace(/[^A-Za-z0-9_]/g, "").replace(/^[^A-Za-z]+/, "") || "Top";
+    const task = m[0].toUpperCase() + m.slice(1);
+    const f = `${task.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}.fx`;
+    return { id: uid(), name, files: [{ name: f, src: FX_TEMPLATE(task) }], open: [f], active: f };
+  }
   var core = null;
   var synth = null;
   var wave = null;
@@ -5172,6 +5217,8 @@ ${lines.join("\n")}
   function file(name) {
     return proj.files.find((f) => f.name === name);
   }
+  var fxFiles = () => proj.files.filter((f) => f.name.endsWith(".fx"));
+  var fluxaProject = () => fxFiles().length > 0 && !proj.files.some((f) => f.name.endsWith(".veryl"));
   var PCF = "pins.pcf";
   function pcfOf(p) {
     return p.files.find((f) => f.name.endsWith(".pcf"))?.src;
@@ -5326,6 +5373,8 @@ ${lines.join("\n")}
       ls.forEach((l, i) => {
         const m = /^\s*(?:pub\s+)?(module|interface|package)\s+([A-Za-z_]\w*)/.exec(l);
         if (m) out.push({ kind: m[1], name: m[2], file: f.name, line: i + 1, test: i > 0 && /#\[test/.test(ls[i - 1] + (ls[i - 2] ?? "")) });
+        const x = f.name.endsWith(".fx") ? /^\s*(?:pub\s+)?(task|fn|test)\s+([A-Za-z_]\w*)/.exec(l) : null;
+        if (x) out.push({ kind: x[1], name: x[2], file: f.name, line: i + 1, test: x[1] === "test" });
       });
     }
     return out;
@@ -5337,7 +5386,7 @@ ${lines.join("\n")}
       const el2 = document.createElement("div");
       const top = d.kind === "module" && d.name === synthTop();
       el2.className = "item";
-      el2.innerHTML = `<span class="ic">${d.kind === "module" ? d.test ? "\u2714" : "\u25A3" : d.kind === "interface" ? "\u21C4" : "{}"}</span><span class="nm">${esc4(d.name)}</span><span class="tag">${top ? tr("\u5408\u6210\u9802\u5C64", "synth top") : d.test ? "test" : d.kind === "module" ? "" : d.kind}</span>`;
+      el2.innerHTML = `<span class="ic">${d.kind === "module" ? d.test ? "\u2714" : "\u25A3" : d.kind === "test" ? "\u2714" : d.kind === "task" ? "\u21F6" : d.kind === "fn" ? "\u0192" : d.kind === "interface" ? "\u21C4" : "{}"}</span><span class="nm">${esc4(d.name)}</span><span class="tag">${top ? tr("\u5408\u6210\u9802\u5C64", "synth top") : d.test ? "test" : d.kind === "module" || d.kind === "task" ? "" : d.kind}</span>`;
       el2.title = `${d.file}:${d.line}`;
       el2.onclick = () => openFile(d.file, d.line);
       box.appendChild(el2);
@@ -5349,9 +5398,10 @@ ${lines.join("\n")}
     return null;
   }
   function newFile() {
-    let name = prompt(tr("\u65B0\u6A94\u540D\uFF08.veryl\uFF0C\u6216 .c\uFF1A\u7D66 RISC-V SoC \u7684 C \u7A0B\u5F0F\uFF09", "New file name (.veryl, or .c: a C program for the RISC-V SoC)"), `module${proj.files.length}.veryl`)?.trim();
+    const ext = fluxaProject() ? ".fx" : ".veryl";
+    let name = prompt(tr("\u65B0\u6A94\u540D\uFF08.veryl\u3001.fx\uFF1AFluxa\uFF0C\u6216 .c\uFF1A\u7D66 RISC-V SoC \u7684 C \u7A0B\u5F0F\uFF09", "New file name (.veryl, .fx: Fluxa, or .c: a C program for the RISC-V SoC)"), `${ext === ".fx" ? "part" : "module"}${proj.files.length}${ext}`)?.trim();
     if (!name) return;
-    if (!/\.\w+$/.test(name)) name += ".veryl";
+    if (!/\.\w+$/.test(name)) name += ext;
     const bad = validName(name);
     if (bad) {
       alert(bad);
@@ -5363,14 +5413,14 @@ ${lines.join("\n")}
       alert(tr("\u4E00\u500B\u5C08\u6848\u53EA\u80FD\u6709\u4E00\u500B .c \u6A94", "A project has one .c file"));
       return;
     }
-    proj.files.push({ name, src: name.endsWith(".veryl") ? newModule(m) : name.endsWith(".c") ? boardProject() ? C_BOARD_TEMPLATE : C_TEMPLATE : "" });
+    proj.files.push({ name, src: name.endsWith(".veryl") ? newModule(m) : name.endsWith(".fx") ? FX_TEMPLATE(m) : name.endsWith(".c") ? boardProject() ? C_BOARD_TEMPLATE : C_TEMPLATE : "" });
     openFile(name);
     changed();
   }
   function renameFile(old) {
     let name = prompt(tr("\u65B0\u6A94\u540D", "New file name"), old)?.trim();
     if (!name || name === old) return;
-    if (!/\.\w+$/.test(name)) name += ".veryl";
+    if (!/\.\w+$/.test(name)) name += fluxaProject() ? ".fx" : ".veryl";
     const bad = validName(name);
     if (bad) {
       alert(bad);
@@ -5469,6 +5519,13 @@ ${lines.join("\n")}
     const name = prompt(tr("\u5C08\u6848\u540D\u7A31", "Project name"), "MyDesign")?.trim();
     if (!name) return;
     const p = blankProject(name);
+    projects.push(p);
+    switchProject(p.id);
+  }
+  function newFluxaProject() {
+    const name = prompt(tr("Fluxa \u5C08\u6848\u540D\u7A31", "Fluxa project name"), "Doubler")?.trim();
+    if (!name) return;
+    const p = blankFluxaProject(name);
     projects.push(p);
     switchProject(p.id);
   }
@@ -5661,7 +5718,7 @@ ${lines.join("\n")}
       return `<div class="goal"><div class="gi">${g.icon}</div><b>${esc4(g.title)}</b><p>${esc4(g.text)}</p><button class="tb-btn primary" data-goal="${g.goal}">${esc4(tr("\u5F9E\u9019\u88E1\u958B\u59CB\uFF1A", "Start with: "))}${esc4(ex ? exTitle(ex) : g.ex)}</button><a data-goalex="${g.goal}">${esc4(tr(`\u770B\u9019\u4E00\u985E\u7684\u7BC4\u4F8B\uFF08${exCount(g.filter)} \u500B\uFF09`, `See the examples of this kind (${exCount(g.filter)})`))}</a></div>`;
     }).join("")}</div>
     <div class="cols">
-      <div><h3>${tr("\u958B\u59CB", "Start")}</h3><a data-a="newfile">${tr("\uFF0B \u65B0\u589E .veryl \u6A94", "\uFF0B New .veryl file")}</a><a data-a="newproj">${tr("\uFF0B \u65B0\u5C08\u6848", "\uFF0B New project")}</a><a data-a="examples">${tr("\u{1F4DA} \u958B\u555F\u7BC4\u4F8B\u2026", "\u{1F4DA} Open an example\u2026")}</a><a data-a="import">${tr("\u21EA \u532F\u5165 .veryl \u6A94\u2026", "\u21EA Import .veryl files\u2026")}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr("\u{1F4D6} \u5F9E\u96F6\u958B\u59CB\u7684\u6559\u5B78\uFF08\u5BEB Veryl \u2192 \u71D2\u9032 iCEBreaker\uFF09", "\u{1F4D6} Tutorial from scratch (write Veryl \u2192 flash an iCEBreaker)")}</a></div>
+      <div><h3>${tr("\u958B\u59CB", "Start")}</h3><a data-a="newfile">${tr("\uFF0B \u65B0\u589E .veryl \u6A94", "\uFF0B New .veryl file")}</a><a data-a="newproj">${tr("\uFF0B \u65B0\u5C08\u6848", "\uFF0B New project")}</a><a data-a="newfx">${tr("\uFF0B \u65B0 Fluxa \u5C08\u6848\uFF08\u9AD8\u968E\u5408\u6210\u8A9E\u8A00\uFF1A\u4EFB\u52D9\u8207\u901A\u9053\uFF09", "\uFF0B New Fluxa project (HLS language: tasks and channels)")}</a><a data-a="examples">${tr("\u{1F4DA} \u958B\u555F\u7BC4\u4F8B\u2026", "\u{1F4DA} Open an example\u2026")}</a><a data-a="import">${tr("\u21EA \u532F\u5165 .veryl \u6A94\u2026", "\u21EA Import .veryl files\u2026")}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr("\u{1F4D6} \u5F9E\u96F6\u958B\u59CB\u7684\u6559\u5B78\uFF08\u5BEB Veryl \u2192 \u71D2\u9032 iCEBreaker\uFF09", "\u{1F4D6} Tutorial from scratch (write Veryl \u2192 flash an iCEBreaker)")}</a></div>
       <div><h3>${tr("\u6700\u8FD1\u7684\u5C08\u6848", "Recent projects")}</h3>${recent.map((p) => `<a data-p="${p.id}">${esc4(projName(p))}</a>`).join("")}</div>
       <div><h3>${tr("\u9019\u500B\u5C08\u6848", "This project")}</h3>${proj.files.map((f) => `<a data-f="${esc4(f.name)}">\u25C6 ${esc4(f.name)}</a>`).join("")}<a data-a="flow">${tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow")}</a></div>
     </div>`;
@@ -5670,6 +5727,7 @@ ${lines.join("\n")}
       const a = t.dataset.a;
       if (a === "newfile") newFile();
       else if (a === "newproj") newProject();
+      else if (a === "newfx") newFluxaProject();
       else if (a === "examples") sideView("examples");
       else if (a === "import") $2("importIn").click();
       else if (a === "flow") runSynth();
@@ -5696,7 +5754,8 @@ ${lines.join("\n")}
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
     let errs = [];
     try {
-      mods = (await core.call({ cmd: "list", files })).modules;
+      if (fluxaProject()) mods = (await core.call({ cmd: "fluxa_list", files: fxFiles() })).tests.map((name) => ({ name, test: true }));
+      else mods = (await core.call({ cmd: "list", files })).modules;
       modsKnown = true;
     } catch (e) {
       errs = parseErrors(String(e.message ?? e), "check");
@@ -5792,8 +5851,8 @@ int main(void) {
   function parseErrors(text, from) {
     const out = [];
     for (const ln of text.split("\n")) {
-      const m = /^([\w./-]+\.veryl):(\d+):(\d+):\s*(.*)$/.exec(ln);
-      if (m) out.push({ file: m[1], line: +m[2], col: +m[3], msg: m[4], severity: "error", from });
+      const m = /^([\w./-]+\.(?:veryl|fx)):(\d+)(?::(\d+))?:\s*(.*)$/.exec(ln);
+      if (m) out.push({ file: m[1], line: +m[2], col: m[3] ? +m[3] : 1, msg: m[4], severity: "error", from });
       else if (ln.trim() && out.length) out[out.length - 1].msg += "\n" + ln.trim();
       else if (ln.trim()) out.push({ msg: ln.trim(), severity: "error", from, ...locate(ln) });
     }
@@ -5864,6 +5923,10 @@ int main(void) {
     const box = $2("testList");
     box.innerHTML = "";
     const tests = mods.filter((m) => m.test);
+    if (!tests.length && fluxaProject()) {
+      box.innerHTML = `<p class="side-hint">${tr("\u6C92\u6709 test \u5340\u584A\u3002\u5BEB <code>test name { ... }</code>\uFF1Aspawn \u4EFB\u52D9\u3001\u9001\u8CC7\u6599\u9032\u901A\u9053\u3001\u7528 <code>assert</code> \u6AA2\u67E5\u8F38\u51FA\u3002", "No test blocks. Write <code>test name { ... }</code>: spawn the tasks, send data into the channels and check the outputs with <code>assert</code>.")}</p>`;
+      return;
+    }
     if (!tests.length) {
       box.innerHTML = `<p class="side-hint">${tr("\u6C92\u6709 #[test] \u6A21\u7D44\u3002\u5728\u6A21\u7D44\u524D\u52A0\u4E0A <code>#[test(name)]</code>\uFF0C\u7528 <code>$tb::clock_gen</code>\u3001<code>$assert</code> \u5BEB testbench\u3002", "No #[test] modules. Put <code>#[test(name)]</code> before a module and write the testbench with <code>$tb::clock_gen</code> and <code>$assert</code>.")}</p>`;
       return;
@@ -5897,6 +5960,10 @@ int main(void) {
   }
   async function runTests(only) {
     if (!core) return;
+    if (fluxaProject()) {
+      await runFluxa(only);
+      return;
+    }
     const top = only ?? ($2("simTop").value || null);
     const mode = $2("simMode").value;
     const names = top ? [top] : mods.filter((m) => m.test).map((m) => m.name);
@@ -5918,6 +5985,45 @@ int main(void) {
       $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg + where)}</div><table><tr><th>testbench</th><th>${KIND(mode)}</th><th>${tr("\u7D50\u675F", "End")}</th></tr>${r.tops.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.fails ? "fail" : "pass"}">${t.fails ? tr(`\u2717 ${t.fails} \u500B\u5931\u6557`, `\u2717 ${t.fails} failed`) : "\u2713 PASS"}</td><td>${t.finished ? "$finish" : tr("\u6642\u9593\u5230", "time limit")}</td></tr>`).join("")}</table>`;
       $2("sbTest").textContent = `${fails.length ? "\u2717" : "\u2713"} ${msg.slice(2)}\uFF08${((performance.now() - t0) / 1e3).toFixed(2)} s\uFF09`;
       for (const ln of r.log.split("\n")) if (/ASSERTION FAILED/.test(ln)) problems.push({ msg: ln.trim(), severity: "error", from: "run" });
+      panel(fails.length ? "output" : "results");
+    } catch (e) {
+      for (const n of names) testState.delete(n);
+      const errs = parseErrors(String(e.message ?? e), "run");
+      problems.push(...errs);
+      $2("p-output").textContent = String(e.message ?? e);
+      $2("sbTest").textContent = tr("\u2717 \u932F\u8AA4", "\u2717 Error");
+      panel("problems");
+      const first = errs.find((p) => p.file);
+      if (first) openFile(first.file, first.line, first.col);
+    }
+    setBusy(false);
+    renderTests();
+    renderProblems();
+  }
+  async function runFluxa(only) {
+    const names = only ? [only] : mods.filter((m) => m.test).map((m) => m.name);
+    for (const n of names) testState.set(n, "run");
+    renderTests();
+    setBusy(true, tr("\u25B6 Fluxa \u6E2C\u8A66\u4E2D\u2026", "\u25B6 Running the Fluxa tests\u2026"));
+    const t0 = performance.now();
+    problems = problems.filter((p) => p.from !== "run");
+    try {
+      const r = await core.call({ cmd: "fluxa_run", files: fxFiles(), tests: only ? [only] : null, stats: true });
+      let out = "";
+      for (const t of r.results) {
+        testState.set(t.name, t.passed ? "pass" : "fail");
+        out += t.output + (t.passed ? `[PASS] ${t.name}
+` : `[FAIL] ${t.name}
+${t.message.split("\n").map((l) => "       " + l).join("\n")}
+`) + t.stats;
+        if (!t.passed) problems.push(...parseErrors(t.message, "run").map((p) => ({ ...p, msg: `${t.name}: ${p.msg}` })));
+      }
+      const fails = r.results.filter((t) => !t.passed);
+      out += tr(`${r.results.length - fails.length} \u500B\u901A\u904E\uFF0C${fails.length} \u500B\u5931\u6557`, `${r.results.length - fails.length} passed, ${fails.length} failed`);
+      $2("p-output").textContent = out;
+      const msg = fails.length ? tr(`\u2717 ${fails.length} \u500B\u6E2C\u8A66\u5931\u6557\uFF08${fails.map((t) => t.name).join(", ")}\uFF09`, `\u2717 ${fails.length} test(s) failed (${fails.map((t) => t.name).join(", ")})`) : tr(`\u2713 ${r.results.length} \u500B\u6E2C\u8A66\u901A\u904E`, `\u2713 ${r.results.length} test(s) passed`);
+      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg)}</div><table><tr><th>test</th><th>Fluxa</th></tr>${r.results.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.passed ? "pass" : "fail"}">${t.passed ? "\u2713 PASS" : esc4("\u2717 " + t.message.split("\n")[0])}</td></tr>`).join("")}</table>`;
+      $2("sbTest").textContent = `${fails.length ? "\u2717" : "\u2713"} ${msg.slice(2)}\uFF08${((performance.now() - t0) / 1e3).toFixed(2)} s\uFF09`;
       panel(fails.length ? "output" : "results");
     } catch (e) {
       for (const n of names) testState.delete(n);

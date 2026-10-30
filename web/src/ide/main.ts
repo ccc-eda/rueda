@@ -86,6 +86,30 @@ function blankProject(name: string): Project {
   return { id: uid(), name, files: [{ name: f, src: newModule(top) }], synth: top, open: [f], active: f };
 }
 
+const FX_TEMPLATE = (task: string) => `// A Fluxa program: tasks connected by channels (bounded FIFOs). ▶ Run runs its tests.
+task ${task}(x: in chan<i16>, y: out chan<i16>) {
+    for v in x {
+        y.send(v * 2);
+    }
+}
+
+test ${task.toLowerCase()}_doubles {
+    let (tx, rx) = chan::<i16>(depth = 4);
+    let (ty, ry) = chan::<i16>(depth = 4);
+    spawn ${task}(rx, ty);
+    for k in 0..3 { tx.send(k); }
+    tx.close();
+    for k in 0..3 { assert ry.recv() == 2 * k; }
+}
+`;
+
+function blankFluxaProject(name: string): Project {
+  const m = (name.replace(/[^A-Za-z0-9_]/g, '').replace(/^[^A-Za-z]+/, '') || 'Top');
+  const task = m[0].toUpperCase() + m.slice(1);
+  const f = `${task.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()}.fx`;
+  return { id: uid(), name, files: [{ name: f, src: FX_TEMPLATE(task) }], open: [f], active: f };
+}
+
 // ---------------------------------------------------------------- state
 
 let core: Core | null = null;
@@ -119,6 +143,10 @@ const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synt
 const special = (n: string) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB;
 
 function file(name: string): VFile | undefined { return proj.files.find(f => f.name === name); }
+
+/** a Fluxa project: .fx files and no Veryl. Its tests run on the Fluxa simulator; it has no synthesis (yet) */
+const fxFiles = () => proj.files.filter(f => f.name.endsWith('.fx'));
+const fluxaProject = () => fxFiles().length > 0 && !proj.files.some(f => f.name.endsWith('.veryl'));
 
 /** the pin file is an ordinary project file (the first .pcf) */
 const PCF = 'pins.pcf';
@@ -266,6 +294,9 @@ function declarations(): { kind: string; name: string; file: string; line: numbe
     ls.forEach((l, i) => {
       const m = /^\s*(?:pub\s+)?(module|interface|package)\s+([A-Za-z_]\w*)/.exec(l);
       if (m) out.push({ kind: m[1], name: m[2], file: f.name, line: i + 1, test: i > 0 && /#\[test/.test(ls[i - 1] + (ls[i - 2] ?? '')) });
+      // Fluxa: tasks, functions, tests
+      const x = f.name.endsWith('.fx') ? /^\s*(?:pub\s+)?(task|fn|test)\s+([A-Za-z_]\w*)/.exec(l) : null;
+      if (x) out.push({ kind: x[1], name: x[2], file: f.name, line: i + 1, test: x[1] === 'test' });
     });
   }
   return out;
@@ -278,7 +309,7 @@ function renderOutline(): void {
     const el = document.createElement('div');
     const top = d.kind === 'module' && d.name === synthTop();
     el.className = 'item';
-    el.innerHTML = `<span class="ic">${d.kind === 'module' ? (d.test ? '✔' : '▣') : d.kind === 'interface' ? '⇄' : '{}'}</span><span class="nm">${esc(d.name)}</span><span class="tag">${top ? tr('合成頂層', 'synth top') : d.test ? 'test' : d.kind === 'module' ? '' : d.kind}</span>`;
+    el.innerHTML = `<span class="ic">${d.kind === 'module' ? (d.test ? '✔' : '▣') : d.kind === 'test' ? '✔' : d.kind === 'task' ? '⇶' : d.kind === 'fn' ? 'ƒ' : d.kind === 'interface' ? '⇄' : '{}'}</span><span class="nm">${esc(d.name)}</span><span class="tag">${top ? tr('合成頂層', 'synth top') : d.test ? 'test' : d.kind === 'module' || d.kind === 'task' ? '' : d.kind}</span>`;
     el.title = `${d.file}:${d.line}`;
     el.onclick = () => openFile(d.file, d.line);
     box.appendChild(el);
@@ -292,15 +323,16 @@ function validName(name: string): string | null {
 }
 
 function newFile(): void {
-  let name = prompt(tr('新檔名（.veryl，或 .c：給 RISC-V SoC 的 C 程式）', 'New file name (.veryl, or .c: a C program for the RISC-V SoC)'), `module${proj.files.length}.veryl`)?.trim();
+  const ext = fluxaProject() ? '.fx' : '.veryl';
+  let name = prompt(tr('新檔名（.veryl、.fx：Fluxa，或 .c：給 RISC-V SoC 的 C 程式）', 'New file name (.veryl, .fx: Fluxa, or .c: a C program for the RISC-V SoC)'), `${ext === '.fx' ? 'part' : 'module'}${proj.files.length}${ext}`)?.trim();
   if (!name) return;
-  if (!/\.\w+$/.test(name)) name += '.veryl';
+  if (!/\.\w+$/.test(name)) name += ext;
   const bad = validName(name);
   if (bad) { alert(bad); return; }
   const base = name.replace(/\.\w+$/, '').replace(/(^|[_-])(\w)/g, (_, _a, c: string) => c.toUpperCase()).replace(/\W/g, '');
   const m = /^[A-Za-z]/.test(base) ? base : 'M' + base;
   if (name.endsWith('.c') && cFile() && !boardProject()) { alert(tr('一個專案只能有一個 .c 檔', 'A project has one .c file')); return; }
-  proj.files.push({ name, src: name.endsWith('.veryl') ? newModule(m) : name.endsWith('.c') ? (boardProject() ? C_BOARD_TEMPLATE : C_TEMPLATE) : '' });
+  proj.files.push({ name, src: name.endsWith('.veryl') ? newModule(m) : name.endsWith('.fx') ? FX_TEMPLATE(m) : name.endsWith('.c') ? (boardProject() ? C_BOARD_TEMPLATE : C_TEMPLATE) : '' });
   openFile(name);
   changed();
 }
@@ -308,7 +340,7 @@ function newFile(): void {
 function renameFile(old: string): void {
   let name = prompt(tr('新檔名', 'New file name'), old)?.trim();
   if (!name || name === old) return;
-  if (!/\.\w+$/.test(name)) name += '.veryl';
+  if (!/\.\w+$/.test(name)) name += fluxaProject() ? '.fx' : '.veryl';
   const bad = validName(name);
   if (bad) { alert(bad); return; }
   file(old)!.name = name;
@@ -401,6 +433,14 @@ function newProject(): void {
   const name = prompt(tr('專案名稱', 'Project name'), 'MyDesign')?.trim();
   if (!name) return;
   const p = blankProject(name);
+  projects.push(p);
+  switchProject(p.id);
+}
+
+function newFluxaProject(): void {
+  const name = prompt(tr('Fluxa 專案名稱', 'Fluxa project name'), 'Doubler')?.trim();
+  if (!name) return;
+  const p = blankFluxaProject(name);
   projects.push(p);
   switchProject(p.id);
 }
@@ -572,7 +612,7 @@ function welcome(): void {
         + `<a data-goalex="${g.goal}">${esc(tr(`看這一類的範例（${exCount(g.filter)} 個）`, `See the examples of this kind (${exCount(g.filter)})`))}</a></div>`;
     }).join('')}</div>
     <div class="cols">
-      <div><h3>${tr('開始', 'Start')}</h3><a data-a="newfile">${tr('＋ 新增 .veryl 檔', '＋ New .veryl file')}</a><a data-a="newproj">${tr('＋ 新專案', '＋ New project')}</a><a data-a="examples">${tr('📚 開啟範例…', '📚 Open an example…')}</a><a data-a="import">${tr('⇪ 匯入 .veryl 檔…', '⇪ Import .veryl files…')}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr('📖 從零開始的教學（寫 Veryl → 燒進 iCEBreaker）', '📖 Tutorial from scratch (write Veryl → flash an iCEBreaker)')}</a></div>
+      <div><h3>${tr('開始', 'Start')}</h3><a data-a="newfile">${tr('＋ 新增 .veryl 檔', '＋ New .veryl file')}</a><a data-a="newproj">${tr('＋ 新專案', '＋ New project')}</a><a data-a="newfx">${tr('＋ 新 Fluxa 專案（高階合成語言：任務與通道）', '＋ New Fluxa project (HLS language: tasks and channels)')}</a><a data-a="examples">${tr('📚 開啟範例…', '📚 Open an example…')}</a><a data-a="import">${tr('⇪ 匯入 .veryl 檔…', '⇪ Import .veryl files…')}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr('📖 從零開始的教學（寫 Veryl → 燒進 iCEBreaker）', '📖 Tutorial from scratch (write Veryl → flash an iCEBreaker)')}</a></div>
       <div><h3>${tr('最近的專案', 'Recent projects')}</h3>${recent.map(p => `<a data-p="${p.id}">${esc(projName(p))}</a>`).join('')}</div>
       <div><h3>${tr('這個專案', 'This project')}</h3>${proj.files.map(f => `<a data-f="${esc(f.name)}">◆ ${esc(f.name)}</a>`).join('')}<a data-a="flow">${tr('⚙ 合成流程', '⚙ Synthesis flow')}</a></div>
     </div>`;
@@ -581,6 +621,7 @@ function welcome(): void {
     const a = t.dataset.a;
     if (a === 'newfile') newFile();
     else if (a === 'newproj') newProject();
+    else if (a === 'newfx') newFluxaProject();
     else if (a === 'examples') sideView('examples');
     else if (a === 'import') $<HTMLInputElement>('importIn').click();
     else if (a === 'flow') runSynth();
@@ -612,7 +653,8 @@ async function check(): Promise<void> {
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
   let errs: typeof problems = [];
   try {
-    mods = (await core.call<{ modules: ModuleInfo[] }>({ cmd: 'list', files })).modules;
+    if (fluxaProject()) mods = (await core.call<{ tests: string[] }>({ cmd: 'fluxa_list', files: fxFiles() })).tests.map(name => ({ name, test: true }));
+    else mods = (await core.call<{ modules: ModuleInfo[] }>({ cmd: 'list', files })).modules;
     modsKnown = true;
   } catch (e) {
     errs = parseErrors(String((e as Error).message ?? e), 'check');
@@ -710,8 +752,8 @@ async function runC(): Promise<void> {
 function parseErrors(text: string, from: 'check' | 'run'): typeof problems {
   const out: typeof problems = [];
   for (const ln of text.split('\n')) {
-    const m = /^([\w./-]+\.veryl):(\d+):(\d+):\s*(.*)$/.exec(ln);
-    if (m) out.push({ file: m[1], line: +m[2], col: +m[3], msg: m[4], severity: 'error', from });
+    const m = /^([\w./-]+\.(?:veryl|fx)):(\d+)(?::(\d+))?:\s*(.*)$/.exec(ln);
+    if (m) out.push({ file: m[1], line: +m[2], col: m[3] ? +m[3] : 1, msg: m[4], severity: 'error', from });
     else if (ln.trim() && out.length) out[out.length - 1].msg += '\n' + ln.trim();
     else if (ln.trim()) out.push({ msg: ln.trim(), severity: 'error', from, ...locate(ln) });
   }
@@ -791,6 +833,7 @@ function renderTests(): void {
   const box = $('testList');
   box.innerHTML = '';
   const tests = mods.filter(m => m.test);
+  if (!tests.length && fluxaProject()) { box.innerHTML = `<p class="side-hint">${tr('沒有 test 區塊。寫 <code>test name { ... }</code>：spawn 任務、送資料進通道、用 <code>assert</code> 檢查輸出。', 'No test blocks. Write <code>test name { ... }</code>: spawn the tasks, send data into the channels and check the outputs with <code>assert</code>.')}</p>`; return; }
   if (!tests.length) { box.innerHTML = `<p class="side-hint">${tr('沒有 #[test] 模組。在模組前加上 <code>#[test(name)]</code>，用 <code>$tb::clock_gen</code>、<code>$assert</code> 寫 testbench。', 'No #[test] modules. Put <code>#[test(name)]</code> before a module and write the testbench with <code>$tb::clock_gen</code> and <code>$assert</code>.')}</p>`; return; }
   for (const t of tests) {
     const s = testState.get(t.name);
@@ -823,6 +866,7 @@ async function simulate(top: string | null, mode: string, vcd: boolean): Promise
 
 async function runTests(only?: string): Promise<void> {
   if (!core) return;
+  if (fluxaProject()) { await runFluxa(only); return; }
   const top = only ?? ($<HTMLSelectElement>('simTop').value || null);
   const mode = $<HTMLSelectElement>('simMode').value;
   const names = top ? [top] : mods.filter(m => m.test).map(m => m.name);
@@ -846,6 +890,47 @@ async function runTests(only?: string): Promise<void> {
     $('sbTest').textContent = `${fails.length ? '✗' : '✓'} ${msg.slice(2)}（${((performance.now() - t0) / 1000).toFixed(2)} s）`;
     // assertion failures with their time stamps also go to the problems list
     for (const ln of r.log.split('\n')) if (/ASSERTION FAILED/.test(ln)) problems.push({ msg: ln.trim(), severity: 'error', from: 'run' });
+    panel(fails.length ? 'output' : 'results');
+  } catch (e) {
+    for (const n of names) testState.delete(n);
+    const errs = parseErrors(String((e as Error).message ?? e), 'run');
+    problems.push(...errs);
+    $('p-output').textContent = String((e as Error).message ?? e);
+    $('sbTest').textContent = tr('✗ 錯誤', '✗ Error');
+    panel('problems');
+    const first = errs.find(p => p.file);
+    if (first) openFile(first.file!, first.line, first.col);
+  }
+  setBusy(false);
+  renderTests();
+  renderProblems();
+}
+
+interface FluxaResult { name: string; passed: boolean; message: string; output: string; stats: string }
+
+/** a Fluxa project's tests (all, or `only`) on the Fluxa simulator: print output, the channel statistics */
+async function runFluxa(only?: string): Promise<void> {
+  const names = only ? [only] : mods.filter(m => m.test).map(m => m.name);
+  for (const n of names) testState.set(n, 'run');
+  renderTests();
+  setBusy(true, tr('▶ Fluxa 測試中…', '▶ Running the Fluxa tests…'));
+  const t0 = performance.now();
+  problems = problems.filter(p => p.from !== 'run');
+  try {
+    const r = await core!.call<{ results: FluxaResult[] }>({ cmd: 'fluxa_run', files: fxFiles(), tests: only ? [only] : null, stats: true });
+    let out = '';
+    for (const t of r.results) {
+      testState.set(t.name, t.passed ? 'pass' : 'fail');
+      out += t.output + (t.passed ? `[PASS] ${t.name}\n` : `[FAIL] ${t.name}\n${t.message.split('\n').map(l => '       ' + l).join('\n')}\n`) + t.stats;
+      if (!t.passed) problems.push(...parseErrors(t.message, 'run').map(p => ({ ...p, msg: `${t.name}: ${p.msg}` })));
+    }
+    const fails = r.results.filter(t => !t.passed);
+    out += tr(`${r.results.length - fails.length} 個通過，${fails.length} 個失敗`, `${r.results.length - fails.length} passed, ${fails.length} failed`);
+    $('p-output').textContent = out;
+    const msg = fails.length ? tr(`✗ ${fails.length} 個測試失敗（${fails.map(t => t.name).join(', ')}）`, `✗ ${fails.length} test(s) failed (${fails.map(t => t.name).join(', ')})`) : tr(`✓ ${r.results.length} 個測試通過`, `✓ ${r.results.length} test(s) passed`);
+    $('p-results').innerHTML = `<div class="banner ${fails.length ? 'fail' : 'pass'}">${esc(msg)}</div>`
+      + `<table><tr><th>test</th><th>Fluxa</th></tr>${r.results.map(t => `<tr><td>${esc(t.name)}</td><td class="${t.passed ? 'pass' : 'fail'}">${t.passed ? '✓ PASS' : esc('✗ ' + t.message.split('\n')[0])}</td></tr>`).join('')}</table>`;
+    $('sbTest').textContent = `${fails.length ? '✗' : '✓'} ${msg.slice(2)}（${((performance.now() - t0) / 1000).toFixed(2)} s）`;
     panel(fails.length ? 'output' : 'results');
   } catch (e) {
     for (const n of names) testState.delete(n);

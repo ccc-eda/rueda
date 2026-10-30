@@ -14,6 +14,10 @@ vm.createContext(ctx);
 for (const f of ['wasm.js', 'examples.js', 'chipdb.js']) vm.runInContext(fs.readFileSync(path.join(dist, f), 'utf8'), ctx);
 const { Veryl, fromBase64, gunzip } = createRequire(import.meta.url)(path.join(dist, 'api.cjs'));
 const core = await Veryl.load(fromBase64(ctx.VERYL_WASM_B64));
+// the Fluxa examples are checked on their own (below); the Veryl checks see only Veryl
+const FLUXA = ctx.VERYL_EXAMPLES.filter((e) => e.lang === 'fluxa');
+const ALL_EXAMPLES = ctx.VERYL_EXAMPLES;
+ctx.VERYL_EXAMPLES = ctx.VERYL_EXAMPLES.filter((e) => e.lang !== 'fluxa');
 
 let bad = 0;
 const expectFail = new Set(['alu_fail']);
@@ -454,7 +458,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const { highlight, langOf } = createRequire(import.meta.url)(hp);
   const unesc = (h) => h.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   let n = 0, lossy = '';
-  for (const ex of ctx.VERYL_EXAMPLES) for (const f of ex.files) {
+  for (const ex of ALL_EXAMPLES) for (const f of ex.files) {
     n++;
     if (unesc(highlight(f.src, langOf(f.name)).join('\n')) !== f.src) lossy ||= `${ex.id}/${f.name}`;
   }
@@ -465,8 +469,10 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     && ['t-name">loop:', 't-kw">addi', 't-type">a0', 't-num">-1', 't-com"># count', 't-attr">.word'].every((t) => ha.includes(t));
   const h = highlight("module M { // c\n  var a: logic<8> = 8'hFF; /* x\n y */ $assert(a); }").join('\n');
   const tagged = ['t-kw">module', 't-type">logic', "t-num\">8'hFF", 't-com">// c', 't-com"> y */', 't-sys">$assert', 't-name">M'].every((t) => h.includes(t));
-  if (lossy || !tagged || !taggedC) bad++;
-  console.log(`${lossy || !tagged || !taggedC ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files (Veryl, C, assembly)${lossy ? ': changes ' + lossy : ''}${tagged && taggedC ? '' : ': tokens not tagged'}`);
+  const hf = highlight('task Fir(x: in chan<i16>) {\n  let h: [i16; 4] @reg = [0; 4]; // d\n  spawn Mac(x); }', 'fx').join('\n');
+  const taggedF = ['t-kw">task', 't-name">Fir', 't-type">chan', 't-type">i16', 't-attr">@reg', 't-com">// d', 't-kw">spawn', 't-num">4'].every((t) => hf.includes(t));
+  if (lossy || !tagged || !taggedC || !taggedF) bad++;
+  console.log(`${lossy || !tagged || !taggedC || !taggedF ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files (Veryl, Fluxa, C, assembly)${lossy ? ': changes ' + lossy : ''}${tagged && taggedC && taggedF ? '' : ': tokens not tagged'}`);
 }
 
 // timing constraints (sdc): with one clock and no IO delays the worst slack is the target period minus the
@@ -538,6 +544,12 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
       if (!prog || !caps({ ...i, active: prog }).test.on) errs.push(`${ex.id}: ▶ is off with ${prog} open`);
     } else if (!c.test.on || !c.verify.on || c.emu.on) errs.push(`${ex.id}: test ${c.test.on} verify ${c.verify.on} emu ${c.emu.on}`);
     if (!ex.emu && !ex.pcf && (c.board.on || !c.board.fix?.includes('addPcf'))) errs.push(`${ex.id}: no pins, but the board is ${c.board.on ? 'on' : 'off without "add pins.pcf"'}`);
+  }
+  for (const ex of FLUXA) {
+    const i = { files: ex.files, mods: null, top: '' };
+    const c = caps(i);
+    if (start(i) !== 'test' || !c.test.on) errs.push(`${ex.id}: a Fluxa program does not start with its tests`);
+    for (const a of ['synth', 'board', 'verify', 'emu']) if (c[a].on || !c[a].why) errs.push(`${ex.id}: ${a} should be off, with a reason`);
   }
   // the welcome page's starting points open these examples
   const main = fs.readFileSync(path.join(dist, '../src/ide/main.ts'), 'utf8');
@@ -782,6 +794,29 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     if (!ok) bad++;
     console.log(`${ok ? 'ok  ' : 'FAIL'} board examples on riscv-emu: ${ok ? res.join(', ') : fail}  (${Date.now() - t0} ms)`);
   }
+}
+
+// Fluxa: every example's tests on the cooperative scheduler in WebAssembly (err_* fail on purpose)
+{
+  for (const ex of FLUXA) {
+    const t0 = Date.now();
+    let line;
+    try {
+      const r = core.call({ cmd: 'fluxa_run', files: ex.files, stats: true });
+      const fails = r.results.filter((t) => !t.passed);
+      const expectFail = ex.id === 'fx_deadlock';
+      const ok = r.results.length > 0 && (expectFail ? fails.length === r.results.length && fails.every((t) => t.message.includes('deadlock')) : !fails.length);
+      if (!ok) bad++;
+      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} fluxa ${r.results.length - fails.length} passed, ${fails.length} failed${!ok && fails.length ? ': ' + fails[0].name + ': ' + fails[0].message.split('\n')[0] : ''}`;
+    } catch (e) {
+      bad++;
+      line = `FAIL ${ex.id.padEnd(9)} fluxa ${e.message}`;
+    }
+    console.log(`${line}  (${Date.now() - t0} ms)`);
+  }
+  // a syntax error comes back with its place
+  try { core.call({ cmd: 'fluxa_list', files: [{ name: 'bad.fx', src: 'task T( {' }] }); bad++; console.log('FAIL fluxa syntax error not reported'); }
+  catch (e) { const ok = /^bad\.fx:1: syntax error/.test(e.message); if (!ok) bad++; console.log(`${ok ? 'ok  ' : 'FAIL'} fluxa syntax error reported: ${e.message}`); }
 }
 
 // a broken source must come back as a message, not crash the core

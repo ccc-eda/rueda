@@ -1,18 +1,27 @@
 //! 排程與通道：Kahn 程序網路（KPN）。
 //!
-//! 每個 `task` 是一條 OS 執行緒；通道是有界 FIFO（depth），send 在滿時阻塞、
-//! recv 在空時阻塞。所有阻塞都經過同一把全域鎖與 Condvar，所以可以精確偵測死結：
-//! 當「所有存活任務都在等待」且自上次狀態變更後沒有人被喚醒，即為死結。
+//! 通道是有界 FIFO（depth），send 在滿時阻塞、recv 在空時阻塞。兩種排程方式，
+//! 結果相同（KPN 的輸出與排程無關）：
+//!
+//! - 原生（預設）：每個 `task` 是一條 OS 執行緒。所有阻塞都經過同一把全域鎖與 Condvar，
+//!   所以可以精確偵測死結：當「所有存活任務都在等待」且自上次狀態變更後沒有人被喚醒，即為死結。
+//! - 協作式（`coop`，WebAssembly 沒有執行緒時用）：所有任務是同一條執行緒上的 future，
+//!   等待時讓出（Pending），由 [`Shared::run_coop`] 輪流執行；一整輪沒有任何狀態變更即為死結。
+//!   `print` 的輸出收進緩衝區（[`Shared::take_output`]），不直接印出。
 //!
 //! epoch 機制：任何狀態變更（send/recv/close/任務結束/spawn）都 epoch++ 並把
 //! blocked 歸零，等待者醒來後必須重新檢查並重新登記，避免「通知已送出但對方尚未醒來」
 //! 造成的誤判。
 
 use crate::ast::Program;
+use crate::interp::BoxFut;
 use crate::value::*;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 #[derive(Debug)]
 pub enum RtErr {
@@ -76,10 +85,16 @@ pub struct Shared {
     pub trace: bool,
     pub stop: AtomicBool,
     pub handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    /// 協作式排程（沒有執行緒）：等待點讓出，任務由 `run_coop` 輪流執行
+    pub coop: bool,
+    /// 協作式：剛 spawn、尚未交給 `run_coop` 的任務
+    spawned: Mutex<Vec<(usize, BoxFut<'static, R<()>>)>>,
+    /// 協作式：`print` 與 `--trace` 的輸出
+    out: Mutex<String>,
 }
 
 impl Shared {
-    pub fn new(program: Arc<Program>, trace: bool) -> Arc<Shared> {
+    pub fn new(program: Arc<Program>, trace: bool, coop: bool) -> Arc<Shared> {
         let mut w = World { next_task: 1, live: 1, ..Default::default() }; // 任務 0 = test 主體
         w.task_names.insert(0, "test".to_string());
         Arc::new(Shared {
@@ -89,7 +104,35 @@ impl Shared {
             trace,
             stop: AtomicBool::new(false),
             handles: Mutex::new(Vec::new()),
+            coop,
+            spawned: Mutex::new(Vec::new()),
+            out: Mutex::new(String::new()),
         })
+    }
+
+    /// `print`：原生印到 stdout，協作式收進緩衝區
+    pub fn print(&self, line: &str) {
+        if self.coop {
+            let mut o = self.out.lock().unwrap_or_else(|e| e.into_inner());
+            o.push_str(line);
+            o.push('\n');
+        } else {
+            println!("{}", line);
+        }
+    }
+
+    /// `--trace` 的一行：原生印到 stderr，協作式收進緩衝區
+    fn trace_line(&self, line: String) {
+        if self.coop {
+            self.print(&line);
+        } else {
+            eprintln!("{}", line);
+        }
+    }
+
+    /// 協作式：到目前為止的輸出（並清空）
+    pub fn take_output(&self) -> String {
+        std::mem::take(&mut *self.out.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     pub fn lock(&self) -> MutexGuard<'_, World> {
@@ -100,11 +143,41 @@ impl Shared {
         self.stop.load(Ordering::Relaxed)
     }
 
-    /// 阻塞直到 `f` 回傳 Some。f 在持鎖狀態下執行；回傳 None 表示尚不能前進。
-    pub fn wait_until<T>(
+    /// 等到 `f` 回傳 Some。f 在持鎖狀態下執行；回傳 None 表示尚不能前進。
+    /// 原生：阻塞這條執行緒；協作式：登記等待原因後讓出，由 `run_coop` 之後再試。
+    pub async fn wait_until<T>(
         &self,
         task: usize,
-        why: &dyn Fn(&World) -> String,
+        why: &(dyn Fn(&World) -> String + Sync),
+        mut f: impl FnMut(&mut World) -> Option<R<T>>,
+    ) -> R<T> {
+        if !self.coop {
+            return self.wait_blocking(task, why, f);
+        }
+        loop {
+            {
+                let mut w = self.lock();
+                if w.shutdown {
+                    return Err(RtErr::Shutdown);
+                }
+                if w.deadlock {
+                    return Err(RtErr::Deadlock);
+                }
+                if let Some(r) = f(&mut w) {
+                    w.waiting.remove(&task);
+                    return r;
+                }
+                let reason = why(&w);
+                w.waiting.insert(task, reason);
+            }
+            YieldOnce(false).await;
+        }
+    }
+
+    fn wait_blocking<T>(
+        &self,
+        task: usize,
+        why: &(dyn Fn(&World) -> String + Sync),
         mut f: impl FnMut(&mut World) -> Option<R<T>>,
     ) -> R<T> {
         let mut w = self.lock();
@@ -162,31 +235,90 @@ impl Shared {
         id
     }
 
-    pub fn launch(self: &Arc<Self>, id: usize, f: impl FnOnce(usize) -> R<()> + Send + 'static) {
+    /// 啟動任務 `id`：原生開一條執行緒跑這個 future，協作式交給 `run_coop`
+    pub fn launch(self: &Arc<Self>, id: usize, fut: impl Future<Output = R<()>> + Send + 'static) {
+        if self.coop {
+            self.spawned.lock().unwrap_or_else(|e| e.into_inner()).push((id, Box::pin(fut)));
+            return;
+        }
         let sh = self.clone();
         let h = std::thread::Builder::new()
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
-                let r = f(id);
-                if let Err(RtErr::Msg(line, m)) = r {
-                    let mut w = sh.lock();
-                    if w.error.is_none() {
-                        let name = w.task_names.get(&id).cloned().unwrap_or_default();
-                        w.error = Some(format!(
-                            "{}: runtime error in task `{}`: {}",
-                            sh.program.loc(line), name, m
-                        ));
-                    }
-                    w.shutdown = true;
-                    w.bump();
-                    drop(w);
-                    sh.stop.store(true, Ordering::Relaxed);
-                    sh.cv.notify_all();
-                }
-                sh.task_done(id);
+                let r = block_on(fut);
+                sh.task_finished(id, r);
             })
             .expect("failed to spawn task thread");
         self.handles.lock().unwrap_or_else(|e| e.into_inner()).push(h);
+    }
+
+    /// 任務結束：記下第一個執行期錯誤（並結束模擬），然後 `task_done`
+    fn task_finished(&self, id: usize, r: R<()>) {
+        if let Err(RtErr::Msg(line, m)) = r {
+            let mut w = self.lock();
+            if w.error.is_none() {
+                let name = w.task_names.get(&id).cloned().unwrap_or_default();
+                w.error = Some(format!(
+                    "{}: runtime error in task `{}`: {}",
+                    self.program.loc(line), name, m
+                ));
+            }
+            w.shutdown = true;
+            w.bump();
+            drop(w);
+            self.stop.store(true, Ordering::Relaxed);
+            self.cv.notify_all();
+        }
+        self.task_done(id);
+    }
+
+    /// 協作式排程：輪流執行 test 主體 `main` 與所有任務，直到 `main` 結束。
+    /// 一整輪沒有任何狀態變更（epoch 不變）而 `main` 還沒結束 = 所有任務都在等待 = 死結。
+    pub fn run_coop<'a, T>(&self, mut main: Pin<Box<dyn Future<Output = R<T>> + 'a>>) -> R<T> {
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let mut tasks: Vec<(usize, BoxFut<'static, R<()>>)> = Vec::new();
+        loop {
+            let epoch = self.lock().epoch;
+            if let Poll::Ready(r) = main.as_mut().poll(&mut cx) {
+                return r;
+            }
+            let mut k = 0;
+            loop {
+                tasks.extend(self.spawned.lock().unwrap_or_else(|e| e.into_inner()).drain(..));
+                if k >= tasks.len() {
+                    break;
+                }
+                match tasks[k].1.as_mut().poll(&mut cx) {
+                    Poll::Ready(r) => {
+                        let (id, _) = tasks.remove(k);
+                        self.task_finished(id, r);
+                    }
+                    Poll::Pending => k += 1,
+                }
+            }
+            let mut w = self.lock();
+            if w.epoch == epoch {
+                if w.deadlock {
+                    // 已宣告死結，而 main 仍未結束（不應發生）
+                    return Err(RtErr::Deadlock);
+                }
+                let mut lines: Vec<String> = w
+                    .waiting
+                    .iter()
+                    .map(|(t, r)| {
+                        format!("  task `{}` (#{}) is blocked: {}", w.task_names.get(t).cloned().unwrap_or_default(), t, r)
+                    })
+                    .collect();
+                lines.sort();
+                w.deadlock_report = Some(format!(
+                    "deadlock: all {} live task(s) are blocked\n{}",
+                    w.live,
+                    lines.join("\n")
+                ));
+                w.deadlock = true;
+            }
+        }
     }
 
     pub fn task_done(&self, id: usize) {
@@ -219,10 +351,11 @@ impl Shared {
         }
     }
 
-    pub fn join_children(&self, task: usize, ids: Vec<usize>) -> R<()> {
+    pub async fn join_children(&self, task: usize, ids: Vec<usize>) -> R<()> {
+        let n = ids.len();
         self.wait_until(
             task,
-            &|_| format!("waiting for {} child task(s) of `parallel`", ids.len()),
+            &|_| format!("waiting for {} child task(s) of `parallel`", n),
             |w| {
                 if ids.iter().all(|i| w.finished.contains(i)) {
                     w.bump();
@@ -232,6 +365,7 @@ impl Shared {
                 }
             },
         )
+        .await
     }
 
     // ------------------------------------------------------------ 通道
@@ -265,7 +399,7 @@ impl Shared {
         (w.chans[ch].elem.clone(), w.chans[ch].depth)
     }
 
-    pub fn send(&self, task: usize, ch: usize, v: Value, line: u32) -> R<()> {
+    pub async fn send(&self, task: usize, ch: usize, v: Value, line: u32) -> R<()> {
         let (elem, name) = {
             let w = self.lock();
             (w.chans[ch].elem.clone(), w.chans[ch].name.clone())
@@ -292,7 +426,7 @@ impl Shared {
                 if w.chans[ch].queue.len() < w.chans[ch].depth {
                     let v = pending.take().unwrap();
                     if trace {
-                        eprintln!("[{:>6}] {:<24} send {}", w.seq, w.chans[ch].name, v);
+                        self.trace_line(format!("[{:>6}] {:<24} send {}", w.seq, w.chans[ch].name, v));
                     }
                     let c = &mut w.chans[ch];
                     c.queue.push_back(v);
@@ -305,10 +439,11 @@ impl Shared {
                 }
             },
         )
+        .await
     }
 
     /// None = 通道已關閉且為空
-    pub fn recv(&self, task: usize, ch: usize, line: u32) -> R<Option<Value>> {
+    pub async fn recv(&self, task: usize, ch: usize, line: u32) -> R<Option<Value>> {
         let trace = self.trace;
         self.wait_until(
             task,
@@ -323,7 +458,7 @@ impl Shared {
                 if let Some(v) = w.chans[ch].queue.pop_front() {
                     w.chans[ch].received += 1;
                     if trace {
-                        eprintln!("[{:>6}] {:<24} recv {}", w.seq, w.chans[ch].name, v);
+                        self.trace_line(format!("[{:>6}] {:<24} recv {}", w.seq, w.chans[ch].name, v));
                     }
                     w.bump();
                     Some(Ok(Some(v)))
@@ -334,6 +469,7 @@ impl Shared {
                 }
             },
         )
+        .await
     }
 
     pub fn close(&self, task: usize, ch: usize, line: u32) -> R<()> {
@@ -407,5 +543,44 @@ impl Shared {
             ));
         }
         s
+    }
+}
+
+/// 讓出一次：第一次 poll 回傳 Pending，之後 Ready（協作式的等待點）
+struct YieldOnce(bool);
+
+impl Future for YieldOnce {
+    type Output = ();
+    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+        if self.0 {
+            Poll::Ready(())
+        } else {
+            self.0 = true;
+            Poll::Pending
+        }
+    }
+}
+
+/// 什麼都不做的 waker：排程器自己輪流 poll，不需要被喚醒
+fn noop_waker() -> Waker {
+    fn clone(_: *const ()) -> RawWaker {
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    fn noop(_: *const ()) {}
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+    // SAFETY: every function of the vtable ignores the (null) data pointer
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+/// 原生：在這條執行緒上跑完一個 future（等待點直接阻塞，所以一次 poll 就結束）
+pub fn block_on<T>(fut: impl Future<Output = T>) -> T {
+    let waker = noop_waker();
+    let mut cx = Context::from_waker(&waker);
+    let mut fut = std::pin::pin!(fut);
+    loop {
+        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::yield_now();
     }
 }

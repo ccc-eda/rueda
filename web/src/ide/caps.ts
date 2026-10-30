@@ -29,10 +29,14 @@ function machine(files: CapInput['files']): Machine | null {
 
 /** a file the board's Linux runs (MicroPython, shell, C) */
 export const boardProgram = (n: string) => /\.(py|sh|c)$/.test(n);
-const hasTests = (i: CapInput) => i.mods ? i.mods.some(m => m.test) : i.files.some(f => f.name.endsWith('.veryl') && /#\[test\b/.test(f.src));
+/** a Fluxa project: .fx files and no Veryl */
+export const isFluxa = (files: CapInput['files']) => files.some(f => f.name.endsWith('.fx')) && !files.some(f => f.name.endsWith('.veryl'));
+const hasTests = (i: CapInput) => i.mods ? i.mods.some(m => m.test)
+  : i.files.some(f => (f.name.endsWith('.veryl') && /#\[test\b/.test(f.src)) || (f.name.endsWith('.fx') && /^\s*test\s+\w+/m.test(f.src)));
 const hasPcf = (i: CapInput) => i.files.some(f => f.name.endsWith('.pcf'));
 
 export function caps(i: CapInput): Record<Act, Cap> {
+  if (isFluxa(i.files)) return fluxaCaps(i);
   const m = machine(i.files);
   const tests = hasTests(i);
   const program = i.files.some(f => boardProgram(f.name)) && !!m?.files;
@@ -56,6 +60,19 @@ export function caps(i: CapInput): Record<Act, Cap> {
           : { on: true },
     emu: m ? { on: true } : { on: false, why: tr('模擬機要有 machine.json（說明機器的頂層、UART、RAM 與要載入的映像）。範例「RV64 開發板」就是一台。', 'The emulator needs a machine.json (the machine\'s top, UART, RAM and the images to load). The "RV64 board" example is one.'), fix: ['openBoardExample'] },
     synth: i.top ? { on: true } : { on: false, why: tr('沒有可合成的模組（只有 #[test] 模組）。', 'No synthesizable module (only #[test] modules).') },
+  };
+}
+
+/** a Fluxa program: its tests run (on the Fluxa simulator); synthesis to gates is not there yet */
+function fluxaCaps(i: CapInput): Record<Act, Cap> {
+  const noSynth = tr('Fluxa 目前只有行為模擬（▶ 執行它的 test）；合成到閘級、FPGA、ASIC 還沒有。', 'Fluxa has behavioral simulation only for now (▶ Run its tests); synthesis to gates, FPGA and ASIC are not there yet.');
+  const off: Cap = { on: false, why: noSynth };
+  return {
+    test: hasTests(i) ? { on: true } : { on: false, why: tr('這個 Fluxa 程式沒有 test 區塊，沒有東西可以測試。', 'This Fluxa program has no test block: nothing to test.') },
+    verify: off,
+    board: off,
+    emu: off,
+    synth: off,
   };
 }
 

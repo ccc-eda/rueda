@@ -1,5 +1,5 @@
 // Build the front-end-only web environment into dist/:
-//   wasm.js      the Rust core (veryl/wasm) as base64, so file:// works
+//   wasm.js      the Rust core (web/wasm) as base64, so file:// works
 //   examples.js  example projects (sources read from the repository)
 //   app.js       TypeScript UI bundled by esbuild into one classic script
 //   api.cjs      the same core API for the Node tests
@@ -28,8 +28,8 @@ const cargoWasm = (pkg, extra = []) => {
   console.log(`cargo build ${pkg} (wasm32-unknown-unknown) …`);
   execFileSync('cargo', ['build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', pkg, ...extra], { cwd: root, stdio: 'inherit' });
 };
-if (!process.argv.includes('--skip-wasm')) cargoWasm('rueda-veryl-wasm');
-const wasm = fs.readFileSync(path.join(wasmDir, 'rueda_veryl_wasm.wasm'));
+if (!process.argv.includes('--skip-wasm')) cargoWasm('rueda-wasm');
+const wasm = fs.readFileSync(path.join(wasmDir, 'rueda_wasm.wasm'));
 fs.writeFileSync(path.join(dist, 'wasm.js'), `var VERYL_WASM_B64 = "${wasm.toString('base64')}";\n`);
 console.log(`wasm.js      ${(wasm.length / 1e6).toFixed(1)} MB wasm`);
 
@@ -42,7 +42,7 @@ console.log(`rvemu.js     ${(rvWasm.length / 1e3).toFixed(0)} KB wasm`);
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
 // English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
-const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 'RV64 開發板': 'RV64 board', 其他: 'Other' };
+const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 'RV64 開發板': 'RV64 board', Fluxa: 'Fluxa', 其他: 'Other' };
 const EN = {
   lab_gates: { title_en: 'Breadboard lab: logic gates', note_en: 'two switches (PMOD1B, each with a pull-down) → four LEDs for AND, OR, XOR, NOT (PMOD1A, each with a series resistor); the breadboard comes wired' },
   lab_counter: { title_en: 'Lab: one press, plus one', note_en: 'each BTN1 press adds one (synchronizer + rising edge); the 8-bit count on the LED module in PMOD1A; BTN2 clears' },
@@ -186,6 +186,23 @@ const EX = [
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
   { id: 'soc', group: 'RISC-V', title: 'RISC-V SoC（FPGA）', files: ['veryl/examples/src/rv32i.veryl', 'veryl/examples/src/rv32i_rom.veryl', 'veryl/synth/examples/soc.veryl'],
     synth: 'RiscvSoc', pcf: 'veryl/synth/examples/icebreaker.pcf', note: 'Fibonacci(10) = 55 → LED；iCEBreaker 腳位（LED 在 PMOD1A）', board: { uart: false, baud: 115200, pmod1a: 'led8', pmod1b: '' } },
+  // Fluxa (fluxa/): programs of tasks and channels; ▶ runs their tests on the Fluxa simulator
+  ...[
+    ['fx_basics', 'basics.fx', '基本：位寬、定點數、位元切片、match', 'Basics: widths, fixed point, bit slices, match',
+      '寬度推導、顯式窄化（.sat / .wrap / as）、fixed<I,F> 的精確運算', 'width inference, explicit narrowing (.sat / .wrap / as), exact fixed<I,F> arithmetic'],
+    ['fx_fir', 'fir.fx', 'FIR 濾波器（16 階，係數在編譯期設計與量化）', 'FIR filter (16 taps, coefficients designed and quantized at compile time)',
+      'comptime 設計低通係數並量化為 fixed<1,15>；@reg 的延遲線；脈衝響應與直流增益兩個 test', 'comptime low-pass design quantized to fixed<1,15>; an @reg delay line; impulse response and DC gain tests'],
+    ['fx_mac', 'mac.fx', '乘加器（carry 累加器）', 'Multiply-accumulate (a carry accumulator)',
+      '累加器的位寬由 carry 宣告決定，溢位在模擬時就被抓到', 'the accumulator\'s width comes from its carry declaration; an overflow is caught in simulation'],
+    ['fx_gemm', 'gemm.fx', '脈動陣列矩陣乘法', 'Systolic-array matrix multiply',
+      'N×N 個 PE 任務用通道串成脈動陣列：阻塞式 recv 自然形成波前', 'N×N PE tasks chained by channels: blocking recv forms the wavefront by itself'],
+    ['fx_fanout', 'fanout.fx', 'broadcast 扇出', 'broadcast fan-out', '一個生產者、兩個消費者', 'one producer, two consumers'],
+    ['fx_deadlock', 'err_deadlock.fx', '死結偵測（故意失敗）', 'Deadlock detection (fails on purpose)',
+      '兩個任務互相等待：模擬器偵測到死結，列出每個任務在等什麼', 'two tasks wait for each other: the simulator detects the deadlock and lists what each task waits for'],
+  ].map(([id, f, title, title_en, note, note_en]) => ({ id, group: 'Fluxa', lang: 'fluxa', title, title_en, note, note_en, files: [`fluxa/examples/${f}`] })),
+  { id: 'fx_rv32i', group: 'Fluxa', lang: 'fluxa', title: 'RV32I 處理器（四個 task 的管線）', title_en: 'RV32I processor (a pipeline of four tasks)',
+    files: ['fluxa/rv32i/tests_basic.fx', 'fluxa/rv32i/rv32i.fx'],
+    note: 'Fetch / Decode / Execute / Mem 四個 task 用通道串成管線；tests_basic.fx 用內建組譯器寫測試程式', note_en: 'Fetch / Decode / Execute / Mem tasks chained by channels; tests_basic.fx writes its programs with the built-in assembler' },
   { id: 'alu_fail', group: '其他', title: 'Alu（含一個故意失敗的斷言）', files: ['veryl/sim/examples/alu.veryl'], synth: 'Alu',
     note: '示範斷言失敗的樣子：tb_alu 有一個 "should fail on purpose" 的斷言' },
 ].map((e) => ({ ...e, ...EN[e.id], group_en: GROUP_EN[e.group], pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined, machine: undefined,

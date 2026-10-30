@@ -1,10 +1,17 @@
-//! 樹走訪直譯器：每個 task 一個 `Interp`，各跑在自己的執行緒上。
+//! 樹走訪直譯器：每個 task 一個 `Interp`。直譯器是 async 的：通道操作是等待點，
+//! 所以同一份程式碼可以每個 task 一條執行緒（原生），也可以在單執行緒的協作式排程器上跑
+//! （WebAssembly，見 `runtime::Shared::coop`）。
 
 use crate::ast::*;
 use crate::runtime::*;
 use crate::value::*;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+
+/// a boxed future: breaks the recursion of the async interpreter (eval -> ... -> eval)
+pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// 可當作符號（而非變數）使用的裸識別字，例如 `nearest`、`hamming`
 const SYMBOLS: &[&str] = &[
@@ -166,21 +173,25 @@ impl Interp {
     }
 
     // ------------------------------------------------------------ 型別
-    fn eval_int(&mut self, e: &Expr) -> R<i128> {
-        match self.eval(e)? {
+    async fn eval_int(&mut self, e: &Expr) -> R<i128> {
+        match self.eval(e).await? {
             Value::Int(n) => Ok(n),
             other => self.err(format!("expected a compile-time integer, found {}", kind(&other))),
         }
     }
-    fn eval_usize(&mut self, e: &Expr) -> R<usize> {
-        let n = self.eval_int(e)?;
+    async fn eval_usize(&mut self, e: &Expr) -> R<usize> {
+        let n = self.eval_int(e).await?;
         if !(0..=100_000_000).contains(&n) {
             return self.err(format!("size {} out of range", n));
         }
         Ok(n as usize)
     }
 
-    pub fn eval_type(&mut self, t: &TypeExpr) -> R<RtType> {
+    pub fn eval_type<'a>(&'a mut self, t: &'a TypeExpr) -> BoxFut<'a, R<RtType>> {
+        Box::pin(self.eval_type_impl(t))
+    }
+
+    async fn eval_type_impl(&mut self, t: &TypeExpr) -> R<RtType> {
         Ok(match t {
             TypeExpr::Name(path, _) => {
                 let n = path.last().unwrap().as_str();
@@ -195,8 +206,8 @@ impl Interp {
                 }
             }
             TypeExpr::Fixed(i, f, opts) => {
-                let i = self.eval_int(i)?;
-                let f = self.eval_int(f)?;
+                let i = self.eval_int(i).await?;
+                let f = self.eval_int(f).await?;
                 if i < 0 || f < 0 || i + f > MAX_WIDTH as i128 {
                     return self.err(format!("fixed<{},{}> exceeds the supported width of {} bits", i, f, MAX_WIDTH));
                 }
@@ -212,14 +223,14 @@ impl Interp {
                 RtType::Fixed { i: i as u32, f: f as u32, round, ovf }
             }
             TypeExpr::Range(lo, hi) => {
-                let (lo, hi) = (self.eval_int(lo)?, self.eval_int(hi)?);
+                let (lo, hi) = (self.eval_int(lo).await?, self.eval_int(hi).await?);
                 if lo > hi {
                     return self.err(format!("empty range type int<{}..={}>", lo, hi));
                 }
                 RtType::Int { lo, hi }
             }
             TypeExpr::Bits(n) => {
-                let n = self.eval_int(n)?;
+                let n = self.eval_int(n).await?;
                 if n < 1 || n > MAX_WIDTH as i128 {
                     return self.err(format!("bits<{}> out of range", n));
                 }
@@ -228,46 +239,50 @@ impl Interp {
             TypeExpr::Tuple(ts) => {
                 let mut v = Vec::new();
                 for t in ts {
-                    v.push(self.eval_type(t)?);
+                    v.push(self.eval_type(t).await?);
                 }
                 RtType::Tuple(v)
             }
             TypeExpr::Array(t, n) => {
-                let t = self.eval_type(t)?;
-                RtType::Array(Box::new(t), self.eval_usize(n)?)
+                let t = self.eval_type(t).await?;
+                RtType::Array(Box::new(t), self.eval_usize(n).await?)
             }
             TypeExpr::Chan(t, d) => {
-                let t = self.eval_type(t)?;
+                let t = self.eval_type(t).await?;
                 let d = match d {
-                    Some(d) => self.eval_usize(d)?,
+                    Some(d) => self.eval_usize(d).await?,
                     None => 2,
                 };
                 RtType::Chan(Box::new(t), d)
             }
             TypeExpr::Mem(t, n) => {
-                let t = self.eval_type(t)?;
-                RtType::Mem(Box::new(t), self.eval_usize(n)?)
+                let t = self.eval_type(t).await?;
+                RtType::Mem(Box::new(t), self.eval_usize(n).await?)
             }
         })
     }
 
     // ------------------------------------------------------------ 區塊與陳述式
-    pub fn exec_block(&mut self, b: &Block) -> R<Value> {
+    pub async fn exec_block(&mut self, b: &Block) -> R<Value> {
         self.push_scope();
-        let r = self.exec_body(b);
+        let r = self.exec_body(b).await;
         self.pop_scope();
         r
     }
 
-    fn exec_body(&mut self, b: &Block) -> R<Value> {
+    fn exec_body<'a>(&'a mut self, b: &'a Block) -> BoxFut<'a, R<Value>> {
+        Box::pin(self.exec_body_impl(b))
+    }
+
+    async fn exec_body_impl(&mut self, b: &Block) -> R<Value> {
         for s in &b.stmts {
-            self.exec_stmt(s)?;
+            self.exec_stmt(s).await?;
             if self.loop_depth == 0 {
                 self.commit_regs();
             }
         }
         match &b.tail {
-            Some(e) => self.eval(e),
+            Some(e) => self.eval(e).await,
             None => Ok(Value::Unit),
         }
     }
@@ -291,7 +306,7 @@ impl Interp {
         }
     }
 
-    fn exec_stmt(&mut self, s: &Stmt) -> R<()> {
+    async fn exec_stmt(&mut self, s: &Stmt) -> R<()> {
         self.line = s.line;
         if self.sh.stopped() {
             return Err(RtErr::Shutdown);
@@ -299,11 +314,11 @@ impl Interp {
         match &s.kind {
             StmtKind::Let { pat, ty, placement, init } => {
                 let rt = match ty {
-                    Some(t) => Some(self.eval_type(t)?),
+                    Some(t) => Some(self.eval_type(t).await?),
                     None => None,
                 };
                 let mut val = match init {
-                    Some(e) => self.eval(e)?,
+                    Some(e) => self.eval(e).await?,
                     None => match &rt {
                         Some(t) => zero_value(t),
                         None => return self.err("`let` needs an initializer or a type"),
@@ -339,46 +354,46 @@ impl Interp {
                 Ok(())
             }
             StmtKind::Carry { name, ty, init } => {
-                let t = self.eval_type(ty)?;
-                let v = self.eval(init)?;
+                let t = self.eval_type(ty).await?;
+                let v = self.eval(init).await?;
                 self.line = s.line;
                 let v = coerce(v, &t).map_err(|m| self.me(format!("`carry {}` initializer: {}", name, m)))?;
                 self.declare(name, Var { val: v, ty: Some(t), reg: false, pending: None });
                 Ok(())
             }
             StmtKind::Assign { target, op, value } => {
-                let rhs = self.eval(value)?;
+                let rhs = self.eval(value).await?;
                 self.line = s.line;
                 let nv = match op {
                     None => rhs,
                     Some(op) => {
-                        let cur = self.eval(target)?;
+                        let cur = self.eval(target).await?;
                         self.line = s.line;
                         binop(*op, &cur, &rhs).map_err(|m| self.me(m))?
                     }
                 };
-                self.store(target, nv)
+                self.store(target, nv).await
             }
             StmtKind::For { attr, pat, iter, body } => {
                 let is_unroll = matches!(attr, LoopAttr::Unroll(_));
-                let itv = self.eval(iter)?;
+                let itv = self.eval(iter).await?;
                 self.line = s.line;
                 match itv {
                     Value::Range(lo, hi) => {
                         let mut i = lo;
                         while i < hi {
-                            self.iter_body(pat, Value::Int(i), body, is_unroll)?;
+                            self.iter_body(pat, Value::Int(i), body, is_unroll).await?;
                             i += 1;
                         }
                     }
                     Value::Array(xs) => {
                         for x in xs {
-                            self.iter_body(pat, x, body, is_unroll)?;
+                            self.iter_body(pat, x, body, is_unroll).await?;
                         }
                     }
                     Value::Rx(ch) => {
-                        while let Some(v) = self.sh.recv(self.task, ch, s.line)? {
-                            self.iter_body(pat, v, body, is_unroll)?;
+                        while let Some(v) = self.sh.recv(self.task, ch, s.line).await? {
+                            self.iter_body(pat, v, body, is_unroll).await?;
                         }
                     }
                     other => return self.err(format!("cannot iterate over {}", kind(&other))),
@@ -386,7 +401,7 @@ impl Interp {
                 Ok(())
             }
             StmtKind::Spawn(e) => {
-                self.do_spawn(e)?;
+                self.do_spawn(e).await?;
                 Ok(())
             }
             StmtKind::Parallel(stmts) => {
@@ -395,33 +410,33 @@ impl Interp {
                     match &st.kind {
                         StmtKind::Expr(e) | StmtKind::Spawn(e) => {
                             self.line = st.line;
-                            ids.push(self.do_spawn(e)?)
+                            ids.push(self.do_spawn(e).await?)
                         }
                         _ => return self.err("`parallel` blocks may only contain task calls"),
                     }
                 }
                 self.line = s.line;
-                self.sh.join_children(self.task, ids)
+                self.sh.join_children(self.task, ids).await
             }
             StmtKind::Assert { cond, text, msg } => {
                 let (ok, detail) = match &cond.kind {
                     ExprKind::Binary(op @ (BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge), l, r) => {
-                        let lv = self.eval(l)?;
-                        let rv = self.eval(r)?;
+                        let lv = self.eval(l).await?;
+                        let rv = self.eval(r).await?;
                         self.line = s.line;
                         let res = binop(*op, &lv, &rv).map_err(|m| self.me(m))?;
                         let ok = truthy(&res).map_err(|m| self.me(m))?;
                         (ok, format!("\n      left:  {}\n      right: {}", lv, rv))
                     }
                     _ => {
-                        let v = self.eval(cond)?;
+                        let v = self.eval(cond).await?;
                         self.line = s.line;
                         (truthy(&v).map_err(|m| self.me(m))?, String::new())
                     }
                 };
                 if !ok {
                     let extra = match msg {
-                        Some(m) => format!(": {}", self.eval(m)?),
+                        Some(m) => format!(": {}", self.eval(m).await?),
                         None => String::new(),
                     };
                     self.line = s.line;
@@ -431,50 +446,52 @@ impl Interp {
             }
             StmtKind::Return(e) => {
                 let v = match e {
-                    Some(e) => self.eval(e)?,
+                    Some(e) => self.eval(e).await?,
                     None => Value::Unit,
                 };
                 Err(RtErr::Ret(v))
             }
             StmtKind::Expr(e) => {
-                self.eval(e)?;
+                self.eval(e).await?;
                 Ok(())
             }
         }
     }
 
-    fn iter_body(&mut self, pat: &Pattern, v: Value, body: &Block, is_unroll: bool) -> R<()> {
+    async fn iter_body(&mut self, pat: &Pattern, v: Value, body: &Block, is_unroll: bool) -> R<()> {
         if self.sh.stopped() {
             return Err(RtErr::Shutdown);
         }
         self.push_scope();
-        let r = (|| {
-            self.bind_pattern(pat, v)?;
-            if !is_unroll {
-                self.loop_depth += 1;
-            }
-            let r = self.exec_body(body);
-            if !is_unroll {
-                self.loop_depth -= 1;
-                if r.is_ok() {
-                    self.commit_regs();
+        let r = match self.bind_pattern(pat, v) {
+            Err(e) => Err(e),
+            Ok(()) => {
+                if !is_unroll {
+                    self.loop_depth += 1;
                 }
+                let r = self.exec_body(body).await;
+                if !is_unroll {
+                    self.loop_depth -= 1;
+                    if r.is_ok() {
+                        self.commit_regs();
+                    }
+                }
+                r.map(|_| ())
             }
-            r.map(|_| ())
-        })();
+        };
         self.pop_scope();
         r
     }
 
     /// 賦值：展開成「根變數 + 路徑」，先對子型別做範圍檢查，再寫入
-    fn store(&mut self, target: &Expr, v: Value) -> R<()> {
+    async fn store(&mut self, target: &Expr, v: Value) -> R<()> {
         let line = self.line;
         let mut steps_rev: Vec<Step> = Vec::new();
         let mut cur = target;
         let name = loop {
             match &cur.kind {
                 ExprKind::Index(b, i) => {
-                    let iv = self.eval(i)?;
+                    let iv = self.eval(i).await?;
                     match iv {
                         Value::Int(n) if n >= 0 => steps_rev.push(Step::Idx(n as usize)),
                         other => return self.err(format!("invalid index {} in assignment", other)),
@@ -522,7 +539,11 @@ impl Interp {
     }
 
     // ------------------------------------------------------------ 運算式
-    pub fn eval(&mut self, e: &Expr) -> R<Value> {
+    pub fn eval<'a>(&'a mut self, e: &'a Expr) -> BoxFut<'a, R<Value>> {
+        Box::pin(self.eval_impl(e))
+    }
+
+    async fn eval_impl(&mut self, e: &Expr) -> R<Value> {
         self.line = e.line;
         match &e.kind {
             ExprKind::Int(n) => Ok(Value::Int(*n)),
@@ -546,7 +567,7 @@ impl Interp {
             }
             ExprKind::PathT(..) => self.err("a generic path can only be called"),
             ExprKind::Unary(c, x) => {
-                let v = self.eval(x)?;
+                let v = self.eval(x).await?;
                 self.line = e.line;
                 match (c, v) {
                     ('-', Value::Int(n)) => Ok(Value::Int(-n)),
@@ -560,17 +581,17 @@ impl Interp {
             }
             ExprKind::Binary(op, l, r) => {
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let lv = self.eval(l)?;
+                    let lv = self.eval(l).await?;
                     let lb = truthy(&lv).map_err(|m| self.me(m))?;
                     if (*op == BinOp::And && !lb) || (*op == BinOp::Or && lb) {
                         return Ok(Value::Bool(lb));
                     }
-                    let rv = self.eval(r)?;
+                    let rv = self.eval(r).await?;
                     self.line = e.line;
                     return Ok(Value::Bool(truthy(&rv).map_err(|m| self.me(m))?));
                 }
-                let lv = self.eval(l)?;
-                let rv = self.eval(r)?;
+                let lv = self.eval(l).await?;
+                let rv = self.eval(r).await?;
                 self.line = e.line;
                 let mut out = binop(*op, &lv, &rv).map_err(|m| self.me(m))?;
                 if matches!(op, BinOp::AddW | BinOp::SubW | BinOp::MulW) {
@@ -592,15 +613,15 @@ impl Interp {
                 Ok(out)
             }
             ExprKind::Cast(x, t) => {
-                let v = self.eval(x)?;
-                let t = self.eval_type(t)?;
+                let v = self.eval(x).await?;
+                let t = self.eval_type(t).await?;
                 self.line = e.line;
                 convert(&v, &t, Round::Trunc, Ovf::Check).map_err(|m| self.me(format!("cast: {}", m)))
             }
-            ExprKind::Call(callee, args) => self.eval_call(callee, args, e.line),
-            ExprKind::Method(recv, name, targs, args) => self.eval_method(recv, name, targs, args, e.line),
+            ExprKind::Call(callee, args) => self.eval_call(callee, args, e.line).await,
+            ExprKind::Method(recv, name, targs, args) => self.eval_method(recv, name, targs, args, e.line).await,
             ExprKind::Field(b, n) => {
-                let bv = self.eval(b)?;
+                let bv = self.eval(b).await?;
                 self.line = e.line;
                 match (&bv, n.parse::<usize>()) {
                     (Value::Tuple(xs), Ok(i)) if i < xs.len() => Ok(xs[i].clone()),
@@ -608,7 +629,7 @@ impl Interp {
                 }
             }
             ExprKind::Index(b, i) => {
-                let iv = self.eval(i)?;
+                let iv = self.eval(i).await?;
                 if let ExprKind::Path(s) = &b.kind {
                     if s.len() == 1 {
                         // 快速路徑：直接在變數／常數上索引，不複製整個陣列
@@ -620,13 +641,13 @@ impl Interp {
                         }
                     }
                 }
-                let bv = self.eval(b)?;
+                let bv = self.eval(b).await?;
                 index_value(&bv, &iv, e.line)
             }
             ExprKind::Slice(b, hi, lo) => {
-                let bv = self.eval(b)?;
-                let h = self.eval_int(hi)?;
-                let l = self.eval_int(lo)?;
+                let bv = self.eval(b).await?;
+                let h = self.eval_int(hi).await?;
+                let l = self.eval_int(lo).await?;
                 self.line = e.line;
                 match bv {
                     Value::Int(x) if l >= 0 && h >= l && h < 120 => {
@@ -637,47 +658,47 @@ impl Interp {
                 }
             }
             ExprKind::Range(lo, hi, incl) => {
-                let l = self.eval_int(lo)?;
-                let h = self.eval_int(hi)?;
+                let l = self.eval_int(lo).await?;
+                let h = self.eval_int(hi).await?;
                 Ok(Value::Range(l, if *incl { h + 1 } else { h }))
             }
             ExprKind::Array(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for it in items {
-                    out.push(self.eval(it)?);
+                    out.push(self.eval(it).await?);
                 }
                 Ok(Value::Array(out))
             }
             ExprKind::Repeat(x, n) => {
-                let v = self.eval(x)?;
-                let n = self.eval_usize(n)?;
+                let v = self.eval(x).await?;
+                let n = self.eval_usize(n).await?;
                 Ok(Value::Array(vec![v; n]))
             }
             ExprKind::Tuple(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for it in items {
-                    out.push(self.eval(it)?);
+                    out.push(self.eval(it).await?);
                 }
                 Ok(Value::Tuple(out))
             }
             ExprKind::Lambda(..) => self.err("a lambda can only be passed directly to `.map(..)` or `array(..)`"),
-            ExprKind::Block(b) | ExprKind::Comptime(b) => self.exec_block(b),
+            ExprKind::Block(b) | ExprKind::Comptime(b) => self.exec_block(b).await,
             ExprKind::If(c, then, els) => {
-                let cv = self.eval(c)?;
+                let cv = self.eval(c).await?;
                 self.line = e.line;
                 if truthy(&cv).map_err(|m| self.me(m))? {
-                    self.exec_block(then)
+                    self.exec_block(then).await
                 } else if let Some(el) = els {
-                    self.eval(el)
+                    self.eval(el).await
                 } else {
                     Ok(Value::Unit)
                 }
             }
             ExprKind::Match(s, arms) => {
-                let v = self.eval(s)?;
+                let v = self.eval(s).await?;
                 for arm in arms {
                     self.push_scope();
-                    let matched = self.match_pat(&arm.pat, &v);
+                    let matched = self.match_pat(&arm.pat, &v).await;
                     let matched = match matched {
                         Ok(m) => m,
                         Err(e) => {
@@ -687,7 +708,7 @@ impl Interp {
                     };
                     if matched {
                         let ok = match &arm.guard {
-                            Some(g) => match self.eval(g).and_then(|x| truthy(&x).map_err(|m| self.me(m))) {
+                            Some(g) => match self.eval(g).await.and_then(|x| truthy(&x).map_err(|m| self.me(m))) {
                                 Ok(b) => b,
                                 Err(e) => {
                                     self.pop_scope();
@@ -697,7 +718,7 @@ impl Interp {
                             None => true,
                         };
                         if ok {
-                            let r = self.eval(&arm.body);
+                            let r = self.eval(&arm.body).await;
                             self.pop_scope();
                             return r;
                         }
@@ -710,7 +731,11 @@ impl Interp {
         }
     }
 
-    fn match_pat(&mut self, p: &MatchPat, v: &Value) -> R<bool> {
+    fn match_pat<'a>(&'a mut self, p: &'a MatchPat, v: &'a Value) -> BoxFut<'a, R<bool>> {
+        Box::pin(self.match_pat_impl(p, v))
+    }
+
+    async fn match_pat_impl(&mut self, p: &MatchPat, v: &Value) -> R<bool> {
         match p {
             MatchPat::Wild => Ok(true),
             MatchPat::Bind(n) => {
@@ -721,11 +746,11 @@ impl Interp {
                 Ok(true)
             }
             MatchPat::Lit(e) => {
-                let x = self.eval(e)?;
+                let x = self.eval(e).await?;
                 Ok(values_equal(&x, v))
             }
             MatchPat::Range(lo, hi, incl) => {
-                let (l, h) = (self.eval_int(lo)?, self.eval_int(hi)?);
+                let (l, h) = (self.eval_int(lo).await?, self.eval_int(hi).await?);
                 match v {
                     Value::Int(n) => Ok(*n >= l && if *incl { *n <= h } else { *n < h }),
                     _ => Ok(false),
@@ -734,7 +759,7 @@ impl Interp {
             MatchPat::Tuple(ps) => match v {
                 Value::Tuple(xs) if xs.len() == ps.len() => {
                     for (p, x) in ps.iter().zip(xs) {
-                        if !self.match_pat(p, x)? {
+                        if !self.match_pat(p, x).await? {
                             return Ok(false);
                         }
                     }
@@ -746,19 +771,19 @@ impl Interp {
     }
 
     // ------------------------------------------------------------ 呼叫
-    fn eval_args(&mut self, args: &[Arg]) -> R<Vec<(Option<String>, Value)>> {
+    async fn eval_args(&mut self, args: &[Arg]) -> R<Vec<(Option<String>, Value)>> {
         let mut out = Vec::with_capacity(args.len());
         for a in args {
-            out.push((a.name.clone(), self.eval(&a.value)?));
+            out.push((a.name.clone(), self.eval(&a.value).await?));
         }
         Ok(out)
     }
 
-    fn eval_generics(&mut self, decl: &FnDecl, targs: &[TArg]) -> R<Vec<Value>> {
+    async fn eval_generics(&mut self, decl: &FnDecl, targs: &[TArg]) -> R<Vec<Value>> {
         let mut out = Vec::new();
         for (k, g) in decl.generics.iter().enumerate() {
             match targs.get(k) {
-                Some(TArg::Ex(e)) if g.is_const => out.push(self.eval(e)?),
+                Some(TArg::Ex(e)) if g.is_const => out.push(self.eval(e).await?),
                 Some(_) => out.push(Value::Unit),
                 None if g.is_const => {
                     return self.err(format!("missing const generic argument `{}` for `{}`", g.name, decl.name))
@@ -777,22 +802,22 @@ impl Interp {
         }
     }
 
-    fn eval_call(&mut self, callee: &Expr, args: &[Arg], line: u32) -> R<Value> {
+    async fn eval_call(&mut self, callee: &Expr, args: &[Arg], line: u32) -> R<Value> {
         let (name, targs) = self.callee_name(callee)?;
         if let Some(decl) = self.sh.program.fns.get(&name).cloned() {
-            let gvals = self.eval_generics(&decl, targs)?;
-            let argv = self.eval_args(args)?;
+            let gvals = self.eval_generics(&decl, targs).await?;
+            let argv = self.eval_args(args).await?;
             self.line = line;
-            return self.run_decl(&decl, gvals, argv);
+            return self.run_decl(&decl, gvals, argv).await;
         }
-        self.eval_builtin(&name, targs, args, line)
+        self.eval_builtin(&name, targs, args, line).await
     }
 
-    pub fn run_decl(&mut self, decl: &Arc<FnDecl>, gvals: Vec<Value>, args: Vec<(Option<String>, Value)>) -> R<Value> {
+    pub async fn run_decl(&mut self, decl: &Arc<FnDecl>, gvals: Vec<Value>, args: Vec<(Option<String>, Value)>) -> R<Value> {
         let line = self.line;
         let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
         let saved_depth = std::mem::replace(&mut self.loop_depth, 0);
-        let r = self.run_decl_inner(decl, gvals, &args);
+        let r = self.run_decl_inner(decl, gvals, &args).await;
         self.scopes = saved_scopes;
         self.loop_depth = saved_depth;
         self.line = line;
@@ -804,7 +829,7 @@ impl Interp {
         r
     }
 
-    fn run_decl_inner(&mut self, decl: &Arc<FnDecl>, gvals: Vec<Value>, args: &[(Option<String>, Value)]) -> R<Value> {
+    async fn run_decl_inner(&mut self, decl: &Arc<FnDecl>, gvals: Vec<Value>, args: &[(Option<String>, Value)]) -> R<Value> {
         for (g, v) in decl.generics.iter().zip(gvals) {
             if g.is_const {
                 self.plain(&g.name, v);
@@ -820,7 +845,7 @@ impl Interp {
                     None => return self.err(format!("missing argument `{}` in call to `{}`", p.name, decl.name)),
                 },
             };
-            let t = self.eval_type(&p.ty)?;
+            let t = self.eval_type(&p.ty).await?;
             let v = coerce(v, &t)
                 .map_err(|m| self.me(format!("argument `{}` of `{}`: {}", p.name, decl.name, m)))?;
             self.declare(&p.name, Var { val: v, ty: Some(t), reg: false, pending: None });
@@ -828,21 +853,21 @@ impl Interp {
         if positional.next().is_some() {
             return self.err(format!("too many arguments in call to `{}`", decl.name));
         }
-        let val = match self.exec_block(&decl.body) {
+        let val = match self.exec_block(&decl.body).await {
             Ok(v) => v,
             Err(RtErr::Ret(v)) => v,
             Err(e) => return Err(e),
         };
         match &decl.ret {
             Some(rt) => {
-                let t = self.eval_type(rt)?;
+                let t = self.eval_type(rt).await?;
                 coerce(val, &t).map_err(|m| self.me(format!("return value of `{}`: {}", decl.name, m)))
             }
             None => Ok(val),
         }
     }
 
-    fn do_spawn(&mut self, call: &Expr) -> R<usize> {
+    async fn do_spawn(&mut self, call: &Expr) -> R<usize> {
         let line = call.line;
         let (callee, args) = match &call.kind {
             ExprKind::Call(c, a) => (c, a),
@@ -853,8 +878,8 @@ impl Interp {
             Some(d) => d,
             None => return self.err(format!("`{}` is not a task defined in this program", name)),
         };
-        let gvals = self.eval_generics(&decl, targs)?;
-        let argv = self.eval_args(args)?;
+        let gvals = self.eval_generics(&decl, targs).await?;
+        let argv = self.eval_args(args).await?;
         self.line = line;
         let id = self.sh.alloc_task(&decl.name);
         for (_, v) in &argv {
@@ -865,16 +890,16 @@ impl Interp {
         }
         let sh2 = self.sh.clone();
         let tname = decl.name.clone();
-        self.sh.launch(id, move |id| {
+        self.sh.launch(id, async move {
             let mut it = Interp::new(sh2, id, tname);
             it.line = line;
-            it.run_decl(&decl, gvals, argv).map(|_| ())
+            it.run_decl(&decl, gvals, argv).await.map(|_| ())
         });
         Ok(id)
     }
 
     // ------------------------------------------------------------ 內建函式
-    fn apply_lambda(&mut self, lam: &Expr, items: Vec<Value>) -> R<Vec<Value>> {
+    async fn apply_lambda(&mut self, lam: &Expr, items: Vec<Value>) -> R<Vec<Value>> {
         let (params, body) = match &lam.kind {
             ExprKind::Lambda(p, b) => (p, b),
             _ => return self.err("expected a lambda such as `|x| x * 2`"),
@@ -898,21 +923,21 @@ impl Interp {
                 self.pop_scope();
                 return self.err("lambda parameter count does not match its argument");
             }
-            let r = self.eval(body);
+            let r = self.eval(body).await;
             self.pop_scope();
             out.push(r?);
         }
         Ok(out)
     }
 
-    fn eval_builtin(&mut self, name: &str, targs: &[TArg], args: &[Arg], line: u32) -> R<Value> {
+    async fn eval_builtin(&mut self, name: &str, targs: &[TArg], args: &[Arg], line: u32) -> R<Value> {
         match name {
             "chan" => {
                 let elem = match targs.first() {
-                    Some(TArg::Ty(t)) => self.eval_type(t)?,
+                    Some(TArg::Ty(t)) => self.eval_type(t).await?,
                     _ => RtType::Any,
                 };
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 let mut depth = 2usize;
                 for (n, v) in &vals {
                     if n.as_deref().is_none_or(|n| n == "depth") {
@@ -928,13 +953,13 @@ impl Interp {
                 Ok(Value::Tuple(vec![Value::Tx(id), Value::Rx(id)]))
             }
             "print" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 let s: Vec<String> = vals.iter().map(|(_, v)| v.to_string()).collect();
-                println!("{}", s.join(" "));
+                self.sh.print(&s.join(" "));
                 Ok(Value::Unit)
             }
             "concat" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 let mut out = Vec::new();
                 for (_, v) in vals {
                     match v {
@@ -945,7 +970,7 @@ impl Interp {
                 Ok(Value::Array(out))
             }
             "len" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 match vals.first().map(|(_, v)| v) {
                     Some(Value::Array(xs)) => Ok(Value::Int(xs.len() as i128)),
                     Some(Value::Range(a, b)) => Ok(Value::Int((b - a).max(0))),
@@ -953,7 +978,7 @@ impl Interp {
                 }
             }
             "abs" | "min" | "max" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 let vs: Vec<Value> = vals.into_iter().map(|(_, v)| v).collect();
                 match (name, vs.as_slice()) {
                     ("abs", [Value::Int(n)]) => Ok(Value::Int(n.abs())),
@@ -967,7 +992,7 @@ impl Interp {
                 }
             }
             "zip" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 match vals.as_slice() {
                     [(_, Value::Array(a)), (_, Value::Array(b))] => Ok(Value::Array(
                         a.iter().zip(b).map(|(x, y)| Value::Tuple(vec![x.clone(), y.clone()])).collect(),
@@ -979,12 +1004,12 @@ impl Interp {
                 if args.len() != 2 {
                     return self.err("array(n, |i| ..) expects two arguments");
                 }
-                let n = self.eval_usize(&args[0].value)?;
+                let n = self.eval_usize(&args[0].value).await?;
                 let items: Vec<Value> = (0..n as i128).map(Value::Int).collect();
-                Ok(Value::Array(self.apply_lambda(&args[1].value, items)?))
+                Ok(Value::Array(self.apply_lambda(&args[1].value, items).await?))
             }
             "design_lowpass" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 let mut taps = 0i128;
                 let mut cutoff = 0.25f64;
                 let mut window = "hamming".to_string();
@@ -1023,7 +1048,7 @@ impl Interp {
                 Ok(Value::Array(h.into_iter().map(Value::Float).collect()))
             }
             "broadcast" => {
-                let vals = self.eval_args(args)?;
+                let vals = self.eval_args(args).await?;
                 let (src, n) = match vals.as_slice() {
                     [(_, Value::Rx(c)), (_, Value::Int(n))] if *n >= 1 && *n <= 4096 => (*c, *n as usize),
                     _ => return self.err("broadcast(rx, n) expects an rx endpoint and a count"),
@@ -1041,10 +1066,10 @@ impl Interp {
                 }
                 let sh2 = self.sh.clone();
                 let outs2 = outs.clone();
-                self.sh.launch(id, move |id| {
-                    while let Some(v) = sh2.recv(id, src, 0)? {
+                self.sh.launch(id, async move {
+                    while let Some(v) = sh2.recv(id, src, 0).await? {
                         for &o in &outs2 {
-                            sh2.send(id, o, v.clone(), 0)?;
+                            sh2.send(id, o, v.clone(), 0).await?;
                         }
                     }
                     for &o in &outs2 {
@@ -1059,14 +1084,14 @@ impl Interp {
     }
 
     // ------------------------------------------------------------ 方法
-    fn targ_type(&mut self, targs: &[TArg]) -> R<RtType> {
+    async fn targ_type(&mut self, targs: &[TArg]) -> R<RtType> {
         match targs.first() {
-            Some(TArg::Ty(t)) => self.eval_type(t),
+            Some(TArg::Ty(t)) => self.eval_type(t).await,
             _ => self.err("expected a type argument, e.g. `.to::<i16>(..)`"),
         }
     }
 
-    fn conv_opts(&mut self, t: &RtType, args: &[Arg], ovf_default: Option<Ovf>) -> R<(Round, Ovf)> {
+    async fn conv_opts(&mut self, t: &RtType, args: &[Arg], ovf_default: Option<Ovf>) -> R<(Round, Ovf)> {
         let (mut round, mut ovf) = match t {
             RtType::Fixed { round, ovf, .. } => (*round, *ovf),
             _ => (Round::Trunc, Ovf::Check),
@@ -1075,7 +1100,7 @@ impl Interp {
             ovf = o;
         }
         for a in args {
-            let v = self.eval(&a.value)?;
+            let v = self.eval(&a.value).await?;
             let s = match &v {
                 Value::Str(s) => s.clone(),
                 other => return self.err(format!("expected a mode name, found {}", kind(other))),
@@ -1089,16 +1114,16 @@ impl Interp {
         Ok((round, ovf))
     }
 
-    fn eval_method(&mut self, recv: &Expr, name: &str, targs: &[TArg], args: &[Arg], line: u32) -> R<Value> {
-        let rv = self.eval(recv)?;
+    async fn eval_method(&mut self, recv: &Expr, name: &str, targs: &[TArg], args: &[Arg], line: u32) -> R<Value> {
+        let rv = self.eval(recv).await?;
         self.line = line;
         match (&rv, name) {
             (Value::Tx(ch), "send") => {
                 if args.len() != 1 {
                     return self.err("send() takes exactly one argument");
                 }
-                let v = self.eval(&args[0].value)?;
-                self.sh.send(self.task, *ch, v, line)?;
+                let v = self.eval(&args[0].value).await?;
+                self.sh.send(self.task, *ch, v, line).await?;
                 return Ok(Value::Unit);
             }
             (Value::Tx(ch), "close") => {
@@ -1106,7 +1131,7 @@ impl Interp {
                 return Ok(Value::Unit);
             }
             (Value::Rx(ch), "recv") => {
-                return match self.sh.recv(self.task, *ch, line)? {
+                return match self.sh.recv(self.task, *ch, line).await? {
                     Some(v) => Ok(v),
                     None => self.err("recv() on a closed, empty channel"),
                 };
@@ -1139,7 +1164,7 @@ impl Interp {
                 if args.len() != 1 {
                     return self.err("map() takes one lambda");
                 }
-                Ok(Value::Array(self.apply_lambda(&args[0].value, xs)?))
+                Ok(Value::Array(self.apply_lambda(&args[0].value, xs).await?))
             }
             (Value::Array(xs), "tree_sum") => tree_sum(xs).map_err(|m| self.me(m)),
             (Value::Array(xs), "sum") => {
@@ -1154,29 +1179,29 @@ impl Interp {
                 Ok(acc)
             }
             (v @ Value::Array(_), "quantize") => {
-                let t = self.targ_type(targs)?;
-                let (r, o) = self.conv_opts(&t, args, None)?;
+                let t = self.targ_type(targs).await?;
+                let (r, o) = self.conv_opts(&t, args, None).await?;
                 let et = RtType::Array(Box::new(t), match &v { Value::Array(x) => x.len(), _ => 0 });
                 convert(&v, &et, r, o).map_err(|m| self.me(format!("quantize: {}", m)))
             }
             (v @ (Value::Int(_) | Value::Fixed(..) | Value::Float(_) | Value::Bool(_)), "to") => {
-                let t = self.targ_type(targs)?;
-                let (r, o) = self.conv_opts(&t, args, None)?;
+                let t = self.targ_type(targs).await?;
+                let (r, o) = self.conv_opts(&t, args, None).await?;
                 convert(&v, &t, r, o).map_err(|m| self.me(format!("to(): {}", m)))
             }
             (v @ (Value::Int(_) | Value::Fixed(..) | Value::Float(_)), "quantize") => {
-                let t = self.targ_type(targs)?;
-                let (r, o) = self.conv_opts(&t, args, None)?;
+                let t = self.targ_type(targs).await?;
+                let (r, o) = self.conv_opts(&t, args, None).await?;
                 convert(&v, &t, r, o).map_err(|m| self.me(format!("quantize: {}", m)))
             }
             (v @ (Value::Int(_) | Value::Fixed(..)), "sat") => {
-                let t = self.targ_type(targs)?;
-                let (r, o) = self.conv_opts(&t, args, Some(Ovf::Sat))?;
+                let t = self.targ_type(targs).await?;
+                let (r, o) = self.conv_opts(&t, args, Some(Ovf::Sat)).await?;
                 convert(&v, &t, r, o).map_err(|m| self.me(format!("sat(): {}", m)))
             }
             (v @ (Value::Int(_) | Value::Fixed(..)), "wrap") => {
-                let t = self.targ_type(targs)?;
-                let (r, o) = self.conv_opts(&t, args, Some(Ovf::Wrap))?;
+                let t = self.targ_type(targs).await?;
+                let (r, o) = self.conv_opts(&t, args, Some(Ovf::Wrap)).await?;
                 convert(&v, &t, r, o).map_err(|m| self.me(format!("wrap(): {}", m)))
             }
             (Value::Int(n), "abs") => Ok(Value::Int(n.abs())),

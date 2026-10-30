@@ -726,6 +726,21 @@ fn synth(v: &Value) -> R<Value> {
     }))
 }
 
+/// `fluxa_run`: run a Fluxa program's tests (all, or `tests`); `stats` adds the channel statistics,
+/// `trace` every send / recv (in `output`)
+fn fluxa_run(v: &Value) -> R<Value> {
+    let prog = fluxa::load_many(&files(v)?)?;
+    let only: Option<Vec<&str>> = v.get("tests").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect());
+    let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+    let opts = fluxa::Options { trace: flag("trace"), stats: flag("stats"), coop: true };
+    let mut results = vec![];
+    for t in prog.tests.iter().filter(|t| only.as_ref().is_none_or(|o| o.contains(&t.name.as_str()))) {
+        let r = fluxa::run_test(&prog, t, &opts);
+        results.push(json!({ "name": r.name, "passed": r.passed, "message": r.message, "output": r.output, "stats": r.stats }));
+    }
+    Ok(json!({ "ok": true, "results": results }))
+}
+
 fn files(v: &Value) -> R<Vec<(String, String)>> {
     let a = v.get("files").and_then(|f| f.as_array()).ok_or("missing files")?;
     a.iter().map(|f| {
@@ -794,6 +809,13 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "board_run" => board_run(v),
         "board_reset" => board_reset(),
         "board_periph" => board_periph(v),
+        // Fluxa: the tests of a program (files merged, like `reda sim a.fx b.fx`), run on the
+        // cooperative scheduler (no threads in WebAssembly)
+        "fluxa_list" => {
+            let prog = fluxa::load_many(&files(v)?)?;
+            Ok(json!({ "ok": true, "tests": prog.tests.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), "fns": prog.fns.len() }))
+        }
+        "fluxa_run" => fluxa_run(v),
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),
         c => Err(format!("unknown command '{}'", c)),
     }

@@ -13,14 +13,16 @@ pub mod value;
 
 use ast::{Program, TestDecl};
 use interp::Interp;
-use runtime::{RtErr, Shared};
+use runtime::{block_on, RtErr, Shared};
 use std::sync::Arc;
-use std::time::Instant;
 use value::coerce;
 
 pub struct Options {
     pub trace: bool,
     pub stats: bool,
+    /// 協作式排程：所有任務在同一條執行緒上輪流執行，`print` / `--trace` 的輸出收進
+    /// `TestResult::output`（WebAssembly 一律如此，因為沒有執行緒）
+    pub coop: bool,
 }
 
 pub struct TestResult {
@@ -29,6 +31,8 @@ pub struct TestResult {
     pub message: String,
     pub secs: f64,
     pub stats: String,
+    /// 協作式排程時 `print` / `--trace` 的輸出（原生排程直接印出，這裡是空的）
+    pub output: String,
 }
 
 /// 解析單一檔案並求值編譯期常數
@@ -49,17 +53,17 @@ pub fn load_many(files: &[(String, String)]) -> Result<Arc<Program>, String> {
         }
     }
     let prog = Arc::new(prog.ok_or_else(|| "no input files".to_string())?);
-    let sh = Shared::new(prog.clone(), false);
+    let sh = Shared::new(prog.clone(), false, false);
     let mut it = Interp::new(sh, 0, "const".to_string());
     for c in &prog.consts_decl {
         let fail = |line: u32, m: String| format!("{}: in const `{}`: {}", prog.loc(line), c.name, m);
         it.line = c.line;
-        let mut v = it.eval(&c.value).map_err(|e| match e {
+        let mut v = block_on(it.eval(&c.value)).map_err(|e| match e {
             RtErr::Msg(l, m) => fail(l, m),
             other => fail(c.line, format!("{:?}", other)),
         })?;
         if let Some(t) = &c.ty {
-            let rt = it.eval_type(t).map_err(|e| match e {
+            let rt = block_on(it.eval_type(t)).map_err(|e| match e {
                 RtErr::Msg(l, m) => fail(l, m),
                 other => fail(c.line, format!("{:?}", other)),
             })?;
@@ -71,13 +75,14 @@ pub fn load_many(files: &[(String, String)]) -> Result<Arc<Program>, String> {
 }
 
 pub fn run_test(prog: &Arc<Program>, t: &TestDecl, opts: &Options) -> TestResult {
-    let sh = Shared::new(prog.clone(), opts.trace);
+    let coop = opts.coop || cfg!(target_arch = "wasm32");
+    let sh = Shared::new(prog.clone(), opts.trace, coop);
     let mut it = Interp::new(sh.clone(), 0, format!("test:{}", t.name));
-    let start = Instant::now();
-    let r = it.exec_block(&t.body);
+    let start = Clock::now();
+    let r = if coop { sh.run_coop(Box::pin(it.exec_block(&t.body))) } else { block_on(it.exec_block(&t.body)) };
     sh.finish_test();
     sh.join_all();
-    let secs = start.elapsed().as_secs_f64();
+    let secs = start.secs();
     let (child_err, deadlock) = {
         let w = sh.lock();
         (w.error.clone(), w.deadlock_report.clone())
@@ -94,5 +99,24 @@ pub fn run_test(prog: &Arc<Program>, t: &TestDecl, opts: &Options) -> TestResult
         message: failure.unwrap_or_default(),
         secs,
         stats: if opts.stats { sh.stats_report() } else { String::new() },
+        output: sh.take_output(),
+    }
+}
+
+/// 測試的執行時間（WebAssembly 沒有時鐘：0）
+struct Clock(#[cfg(not(target_arch = "wasm32"))] std::time::Instant);
+
+impl Clock {
+    fn now() -> Clock {
+        Clock(
+            #[cfg(not(target_arch = "wasm32"))]
+            std::time::Instant::now(),
+        )
+    }
+    fn secs(&self) -> f64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.0.elapsed().as_secs_f64();
+        #[cfg(target_arch = "wasm32")]
+        0.0
     }
 }

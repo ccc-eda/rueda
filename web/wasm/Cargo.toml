@@ -1,0 +1,20 @@
+[package]
+name = "rueda-wasm"
+description = "The web IDE's WebAssembly core: the Veryl and Fluxa simulators, synthesis, the FPGA / ASIC flows, the emulator compiler and the C compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+veryl-parser.workspace = true
+veryl-sim = { package = "rueda-veryl-sim", path = "../../veryl/sim" }
+veryl-synth = { package = "rueda-veryl-synth", path = "../../veryl/synth" }
+eda = { package = "rueda-eda", path = "../../eda" }
+rvtools = { package = "rueda-rvtools", path = "../../riscv/rvtools" }
+veryl-emu = { package = "rueda-veryl-emu", path = "../../veryl/emu" }
+fluxa = { package = "rueda-fluxa", path = "../../fluxa/sim" }
+serde_json = "1"

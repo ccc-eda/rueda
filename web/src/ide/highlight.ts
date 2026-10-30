@@ -1,4 +1,4 @@
-// Syntax highlighting (Veryl, C, RISC-V assembly, Python, shell): source text -> HTML lines (one string per line).
+// Syntax highlighting (Veryl, Fluxa, C, RISC-V assembly, Python, shell): source text -> HTML lines (one string per line).
 
 const KEYWORDS = new Set(('module interface package function import export inst param const var let assign always_ff always_comb '
   + 'initial final if else if_reset case switch default for in rev step return break input output inout modport struct enum union '
@@ -14,6 +14,10 @@ const C_KEYWORDS = new Set(('if else while for do switch case default break cont
   + 'static extern const volatile register').split(' '));
 const C_TYPES = new Set('void char short int long signed unsigned float double va_list'.split(' '));
 const C_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)|(^\s*#\s*\w+)|([A-Za-z_]\w*)/g;
+const FX_KEYWORDS = new Set(('task fn test let mut const carry spawn parallel pipeline schedule unroll serial for in if else match '
+  + 'return assert eventually always comptime stage comb type use pub iface as true false in out').split(' '));
+const FX_TYPES = new Set('bit bits bool int fixed chan mem u8 u16 u32 u64 i8 i16 i32 i64'.split(' '));
+const FX_TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*")|(\b0[xXbB][0-9a-fA-F_]+|\b\d[\d_]*(?:\.\d+)?)|(@\w+)|([A-Za-z_]\w*)/g;
 const ASM_TOKEN = /(#.*|\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(-?0[xX][0-9a-fA-F]+|-?\d+)|(\.[A-Za-z_]\w*)|([A-Za-z_.$][\w.$]*:)|([A-Za-z_]\w*)/g;
 const REGS = /^(x([12]?\d|3[01])|zero|ra|sp|gp|tp|fp|t[0-6]|s([0-9]|1[01])|a[0-7])$/;
 
@@ -24,11 +28,12 @@ const PY_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b0[xXbBoO][0-9a-
 const SH_KEYWORDS = new Set('if then else elif fi for while until do done case esac in function return break continue exit'.split(' '));
 const SH_TOKEN = /(#.*)|("(?:\\.|[^"\\])*"|'[^']*')|(\b\d+\b)|(\$\{[^}]*\}|\$\(\(|\$[\w#?@*!$-])|([A-Za-z_][\w-]*)/g;
 
-export type Lang = 'veryl' | 'c' | 'asm' | 'py' | 'sh' | 'text';
+export type Lang = 'veryl' | 'fx' | 'c' | 'asm' | 'py' | 'sh' | 'text';
 
 /** the language of a file, by its name */
 export function langOf(name: string): Lang {
   if (name.endsWith('.veryl')) return 'veryl';
+  if (name.endsWith('.fx')) return 'fx';
   if (/\.[ch]$/.test(name)) return 'c';
   if (/\.(s|S|asm)$/.test(name)) return 'asm';
   if (name.endsWith('.py')) return 'py';
@@ -39,7 +44,7 @@ export function langOf(name: string): Lang {
 /** HTML for each line of `src` */
 export function highlight(src: string, lang: Lang = 'veryl'): string[] {
   if (lang === 'text') return src.split('\n').map(esc);
-  if (lang === 'c' || lang === 'asm') return highlightC(src, lang);
+  if (lang === 'c' || lang === 'asm' || lang === 'fx') return highlightC(src, lang);
   if (lang === 'py' || lang === 'sh') return highlightScript(src, lang);
   const out: string[] = [];
   let inBlock = false;
@@ -86,11 +91,11 @@ export function highlight(src: string, lang: Lang = 'veryl'): string[] {
   return out;
 }
 
-/** C and RISC-V assembly */
-function highlightC(src: string, lang: 'c' | 'asm'): string[] {
+/** C, Fluxa and RISC-V assembly */
+function highlightC(src: string, lang: 'c' | 'asm' | 'fx'): string[] {
   const out: string[] = [];
   let inBlock = false;
-  const re = lang === 'c' ? C_TOKEN : ASM_TOKEN;
+  const re = lang === 'c' ? C_TOKEN : lang === 'fx' ? FX_TOKEN : ASM_TOKEN;
   for (const line of src.split('\n')) {
     let h = '';
     let i = 0;
@@ -119,7 +124,14 @@ function highlightC(src: string, lang: 'c' | 'asm'): string[] {
         continue;
       } else if (m[3]) h += `<span class="t-str">${esc(t)}</span>`;
       else if (m[4]) h += `<span class="t-num">${esc(t)}</span>`;
-      else if (lang === 'c') {
+      else if (lang === 'fx') {
+        // Fluxa: @reg placements, keywords, types, task / function names (capitalized)
+        if (m[5]) h += `<span class="t-attr">${esc(t)}</span>`;
+        else if (FX_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
+        else if (FX_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
+        else if (/^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
+        else h += t;
+      } else if (lang === 'c') {
         if (m[5]) h += `<span class="t-attr">${esc(t)}</span>`;
         else if (C_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
         else if (C_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;

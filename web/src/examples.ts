@@ -20,6 +20,8 @@ export interface Example {
   group_en?: string;
   /** what is plugged into the virtual board */
   board?: import('./ide/board').BoardSetup;
+  /** the language: Veryl (default) or Fluxa (.fx: tests on the Fluxa simulator) */
+  lang?: 'fluxa';
   /** runs in the emulator (machine.json), not in the testbench simulator */
   emu?: boolean;
   /** the development board's breadboard (machine.json "board": "pi"; default: pi.ts's) */

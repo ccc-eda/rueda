@@ -11,14 +11,24 @@ fn run_files(files: &[&str]) -> Vec<(String, bool, String)> {
         })
         .collect();
     let prog = load_many(&srcs).unwrap_or_else(|e| panic!("{}", e));
-    let opts = Options { trace: false, stats: false };
-    prog.tests
-        .iter()
-        .map(|t| {
-            let r = run_test(&prog, t, &opts);
-            (r.name, r.passed, r.message)
-        })
-        .collect()
+    let run = |coop: bool| -> Vec<(String, bool, String)> {
+        let opts = Options { trace: false, stats: false, coop };
+        prog.tests
+            .iter()
+            .map(|t| {
+                let r = run_test(&prog, t, &opts);
+                (r.name, r.passed, r.message)
+            })
+            .collect()
+    };
+    let threads = run(false);
+    // the cooperative scheduler (the browser's) gives the same results: KPN determinism
+    let coop = run(true);
+    for ((name, ok, msg), (_, ok2, msg2)) in threads.iter().zip(&coop) {
+        assert_eq!(ok, ok2, "{}: threads {} / coop {}: {} / {}", name, ok, ok2, msg, msg2);
+        assert_eq!(msg.lines().next(), msg2.lines().next(), "{}: threads / coop messages differ", name);
+    }
+    threads
 }
 
 fn run(file: &str) -> Vec<(String, bool, String)> {

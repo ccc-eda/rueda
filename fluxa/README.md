@@ -4,20 +4,22 @@ Fluxa 的核心哲學必須徹底擺脫「軟體思維（馮紐曼架構的順�
 
 Fluxa **「融合了 Rust 的嚴謹型別、Go 的通道並行語意、以及硬體描述精確度的全新混合體」**。它不再試圖讓你在寫「軟體」，而是提供一個既有軟體的抽象便利性、又能完全掌控硬體空間與時間（時脈）的折衷點。
 
-本專案是一個 Fluxa 的模擬器，像 `iverilog` / `vvp` 之於 Verilog：這是 Fluxa 語言（見 [〈Fluxa 語言規格 v0.1〉](docs/Fluxa語言規格v0.1.md)）的直譯器與模擬器，零外部依賴，純 Rust。
+Fluxa 是 [rueda](../README.md) 的語言之一：`reda sim` / `reda list` 遇到 `.fx` 檔就用這裡的模擬器，網頁 IDE 也可以開 Fluxa 專案。
+這裡是一個 Fluxa 的模擬器，像 `iverilog` / `vvp` 之於 Verilog：這是 Fluxa 語言（見 [〈Fluxa 語言規格 v0.1〉](docs/Fluxa語言規格v0.1.md)）的直譯器與模擬器，零外部依賴，純 Rust。
 
 
 ## 建置與執行
 
 ```
-cargo build --release
-./target/release/fluxa examples/fir.fx            # 跑檔案內所有 test
-./target/release/fluxa examples/gemm.fx --stats   # 另外印出每條通道的 token 數與 FIFO 最大佔用
-./target/release/fluxa examples/mac.fx --trace    # 印出每一次 send / recv
-./target/release/fluxa examples/fir.fx --test fir_impulse
-./target/release/fluxa examples/fir.fx --list
-cargo test --release                              # 完整回歸測試：examples + rv32i + rv64（含 100 次死結偵測重複測試）
-./test.sh                                         # 建置 + cargo test + 兩個處理器腳本，一次跑完
+cargo build --release -p rueda                # 建出 reda（在 rueda 的根目錄；或 cargo install，見根目錄的 README）
+reda sim examples/fir.fx                      # 跑檔案內所有 test（語言由副檔名 .fx 決定）
+reda sim examples/gemm.fx --stats             # 另外印出每條通道的 token 數與 FIFO 最大佔用
+reda sim examples/mac.fx --trace              # 印出每一次 send / recv
+reda sim examples/fir.fx --test fir_impulse
+reda sim examples/fir.fx --coop               # 用瀏覽器裡的單執行緒排程器跑
+reda list examples/fir.fx
+cargo test --release -p rueda-fluxa           # 完整回歸測試：examples + rv32i + rv64，兩種排程各跑一次（含 100 次死結偵測重複測試）
+./test.sh                                     # 建置 + cargo test + 兩個處理器腳本，一次跑完
 ```
 
 多檔載入：`fluxa a.fx b.fx` 會把多個檔案合併成一個程式（類似 `iverilog a.v b.v`），fn 名稱不可重複。
@@ -26,8 +28,10 @@ cargo test --release                              # 完整回歸測試：example
 
 ## 模擬模型
 
-- 每個 `task` 是一條執行緒，通道是有界 FIFO（`depth`）：滿了 `send` 阻塞、空了 `recv` 阻塞。
+- 每個 `task` 是一個獨立執行的程序，通道是有界 FIFO（`depth`）：滿了 `send` 阻塞、空了 `recv` 阻塞。
   這是 Kahn 程序網路，輸出 token 序列與排程、FIFO 深度無關（規格 §3.10 性質 5）。
+- 兩種排程，結果相同：命令列預設每個 task 一條 OS 執行緒；`--coop` 與網頁（WebAssembly 沒有執行緒）
+  則把所有 task 放在同一條執行緒上輪流跑（直譯器是 async 的，通道操作是讓出點）。回歸測試兩種都跑並比對。
 - **死結偵測**：所有存活任務都在等待時，報告每個任務卡在哪條通道。
   深度不足造成的死結（例如測試端不讀輸出、FIFO 填滿）會被如實報出。
 - **通道端點是線性資源**：`spawn` 會轉移端點所有權，之後再用會報錯。
@@ -58,7 +62,7 @@ cargo test --release                              # 完整回歸測試：example
   `pipeline(ii = n)` 與 `schedule` 只被解析，不影響行為。
 - **comptime `Graph` 建構器**：用 `array(n, |_| chan::<T>(..))` 加迴圈 `spawn` 可寫出同樣的拓樸（見 `examples/gemm.fx`）。
 - **非阻塞通道操作**（`try_recv` / `empty`）在 task 層被禁止，因為它們會破壞 KPN 的確定性。
-- 一個 task 對應一條 OS 執行緒，數百個 PE 沒問題，數萬個就不適合；`print` 在多任務間的交錯順序不保證。
+- 預設一個 task 對應一條 OS 執行緒，數百個 PE 沒問題，數萬個就不適合（`--coop` 沒有這個限制）；`print` 在多任務間的交錯順序不保證。
 
 ## 處理器範例：用 Fluxa 寫 RISC-V
 
@@ -80,16 +84,16 @@ cargo test --release                              # 完整回歸測試：example
 ## 專案結構
 
 ```
-src/lexer.rs    詞法分析          src/runtime.rs  排程、通道、死結偵測
-src/parser.rs   語法分析（規格 §2） src/interp.rs   樹走訪直譯器
-src/ast.rs      語法樹            src/value.rs    值、型別、定點數與範圍檢查
-src/lib.rs      load / run_test   src/main.rs     命令列
-examples/       basics fir mac gemm fanout，以及 err_* 四個預期失敗的範例
-rv32i/ rv64/    RISC-V 處理器範例（見上）
-tests/          回歸測試（examples.rs 驅動上述所有 .fx）
+sim/src/lexer.rs    詞法分析          sim/src/runtime.rs  排程（執行緒或協作式）、通道、死結偵測
+sim/src/parser.rs   語法分析（規格 §2） sim/src/interp.rs   樹走訪直譯器（async）
+sim/src/ast.rs      語法樹            sim/src/value.rs    值、型別、定點數與範圍檢查
+sim/src/lib.rs      load / run_test   sim/src/cli.rs      命令列（reda sim / reda list）
+sim/tests/          回歸測試（examples.rs 驅動下面所有 .fx）
+examples/           basics fir mac gemm fanout，以及 err_* 四個預期失敗的範例
+rv32i/ rv64/        RISC-V 處理器範例（見上）
 docs/           語言規格與版本紀錄
 ```
 
 ## 授權
 
-MIT，見 [LICENSE](LICENSE)。
+MIT，見 [LICENSE](../LICENSE)。
