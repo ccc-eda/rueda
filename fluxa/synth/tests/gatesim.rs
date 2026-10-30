@@ -316,3 +316,94 @@ fn network_fifo_depth_is_the_channels() {
         agree(&prog, "Net", &["opt"]);
     }
 }
+
+/// `src`'s task `top` synthesized and mapped to opt gates
+fn gates(src: &str, top: &str) -> (eda::netlist::Netlist, fluxa_synth::hw::Iface) {
+    let s = fluxa_synth::synthesize(&load(src), top, &Default::default()).unwrap_or_else(|e| panic!("{}", e));
+    (eda::netsim::mapped(&s.netlist, "opt").unwrap(), s.iface)
+}
+
+#[test]
+fn pipelined_fir_takes_a_sample_every_clock() {
+    let prog = example("fir");
+    let s = fluxa_synth::synthesize(&prog, "Fir", &Default::default()).unwrap();
+    let mut hw = fluxa_synth::hw::HwSim::new(&s.netlist, &s.iface, &[]);
+    let n = 100;
+    let mut x: Vec<HwTok> = (0..n).map(|k| HwTok::Data(((k * 37) % 2000) as i128 - 1000)).collect();
+    x.push(HwTok::Close);
+    let out = hw.run_streams(&[x], 1000);
+    assert_eq!(out[0].len(), n + 1);
+    // II = 1: n samples and a few clocks to start and close
+    assert!(hw.cycles <= n + 4, "{} cycles for {} samples", hw.cycles, n);
+}
+
+#[test]
+fn pipelined_mac_and_its_unpipelined_twin() {
+    let src = |attr: &str| format!("task Mac(a: in chan<i8>, b: in chan<i8>, out: out chan<i24>, len: u8) {{
+        carry acc: i24 = 0;
+        {} for _ in 0..len {{ acc += a.recv() * b.recv(); }}
+        out.send(acc);
+    }}", attr);
+    let run = |src: &str| {
+        let (nl, io) = gates(src, "Mac");
+        let mut hw = fluxa_synth::hw::HwSim::new(&nl, &io, &[50]);
+        let mut a: Vec<HwTok> = (0..50).map(|k| HwTok::Data(k - 20)).collect();
+        let mut b: Vec<HwTok> = (0..50).map(|k| HwTok::Data(3 - k)).collect();
+        a.push(HwTok::Close);
+        b.push(HwTok::Close);
+        let out = hw.run_streams(&[a, b], 1000);
+        (out, hw.cycles)
+    };
+    let want: i128 = (0..50).map(|k| (k - 20) * (3 - k)).sum();
+    let (p, pc) = run(&src("pipeline(ii = 1)"));
+    let (f, fc) = run(&src(""));
+    let (two, _) = run(&src("pipeline(ii = 2)"));
+    for o in [&p, &f, &two] { assert_eq!(o[0], vec![HwTok::Data(want), HwTok::Close]); }
+    assert!(pc <= 50 + 6, "pipelined: {} cycles", pc);
+    assert!(fc >= 2 * 50, "states: {} cycles", fc);
+}
+
+#[test]
+fn ii_one_that_cannot_be_met() {
+    for (body, why) in [
+        ("let v = a.recv(); let w = a.recv(); y.send(v + w);", "received twice"),
+        ("let v = a.recv(); if v > 0 { y.send(v); }", "under a condition"),
+        ("y.send(1); let v = a.recv(); acc += v;", "after a send"),
+    ] {
+        let src = format!("task T(a: in chan<i8>, y: out chan<i16>) {{ carry acc: i16 = 0; pipeline(ii = 1) for _ in 0..4 {{ {} }} y.send(acc); }}", body);
+        let e = fluxa_synth::synthesize(&load(&src), "T", &Default::default()).err().unwrap_or_else(|| panic!("{} synthesized", body));
+        assert!(e.contains("E0412") && e.contains(why), "{}", e);
+    }
+}
+
+const REVERSE: &str = r#"
+    task Rev(x: in chan<u8>, y: out chan<u8>) {
+        let mut m: mem<u8, 16> = [0; 16];
+        let mut n: u8 = 0;
+        for v in x { m[n] = v; n += 1; }
+        for k in 0..n { m[k] += 1; }
+        for k in 0..n { y.send(m[n - 1 - k]); }
+    }
+    test rev {
+        let (tx, rx) = chan::<u8>(depth = 16);
+        let (ty, ry) = chan::<u8>(depth = 16);
+        spawn Rev(rx, ty);
+        for k in 0..12 { tx.send(k * 7); }
+        tx.close();
+        for k in 0..12 { assert ry.recv() == (11 - k) * 7 + 1; }
+    }
+"#;
+
+#[test]
+fn mem_is_a_block_ram() {
+    let prog = load(REVERSE);
+    agree(&prog, "Rev", &["opt", "ice40", "ecp5", "asic"]);
+    let s = fluxa_synth::synthesize(&prog, "Rev", &Default::default()).unwrap();
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let nl = eda::netsim::mapped(&s.netlist, "ice40").unwrap();
+    assert!(nl.cells.iter().any(|c| c.typ == "SB_RAM40_4K"), "no block RAM");
+    // not as m[i]: the memory stays registers, with a warning, and still works
+    let other = REVERSE.replace("for k in 0..n { m[k] += 1; }", "for k in 0..16 { m[k] += 1; } let z = m;");
+    let s = fluxa_synth::synthesize(&load(&other), "Rev", &Default::default()).unwrap();
+    assert!(s.warnings.iter().any(|w| w.contains("stays registers")), "{:?}", s.warnings);
+}

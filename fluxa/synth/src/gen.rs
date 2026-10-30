@@ -681,6 +681,11 @@ pub fn base(n: &str) -> &str { n.split(['.', '~']).next().unwrap_or(n) }
 
 struct Chan { ty: Ty, out: bool }
 
+/// a memory read port: address, word read
+type MemRead = (Vec<Bit>, Vec<Bit>);
+/// a memory write: when, address, word
+type MemWrite = (Bit, Vec<Bit>, Vec<Bit>);
+
 /// the task `decl` lowered to `cfg` as a netlist; `params` fixes scalar parameters to constants
 pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &HashMap<String, i128>) -> R<crate::Synth> {
     let mut warnings = vec![];
@@ -711,6 +716,16 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         _ => None,
     }).collect();
 
+    // the memories: word type and size
+    let mut mems: HashMap<String, (Ty, usize)> = HashMap::new();
+    for (m, t, n) in &cfg.mems {
+        match gen.ty(&TypeExpr::Mem(Box::new(t.clone()), Box::new(n.clone())), decl.line)? {
+            Ty::Array(e, n) if e.is_scalar() => { mems.insert(m.clone(), (*e, n)); }
+            _ => return Err(format!("{}: memory `{}`: words that are arrays or tuples are not synthesized", prog.loc(decl.line), base(m))),
+        }
+    }
+    warnings.extend(cfg.warnings.iter().cloned());
+
     // the type pass: the widths of the variables, untyped ones widened until nothing grows
     let mut vars: HashMap<String, Ty> = HashMap::new();
     let mut untyped: HashSet<String> = Default::default();
@@ -718,11 +733,15 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         let mut t = Gen::new(prog);
         t.vars = vars.clone();
         t.untyped = untyped.clone();
-        temps(&mut t, cfg, &chans, &hw)?;
+        temps(&mut t, cfg, &chans, &mems, &hw)?;
         for b in &cfg.blocks {
             t.env = scratch_env(&mut t, &hw);
+            if let Term::Pipe { head, cond, recvs, .. } = &b.term {
+                for (dst, ch) in head.iter().chain(recvs) { term_values(&mut t, &Term::Recv { dst: dst.clone(), ch: ch.clone(), closed: None, next: 0 }, &chans, &mems)?; }
+                if let Some(c) = cond { t.eval(c)?; }
+            }
             t.stmts(&b.stmts)?;
-            term_values(&mut t, &b.term, &chans)?;
+            term_values(&mut t, &b.term, &chans, &mems)?;
         }
         if !t.grew { vars = t.vars; untyped = t.untyped; break; }
         if round == 12 {
@@ -775,6 +794,12 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     let mut closed: HashMap<String, Bit> = HashMap::new();
     for u in chans.keys() { closed.insert(u.clone(), g.g.wire()); }
 
+    // a memory's words (flip-flops; a block RAM where the target has one, see eda::bram) and its
+    // ports: reads (address, word read), writes (when, address, word)
+    let mut store: HashMap<String, Vec<Vec<Bit>>> = HashMap::new();
+    for (m, (t, n)) in &mems { store.insert(m.clone(), (0..*n).map(|_| g.g.wires(t.width() as u32)).collect()); }
+    let mut mem_reads: HashMap<String, Vec<MemRead>> = HashMap::new();
+    let mut mem_writes: HashMap<String, Vec<MemWrite>> = HashMap::new();
     let mut var_d: HashMap<String, Vec<(Bit, Vec<Bit>)>> = HashMap::new();
     let mut state_d: Vec<(Bit, Vec<Bit>)> = vec![];
     let mut closed_set: HashMap<String, Vec<Bit>> = HashMap::new();
@@ -783,11 +808,44 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     let mut readies: HashMap<String, Vec<Bit>> = HashMap::new();
     let konst = |k: usize| -> Vec<Bit> { (0..sw).map(|i| Bit::of((k >> i) & 1 == 1)).collect() };
 
-    temps(&mut g, cfg, &chans, &hw)?;
+    temps(&mut g, cfg, &chans, &mems, &hw)?;
     for (s, b) in cfg.blocks.iter().enumerate() {
         let is_s = g.g.decode(&state, s);
         g.env = q.clone();
         for (u, v) in &scalars { g.env.insert(u.clone(), v.clone()); }
+        // a pipelined loop: whether an iteration can start (inputs here) and whether the loop ends,
+        // looked at before the body runs
+        let mut pipe = (Bit::C0, Bit::C0);
+        if let Term::Pipe { head, cond, recvs, exit, .. } = &b.term {
+            let mut more = Bit::C1;
+            let mut ends = Bit::C0;
+            let mut ins = Bit::C1;
+            for (k, (dst, ch)) in head.iter().chain(recvs).enumerate() {
+                let c = &cp[ch];
+                let cl = closed[ch];
+                let valid = g.g.or(c.valid, cl);
+                if k == 0 && head.is_some() {
+                    let is_close = { let x = g.g.and(c.valid, c.close); g.g.or(x, cl) };
+                    ends = g.g.and(valid, is_close);
+                    let nc = g.g.not(is_close);
+                    more = g.g.and(valid, nc);
+                } else {
+                    ins = g.g.and(ins, valid);
+                }
+                let v = HV::S(SVal::of_ty(c.data.clone(), &chans[ch].ty));
+                let v = fit_hv(&mut g.g, &v, &vars[dst])?;
+                g.env.insert(dst.clone(), v);
+            }
+            if let Some(c) = cond {
+                let cv = g.scalar(c)?;
+                more = truth(&mut g.g, &cv);
+                ends = g.g.not(more);
+            }
+            let leave = g.g.and(is_s, ends);
+            state_d.push((leave, konst(*exit)));
+            let m = g.g.and(is_s, more);
+            pipe = (g.g.and(m, ins), leave);
+        }
         g.stmts(&b.stmts)?;
         let (fire, next): (Bit, Vec<Bit>) = match &b.term {
             Term::Goto(t) => (Bit::C1, konst(*t)),
@@ -827,6 +885,48 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 closed_set.entry(ch.clone()).or_default().push(fired);
                 (cp[ch].ready, konst(*next))
             }
+            Term::MemRead { dst, mem, addr, next } => {
+                let a = g.scalar(addr)?;
+                let a = mem_addr(&a, mems[mem].1);
+                let rd = g.g.select(&store[mem], &a);
+                g.env.insert(dst.clone(), HV::S(SVal::of_ty(rd.clone(), &mems[mem].0)));
+                mem_reads.entry(mem.clone()).or_default().push((a, rd));
+                (Bit::C1, konst(*next))
+            }
+            Term::MemWrite { mem, addr, val, next } => {
+                let a = g.scalar(addr)?;
+                let a = mem_addr(&a, mems[mem].1);
+                let v = g.scalar(val)?;
+                let v = fit(&mut g.g, &v, &mems[mem].0);
+                mem_writes.entry(mem.clone()).or_default().push((is_s, a, v.bits));
+                (Bit::C1, konst(*next))
+            }
+            Term::Pipe { head, recvs, sends, .. } => {
+                let (start, leave) = pipe;
+                let readys: Vec<Bit> = sends.iter().map(|(ch, _)| cp[ch].ready).collect();
+                let all = g.g.reduce_and(&readys);
+                let fire = g.g.and(start, all);
+                for (k, (ch, v)) in sends.iter().enumerate() {
+                    let others: Vec<Bit> = readys.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, r)| *r).collect();
+                    let o = g.g.reduce_and(&others);
+                    let act = g.g.and(start, o);
+                    let val = g.env.get(v).cloned().ok_or_else(|| format!("the value sent on `{}` is not known", base(ch)))?;
+                    let val = match val { HV::S(x) => fit(&mut g.g, &x, &chans[ch].ty), _ => return Err(format!("only scalars are sent on `{}`", base(ch))) };
+                    offers.entry(ch.clone()).or_default().push((act, val.bits.clone(), Bit::C0));
+                }
+                for (k, (_, ch)) in head.iter().chain(recvs).enumerate() {
+                    let c = &cp[ch];
+                    let nc = g.g.not(closed[ch]);
+                    // the head takes the end of the stream as the loop leaves
+                    let take = if k == 0 && head.is_some() { g.g.or(fire, leave) } else { fire };
+                    let rdy = g.g.and(take, nc);
+                    readies.entry(ch.clone()).or_default().push(rdy);
+                    let x = g.g.and(rdy, c.valid);
+                    let tc = g.g.and(x, c.close);
+                    closed_set.entry(ch.clone()).or_default().push(tc);
+                }
+                (fire, konst(s))
+            }
             Term::CloseOwned { ch, next } => {
                 let cl = closed[ch];
                 let nc = g.g.not(cl);
@@ -857,6 +957,34 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         for (c, v) in var_d.get(n).into_iter().flatten() { d = g.g.muxv(*c, &d, v); }
         for (i, b) in qb.iter().enumerate() { ff(&mut g.g, if d[i] == *b { Bit::C0 } else { d[i] }, *b); }
         nets.push((n.clone(), qb));
+    }
+    let mut mnames: Vec<&String> = store.keys().collect();
+    mnames.sort();
+    for m in mnames {
+        let words = &store[m];
+        let ws = mem_writes.get(m).cloned().unwrap_or_default();
+        let (aw, dw) = (bits_for(words.len()), words[0].len());
+        let (mut we, mut wa, mut wd) = (Bit::C0, vec![Bit::C0; aw], vec![Bit::C0; dw]);
+        for (c, a, d) in &ws {
+            we = g.g.or(we, *c);
+            wa = g.g.muxv(*c, &wa, a);
+            wd = g.g.muxv(*c, &wd, d);
+        }
+        for (k, w) in words.iter().enumerate() {
+            let at = g.g.decode(&wa, k);
+            let hit = g.g.and(we, at);
+            let d = g.g.muxv(hit, w, &wd);
+            for (i, b) in w.iter().enumerate() { ff(&mut g.g, d[i], *b); }
+        }
+        nets.push((m.clone(), words.concat()));
+        nets.push((format!("$mem:{}:clk", m), vec![clk]));
+        nets.push((format!("$mem:{}:we", m), vec![we]));
+        nets.push((format!("$mem:{}:wa", m), wa));
+        nets.push((format!("$mem:{}:wd", m), wd));
+        for (i, (ra, rd)) in mem_reads.get(m).into_iter().flatten().enumerate() {
+            nets.push((format!("$mem:{}:ra{}", m, i), ra.clone()));
+            nets.push((format!("$mem:{}:rd{}", m, i), rd.clone()));
+        }
     }
     let mut sd = state.clone();
     for (c, v) in &state_d { sd = g.g.muxv(*c, &sd, v); }
@@ -907,13 +1035,18 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     Ok(crate::Synth { netlist, iface, warnings })
 }
 
+/// a memory address: the bits that pick one of `n` words (a block RAM has no more; an
+/// address past the end is an error in the simulator)
+fn mem_addr(a: &SVal, n: usize) -> Vec<Bit> { (0..bits_for(n)).map(|i| a.bits.get(i).copied().unwrap_or(Bit::C0)).collect() }
+
 /// the lowering's temporaries get their types: a channel's element type, a loop counter the
 /// range from its lower bound to its upper bound (it reaches the bound when the loop ends)
-fn temps(g: &mut Gen, cfg: &Cfg, chans: &HashMap<String, Chan>, hw: &[(String, String, ParamHw)]) -> R<()> {
+fn temps(g: &mut Gen, cfg: &Cfg, chans: &HashMap<String, Chan>, mems: &HashMap<String, (Ty, usize)>, hw: &[(String, String, ParamHw)]) -> R<()> {
     for (n, t) in &cfg.temps {
         if g.vars.contains_key(n) && !g.untyped.contains(n) { continue; }
         match t {
             Temp::ChanElem(ch) => { let ty = chans.get(ch).map(|c| c.ty.clone()).ok_or_else(|| format!("`{}` is not a channel parameter of the task", base(ch)))?; g.vars.insert(n.clone(), ty); }
+            Temp::MemElem(m) => { g.vars.insert(n.clone(), mems[m].0.clone()); }
             Temp::Like(e) => {
                 let fresh = scratch_env(g, hw);
                 let saved = std::mem::replace(&mut g.env, fresh);
@@ -948,10 +1081,18 @@ fn scratch_env(g: &mut Gen, hw: &[(String, String, ParamHw)]) -> HashMap<String,
 }
 
 /// the type pass looks at the terminators' expressions too (a branch condition, a value sent)
-fn term_values(g: &mut Gen, t: &Term, chans: &HashMap<String, Chan>) -> R<()> {
+fn term_values(g: &mut Gen, t: &Term, chans: &HashMap<String, Chan>, mems: &HashMap<String, (Ty, usize)>) -> R<()> {
     match t {
+        Term::MemRead { dst, mem, addr, .. } => {
+            g.eval(addr)?;
+            let t = &mems[mem].0;
+            let v = SVal::of_ty(g.g.wires(t.width() as u32), t);
+            g.env.insert(dst.clone(), HV::S(v));
+        }
+        Term::MemWrite { addr, val, .. } => { g.eval(addr)?; g.eval(val)?; }
         Term::Branch(c, ..) => { g.eval(c)?; }
         Term::Send { val, ch, .. } => { g.eval(val)?; if !chans.get(ch).is_some_and(|c| c.out) { return Err(format!("send on `{}`, which is not an output channel of the task", base(ch))); } }
+        Term::Pipe { sends, .. } => for (ch, _) in sends { if !chans.get(ch).is_some_and(|c| c.out) { return Err(format!("send on `{}`, which is not an output channel of the task", base(ch))); } },
         Term::Recv { dst, ch, .. } => {
             let c = chans.get(ch).ok_or_else(|| format!("recv on `{}`, which is not a channel parameter", base(ch)))?;
             if c.out { return Err(format!("recv on `{}`, an output channel", base(ch))); }

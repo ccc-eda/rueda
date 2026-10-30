@@ -29,6 +29,8 @@ pub struct HwSim<'n> {
     state: Vec<Bit>,
     /// whether the last cycle changed the state
     pub changed: bool,
+    /// clock cycles run since the reset
+    pub cycles: usize,
 }
 
 fn to_bits(v: i128, t: &Ty) -> u128 {
@@ -52,7 +54,7 @@ impl<'n> HwSim<'n> {
         sim.step();
         sim.set("rst", 0);
         let state = nl.cells.iter().filter(|c| c.is_ff()).map(|c| c.out()).collect();
-        HwSim { sim, io, state, changed: true }
+        HwSim { sim, io, state, changed: true, cycles: 0 }
     }
 
     /// one clock: `offer` is the token each input channel offers (None: nothing),
@@ -75,6 +77,7 @@ impl<'n> HwSim<'n> {
         let before: Vec<bool> = self.state.iter().map(|b| self.sim.bit(*b)).collect();
         self.sim.step();
         self.sim.settle();
+        self.cycles += 1;
         self.changed = self.state.iter().zip(&before).any(|(b, v)| self.sim.bit(*b) != *v);
         (taken, sent)
     }

@@ -23,6 +23,15 @@ pub enum Term {
     Close { ch: String, next: B },
     /// the end of the task: close `ch` unless the program closed it (end of stream)
     CloseOwned { ch: String, next: B },
+    /// a `pipeline(ii = 1)` loop as one state: an iteration each clock whose inputs are all valid
+    /// and whose outputs are all ready. The block's statements are the body; before them `head`
+    /// (`for v in rx`: the token into `dst`, the end of the stream leaves) or `cond` (a counted
+    /// loop goes on while it holds) is looked at, and `recvs` take their tokens; `sends` are the
+    /// values the body sent (variables), sent when the iteration fires.
+    /// read word `addr` of memory `mem` into `dst` (a clock, like a block RAM's registered read)
+    MemRead { dst: String, mem: String, addr: Expr, next: B },
+    MemWrite { mem: String, addr: Expr, val: Expr, next: B },
+    Pipe { head: Option<(String, String)>, cond: Option<Expr>, recvs: Vec<(String, String)>, sends: Vec<(String, String)>, exit: B },
     Halt,
 }
 
@@ -37,6 +46,9 @@ pub struct Cfg {
     pub params: Vec<String>,
     /// variables made by lowering (the receive temporaries, loop counters) with the type to give them
     pub temps: Vec<(String, Temp)>,
+    /// the memories (`mem_of`): name, word type, size
+    pub mems: Vec<(String, TypeExpr, Expr)>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +57,8 @@ pub enum Temp {
     ChanElem(String),
     /// the type of an expression (loop bounds), found when the datapath is built
     Like(Expr),
+    /// the word type of a memory
+    MemElem(String),
 }
 
 // ---------------------------------------------------------------- renaming
@@ -52,10 +66,19 @@ pub enum Temp {
 struct Renamer {
     scopes: Vec<HashMap<String, String>>,
     n: usize,
+    /// the memory pass instead of renaming (see `mem_rewrite`)
+    mem: Option<MemRw>,
+}
+
+struct MemRw {
+    names: HashSet<String>,
+    /// a memory used other than as `m[i]`
+    bad: bool,
 }
 
 impl Renamer {
     fn bind(&mut self, name: &str) -> String {
+        if self.mem.is_some() { return name.to_string(); }
         self.n += 1;
         let u = format!("{}.{}", name, self.n);
         self.scopes.last_mut().unwrap().insert(name.to_string(), u.clone());
@@ -73,7 +96,8 @@ impl Renamer {
 
     fn block(&mut self, b: &Block) -> Block {
         self.scopes.push(HashMap::new());
-        let stmts = b.stmts.iter().map(|s| self.stmt(s)).collect();
+        let keep: Vec<&Stmt> = b.stmts.iter().filter(|s| !self.mem_decl(s)).collect();
+        let stmts = keep.into_iter().map(|s| self.stmt(s)).collect();
         let tail = b.tail.as_ref().map(|e| Box::new(self.expr(e)));
         self.scopes.pop();
         Block { stmts, tail }
@@ -91,7 +115,19 @@ impl Renamer {
                 let ty = self.ty(ty);
                 StmtKind::Carry { name: self.bind(name), ty, init }
             }
-            StmtKind::Assign { target, op, value } => StmtKind::Assign { target: self.expr(target), op: *op, value: self.expr(value) },
+            StmtKind::Assign { target, op, value } => match self.mem_index(target) {
+                // m[i] op= v → m.$write(i, m.$read(i) op v)
+                Some((m, i)) => {
+                    let (i, v) = (self.expr(i), self.expr(value));
+                    let line = s.line;
+                    let v = match op {
+                        Some(o) => Expr { kind: ExprKind::Binary(*o, Box::new(mem_op(&m, "$read", vec![i.clone()], line)), Box::new(v)), line },
+                        None => v,
+                    };
+                    StmtKind::Expr(mem_op(&m, "$write", vec![i, v], line))
+                }
+                None => StmtKind::Assign { target: self.expr(target), op: *op, value: self.expr(value) },
+            },
             StmtKind::For { attr, pat, iter, body } => {
                 let iter = self.expr(iter);
                 self.scopes.push(HashMap::new());
@@ -136,7 +172,12 @@ impl Renamer {
 
     fn expr(&mut self, e: &Expr) -> Expr {
         let b = |x: &Expr, r: &mut Self| Box::new(r.expr(x));
+        if let Some((m, i)) = self.mem_index(e) { let i = self.expr(i); return mem_op(&m, "$read", vec![i], e.line); }
         let kind = match &e.kind {
+            ExprKind::Path(p) if p.len() == 1 && self.mem.as_ref().is_some_and(|m| m.names.contains(&p[0])) => {
+                self.mem.as_mut().unwrap().bad = true;
+                e.kind.clone()
+            }
             ExprKind::Path(p) if p.len() == 1 => match self.lookup(&p[0]) { Some(u) => ExprKind::Path(vec![u.clone()]), None => e.kind.clone() },
             ExprKind::PathT(p, a) => ExprKind::PathT(p.clone(), a.iter().map(|a| self.targ(a)).collect()),
             ExprKind::Unary(c, x) => ExprKind::Unary(*c, b(x, self)),
@@ -179,12 +220,59 @@ impl Renamer {
     }
 }
 
+impl Renamer {
+    /// `m[i]` of a memory: (m, i)
+    fn mem_index<'e>(&self, e: &'e Expr) -> Option<(String, &'e Expr)> {
+        let mr = self.mem.as_ref()?;
+        match &e.kind {
+            ExprKind::Index(x, i) => match &x.kind { ExprKind::Path(p) if p.len() == 1 && mr.names.contains(&p[0]) => Some((p[0].clone(), i)), _ => None },
+            _ => None,
+        }
+    }
+    /// a memory's declaration, left out by the memory pass
+    fn mem_decl(&self, s: &Stmt) -> bool {
+        let Some(mr) = &self.mem else { return false };
+        matches!(&s.kind, StmtKind::Let { pat: Pattern::Ident(n), .. } if mr.names.contains(n))
+    }
+}
+
+fn mem_op(m: &str, op: &str, args: Vec<Expr>, line: u32) -> Expr {
+    let args = args.into_iter().map(|value| Arg { name: None, value }).collect();
+    Expr { kind: ExprKind::Method(Box::new(path(m, line)), op.into(), vec![], args), line }
+}
+
+/// the memories of a body: `let m: mem<T, N>` starting all 0 (`[0; N]` or nothing), as
+/// (name, element type, size)
+fn mems_of(b: &Block, out: &mut Vec<(String, TypeExpr, Expr)>) {
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Let { pat: Pattern::Ident(n), ty: Some(TypeExpr::Mem(t, k)), init, .. } => {
+                let zero = |e: &Expr| matches!(e.kind, ExprKind::Int(0));
+                let ok = match init { None => true, Some(e) => matches!(&e.kind, ExprKind::Repeat(x, _) if zero(x)) };
+                if ok { out.push((n.clone(), (**t).clone(), (**k).clone())); }
+            }
+            StmtKind::For { body, .. } => mems_of(body, out),
+            _ => {}
+        }
+    }
+}
+
+/// memories become one-clock accesses: `m[i]` → `m.$read(i)` (the word comes out of the memory
+/// a clock later, as from a block RAM), `m[i] = v` → `m.$write(i, v)`. None when a memory is
+/// used some other way (it then stays an array of registers).
+fn mem_rewrite(body: &Block, mems: &[(String, TypeExpr, Expr)]) -> Option<Block> {
+    let names = mems.iter().map(|m| m.0.clone()).collect();
+    let mut rw = Renamer { scopes: vec![HashMap::new()], n: 0, mem: Some(MemRw { names, bad: false }) };
+    let b = rw.block(body);
+    (!rw.mem.unwrap().bad).then_some(b)
+}
+
 // ---------------------------------------------------------------- channel operations
 
 /// the channel a `ch.recv()` / `ch.send(..)` / `ch.close()` names (a parameter or variable)
 fn chan_name(e: &Expr) -> Option<String> { match &e.kind { ExprKind::Path(p) if p.len() == 1 => Some(p[0].clone()), _ => None } }
 
-fn is_chan_op(e: &Expr) -> bool { matches!(&e.kind, ExprKind::Method(_, n, _, _) if n == "recv" || n == "send" || n == "close") }
+fn is_chan_op(e: &Expr) -> bool { matches!(&e.kind, ExprKind::Method(_, n, _, _) if n == "recv" || n == "send" || n == "close" || n == "$read" || n == "$write") }
 
 /// does the expression contain a channel operation (it then needs states, not just gates)?
 pub fn has_chan(e: &Expr) -> bool {
@@ -256,7 +344,11 @@ struct Lower {
     n: usize,
     /// where `return` goes
     end: B,
+    /// lowering a pipelined loop's body: its channel operations, in order
+    pipe: Option<Vec<PipeOp>>,
 }
+
+enum PipeOp { Recv(String, String), Send(String, String) }
 
 impl Lower {
     fn new_block(&mut self) -> B {
@@ -278,12 +370,26 @@ impl Lower {
             ExprKind::Method(r, n, _, a) if n == "recv" && a.is_empty() => {
                 let ch = chan_name(r).ok_or_else(|| format!("line {}: recv on something that is not a channel name", line))?;
                 let dst = self.temp("recv", Temp::ChanElem(ch.clone()));
+                if let Some(ops) = &mut self.pipe {
+                    ops.push(PipeOp::Recv(dst.clone(), ch));
+                } else {
+                    let next = self.new_block();
+                    self.blocks[*cur].term = Term::Recv { dst: dst.clone(), ch, closed: None, next };
+                    *cur = next;
+                }
+                Ok(Expr { kind: ExprKind::Path(vec![dst]), line })
+            }
+            ExprKind::Method(r, n, _, a) if n == "$read" => {
+                if self.pipe.is_some() { return Err("a memory read (a clock each)".into()); }
+                let mem = chan_name(r).unwrap();
+                let addr = self.lift(&a[0].value, cur)?;
+                let dst = self.temp("rd", Temp::MemElem(mem.clone()));
                 let next = self.new_block();
-                self.blocks[*cur].term = Term::Recv { dst: dst.clone(), ch, closed: None, next };
+                self.blocks[*cur].term = Term::MemRead { dst: dst.clone(), mem, addr, next };
                 *cur = next;
                 Ok(Expr { kind: ExprKind::Path(vec![dst]), line })
             }
-            ExprKind::Method(_, n, _, _) if n == "send" || n == "close" => Err(format!("line {}: `{}` inside an expression is not synthesized; make it a statement", line, n)),
+            ExprKind::Method(_, n, _, _) if n == "send" || n == "close" || n == "$write" => Err(format!("line {}: `{}` inside an expression is not synthesized; make it a statement", line, n)),
             ExprKind::Binary(op @ (BinOp::And | BinOp::Or), l, r) if has_chan(r) => {
                 let _ = (op, l);
                 Err(format!("line {}: a recv on the right of && / || is not synthesized (it is not always evaluated)", line))
@@ -337,10 +443,28 @@ impl Lower {
             ExprKind::Method(r, n, _, a) if n == "send" && a.len() == 1 => {
                 let ch = chan_name(r).ok_or_else(|| format!("line {}: send on something that is not a channel name", e.line))?;
                 let val = self.lift(&a[0].value, &mut cur)?;
+                if self.pipe.is_some() {
+                    // the value as it is here; sent when the iteration fires
+                    self.n += 1;
+                    let v = format!("send~{}", self.n);
+                    self.blocks[cur].stmts.push(let_stmt(&v, val, e.line));
+                    if let Some(ops) = &mut self.pipe { ops.push(PipeOp::Send(ch, v)); }
+                    return Ok(cur);
+                }
                 let next = self.new_block();
                 self.blocks[cur].term = Term::Send { ch, val, next };
                 Ok(next)
             }
+            ExprKind::Method(r, n, _, a) if n == "$write" => {
+                if self.pipe.is_some() { return Err("a memory write (a clock each)".into()); }
+                let mem = chan_name(r).unwrap();
+                let addr = self.lift(&a[0].value, &mut cur)?;
+                let val = self.lift(&a[1].value, &mut cur)?;
+                let next = self.new_block();
+                self.blocks[cur].term = Term::MemWrite { mem, addr, val, next };
+                Ok(next)
+            }
+            ExprKind::Method(_, n, _, a) if n == "close" && a.is_empty() && self.pipe.is_some() => Err("a channel is closed in the loop".into()),
             ExprKind::Method(r, n, _, a) if n == "close" && a.is_empty() => {
                 let ch = chan_name(r).ok_or_else(|| format!("line {}: close on something that is not a channel name", e.line))?;
                 let next = self.new_block();
@@ -353,6 +477,7 @@ impl Lower {
                 Ok(cur)
             }
             ExprKind::Block(b) => self.stmts(&b.stmts, b.tail.as_deref(), cur),
+            ExprKind::If(..) if self.pipe.is_some() => Err("a channel operation under a condition (each iteration must do the same channel operations)".into()),
             ExprKind::If(c, t, el) => {
                 let c = self.lift(c, &mut cur)?;
                 let (bt, bf, join) = (self.new_block(), self.new_block(), self.new_block());
@@ -405,12 +530,32 @@ impl Lower {
                 Ok(cur)
             }
             StmtKind::Expr(e) => self.chan_stmt(e, cur),
+            StmtKind::Return(_) if self.pipe.is_some() => Err("`return` in the loop".into()),
             StmtKind::Return(e) => {
                 if let Some(e) = e { if !matches!(e.kind, ExprKind::Tuple(ref x) if x.is_empty()) { return Err(format!("line {}: a task's return value is not synthesized", line)); } }
                 self.blocks[cur].term = Term::Goto(self.end);
                 Ok(self.new_block())
             }
             StmtKind::Spawn(_) | StmtKind::Parallel(_) => Err(format!("line {}: spawn inside the synthesized task is not supported yet", line)),
+            StmtKind::For { .. } if self.pipe.is_some() => Err("an inner loop with channel operations".into()),
+            StmtKind::For { attr: LoopAttr::Pipeline(kv), pat, iter, body } => {
+                let ii = kv.iter().find(|(k, _)| k == "ii").map(|(_, e)| match e.kind { ExprKind::Int(n) => n, _ => 1 }).unwrap_or(1);
+                let mark = (self.blocks.len(), self.temps.len(), self.n);
+                match self.pipelined(pat, iter, body, cur, line) {
+                    Ok(b) => Ok(b),
+                    // a longer initiation interval is allowed: the loop as ordinary states
+                    Err(_) if ii > 1 => {
+                        self.pipe = None;
+                        self.blocks.truncate(mark.0);
+                        self.temps.truncate(mark.1);
+                        self.n = mark.2;
+                        self.blocks[cur].term = Term::Halt;
+                        let plain = Stmt { kind: StmtKind::For { attr: LoopAttr::None, pat: pat.clone(), iter: iter.clone(), body: body.clone() }, line };
+                        self.stmt(&plain, cur)
+                    }
+                    Err(e) => Err(format!("line {}: error[E0412]: pipeline(ii = {}) cannot be met: {}", line, ii, e)),
+                }
+            }
             StmtKind::For { pat, iter, body, .. } => {
                 let var = match pat {
                     Pattern::Ident(n) => Some(n.clone()),
@@ -478,6 +623,70 @@ impl Lower {
 }
 
 impl Lower {
+    /// a `pipeline` loop as one `Pipe` state, or why it cannot start an iteration every clock
+    fn pipelined(&mut self, pat: &Pattern, iter: &Expr, body: &Block, mut cur: B, line: u32) -> R<B> {
+        let var = match pat {
+            Pattern::Ident(n) => Some(n.clone()),
+            Pattern::Wild => None,
+            Pattern::Tuple(_) => return Err("a tuple pattern".into()),
+        };
+        let (st, exit) = (self.new_block(), self.new_block());
+        let (mut head, mut cond) = (None, None);
+        let mut step = None;
+        match &iter.kind {
+            ExprKind::Path(p) if p.len() == 1 && self.chans.contains(&p[0]) => {
+                let dst = self.temp("recv", Temp::ChanElem(p[0].clone()));
+                if let Some(v) = &var { self.blocks[st].stmts.push(let_stmt(v, path(&dst, line), line)); }
+                head = Some((dst, p[0].clone()));
+            }
+            _ => {
+                let (lo, hi, incl, item) = match &iter.kind {
+                    ExprKind::Range(lo, hi, incl) => (self.lift(lo, &mut cur)?, self.lift(hi, &mut cur)?, *incl, None),
+                    _ => {
+                        let len = Expr { kind: ExprKind::Call(Box::new(path("len", line)), vec![Arg { name: None, value: iter.clone() }]), line };
+                        (Expr { kind: ExprKind::Int(0), line }, len, false, Some(iter.clone()))
+                    }
+                };
+                if self.pipe.is_some() { return Err("a channel operation in the loop bounds".into()); }
+                let i = self.temp("i", Temp::Like(Expr { kind: ExprKind::Range(Box::new(lo.clone()), Box::new(hi.clone()), incl), line }));
+                let end = self.temp("end", Temp::Like(hi.clone()));
+                self.blocks[cur].stmts.push(assign(&i, lo, line));
+                self.blocks[cur].stmts.push(assign(&end, hi, line));
+                let op = if incl { BinOp::Le } else { BinOp::Lt };
+                cond = Some(Expr { kind: ExprKind::Binary(op, Box::new(path(&i, line)), Box::new(path(&end, line))), line });
+                let at = match item { Some(a) => Expr { kind: ExprKind::Index(Box::new(a), Box::new(path(&i, line))), line }, None => path(&i, line) };
+                if let Some(v) = &var { self.blocks[st].stmts.push(let_stmt(v, at, line)); }
+                step = Some(assign(&i, Expr { kind: ExprKind::Binary(BinOp::Add, Box::new(path(&i, line)), Box::new(Expr { kind: ExprKind::Int(1), line })), line }, line));
+            }
+        }
+        self.blocks[cur].term = Term::Goto(st);
+        self.pipe = Some(vec![]);
+        let r = self.stmts(&body.stmts, body.tail.as_deref(), st);
+        let ops = self.pipe.take().unwrap();
+        let last = r?;
+        if last != st { return Err("the body has more than one state".into()); }
+        self.commit(st, line);
+        if let Some(s) = step { self.blocks[st].stmts.push(s); }
+        // one token per channel and clock; a receive after a send waits for the send's effect
+        let (mut recvs, mut sends) = (vec![], vec![]);
+        let mut seen: HashSet<String> = head.iter().map(|(_, c)| c.clone()).collect();
+        for op in ops {
+            match op {
+                PipeOp::Recv(d, c) => {
+                    if !sends.is_empty() { return Err(format!("`{}` is received after a send in the same iteration", crate::gen::base(&c))); }
+                    if !seen.insert(c.clone()) { return Err(format!("`{}` is received twice in an iteration (one token a clock): use ii = 2", crate::gen::base(&c))); }
+                    recvs.push((d, c));
+                }
+                PipeOp::Send(c, v) => {
+                    if sends.iter().any(|(x, _)| *x == c) { return Err(format!("`{}` is sent twice in an iteration (one token a clock): use ii = 2", crate::gen::base(&c))); }
+                    sends.push((c, v));
+                }
+            }
+        }
+        self.blocks[st].term = Term::Pipe { head, cond, recvs, sends, exit };
+        Ok(exit)
+    }
+
     /// the end of a loop iteration: the `@reg` variables' pending values become current
     fn commit(&mut self, b: B, line: u32) {
         for r in self.regs.clone() {
@@ -492,13 +701,32 @@ fn assign(n: &str, e: Expr, line: u32) -> Stmt { Stmt { kind: StmtKind::Assign {
 
 /// the task `decl` as states; `outs` are its output channel parameters (closed at the end)
 pub fn lower(decl: &FnDecl) -> R<Cfg> {
-    let mut rn = Renamer { scopes: vec![HashMap::new()], n: 0 };
+    let mut rn = Renamer { scopes: vec![HashMap::new()], n: 0, mem: None };
     let params: Vec<String> = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
+    let mut mems = vec![];
+    mems_of(&body, &mut mems);
+    if !mems.is_empty() {
+        let names: Vec<&str> = mems.iter().map(|m| base(&m.0)).collect();
+        let why = match mem_rewrite(&body, &mems) {
+            Some(b) => match lower_body(decl, &params, &b, mems.clone()) { Ok(c) => return Ok(c), Err(e) => e },
+            None => "it is used other than as m[i]".to_string(),
+        };
+        let mut c = lower_body(decl, &params, &body, vec![])?;
+        c.warnings.push(format!("memory {} stays registers (no block RAM): {}", names.join(", "), why));
+        return Ok(c);
+    }
+    lower_body(decl, &params, &body, vec![])
+}
+
+fn base(n: &str) -> &str { crate::gen::base(n) }
+
+fn lower_body(decl: &FnDecl, params: &[String], body: &Block, mems: Vec<(String, TypeExpr, Expr)>) -> R<Cfg> {
+    let params = params.to_vec();
     let chans: HashSet<String> = decl.params.iter().zip(&params).filter(|(p, _)| matches!(p.ty, TypeExpr::Chan(..))).map(|(_, u)| u.clone()).collect();
     let mut regs = vec![];
-    let body = reg_rewrite(&body, &mut regs, false);
-    let mut l = Lower { blocks: vec![], chans, regs, temps: vec![], n: 0, end: 0 };
+    let body = reg_rewrite(body, &mut regs, false);
+    let mut l = Lower { blocks: vec![], chans, regs, temps: vec![], n: 0, end: 0, pipe: None };
     let entry = l.new_block();
     let end = l.new_block();
     l.end = end;
@@ -514,7 +742,7 @@ pub fn lower(decl: &FnDecl) -> R<Cfg> {
         }
     }
     l.blocks[cur].term = Term::Halt;
-    Ok(Cfg { blocks: l.blocks, params, temps: l.temps })
+    Ok(Cfg { blocks: l.blocks, params, temps: l.temps, mems, warnings: vec![] })
 }
 
 /// is parameter `name` an output channel (`out chan<T>`, or sent on)?
@@ -522,7 +750,7 @@ fn param_dir_out(decl: &FnDecl, name: &str) -> bool { crate::dir_of(decl, name) 
 
 /// a function's parameters and body with fresh names (to inline it), numbered from `start`
 pub fn rename_fn(decl: &FnDecl, start: usize) -> (Vec<String>, Block) {
-    let mut rn = Renamer { scopes: vec![HashMap::new()], n: start * 1000 };
+    let mut rn = Renamer { scopes: vec![HashMap::new()], n: start * 1000, mem: None };
     let params = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
     (params, body)
