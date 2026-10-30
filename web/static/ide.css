@@ -58,7 +58,6 @@ body:not(.basic) #titlebar .tb-group select { max-width: 150px; }
 #guide .step:hover { background: #2a3a4c; }
 #guide .step.first { border-color: var(--accent); background: #12385a; }
 #guide .step b { font-weight: 600; white-space: nowrap; }
-#guide .step span { color: var(--dim); font-size: 11px; }
 #guide .arr { color: var(--dim); }
 #guide .close { margin-left: auto; background: transparent; border: 0; color: var(--dim); font-size: 16px; cursor: pointer; padding: 0 4px; }
 #guide .close:hover { color: #fff; }
@@ -390,7 +389,6 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
 /* phones: the main actions in one row (⋯ shows the menus), the sidebar as a drawer over the editor,
    larger text and touch targets; the stacked flow view */
 @media (max-width: 760px) {
-  #guide .step span { display: none; }
   #titlebar { height: auto; min-height: 40px; flex-wrap: wrap; gap: 6px; padding: 4px 6px; overflow: visible; }
   #titlebar .brand, #demoLink { display: none; }
   .tb-group { display: contents; }

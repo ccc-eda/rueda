@@ -33,7 +33,8 @@ cargo test --release -p rueda-veryl-synth       # synthesizes all examples, runs
 cargo test --release -p rueda --test cli        # only the reda subcommands
 veryl/synth/test.sh                             # formal equivalence + FPGA flow + SKY130 (incl. GDS check)
 veryl/synth/fpga/pnr_test.sh                    # our own place & route: each design's bitstream vs netlist + icetime
-cd web && npm test                              # web (needs npm run build first)
+cd web && npm test                              # web core and IDE logic (needs npm run build first)
+cd web && npm run e2e                           # the IDE end to end in Chrome (Playwright): flow diagrams, steps, Fluxa
 ```
 
 Environment variables used by `veryl/synth/test.sh`:

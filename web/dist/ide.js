@@ -605,11 +605,19 @@
       __publicField(this, "raf", 0);
       /** keep fitting the scene to the canvas until the user pans or zooms */
       __publicField(this, "autoFit", true);
+      /** a fit asked for while the canvas had no size (hidden, not laid out yet): done at the first paint that has one */
+      __publicField(this, "pendingFit", false);
       this.ctx = canvas.getContext("2d");
       new ResizeObserver(() => {
         if (this.autoFit) this.fit();
         else this.redraw();
       }).observe(canvas.parentElement);
+      new IntersectionObserver((es) => {
+        if (es.some((e) => e.isIntersecting)) {
+          if (this.autoFit) this.fit();
+          else this.redraw();
+        }
+      }).observe(canvas);
       canvas.addEventListener("wheel", (e) => {
         e.preventDefault();
         const r = canvas.getBoundingClientRect();
@@ -680,7 +688,12 @@
     fit() {
       this.autoFit = true;
       const r = this.canvas.parentElement.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) return;
+      if (r.width < 2 || r.height < 2) {
+        this.pendingFit = true;
+        this.redraw();
+        return;
+      }
+      this.pendingFit = false;
       const [x0, y0, x1, y1] = this.bounds();
       const pad = 20;
       const s = Math.min((r.width - 2 * pad) / Math.max(x1 - x0, 1), (r.height - 2 * pad) / Math.max(y1 - y0, 1));
@@ -713,6 +726,10 @@
     paint() {
       const c = this.canvas, ctx = this.ctx;
       const r = c.parentElement.getBoundingClientRect();
+      if (this.pendingFit && r.width >= 2 && r.height >= 2) {
+        this.fit();
+        return;
+      }
       const dpr = window.devicePixelRatio || 1;
       if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
         c.width = Math.round(r.width * dpr);
@@ -1517,6 +1534,7 @@
       this.nets.clear();
       this.note(tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026"));
       $("synSide").innerHTML = "";
+      this.empty(null);
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.buttons();
       const t0 = performance.now();
@@ -1740,9 +1758,21 @@
       items.push(`${tr("\u5408\u6210", "Synthesis")} <b>${ms.toFixed(0)}</b> ms` + (a ? `${tr("\uFF0CASIC \u6D41\u7A0B", ", ASIC flow")} <b>${(this.asicMs / 1e3).toFixed(1)}</b> s` : ""));
       $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
     }
+    /** a netlist stage whose netlist was too big to send (cell counts only): nothing to draw or pick */
+    tooBig(key) {
+      return (key === "raw" || key === "opt") && this.res?.[key].n !== void 0;
+    }
+    /** the canvas's message when a stage has nothing to draw (null: none) */
+    empty(html) {
+      const e = document.getElementById("synEmpty");
+      if (!e) return;
+      e.innerHTML = html ?? "";
+      e.classList.toggle("hidden", html === null);
+    }
     show(key) {
       if (!this.res) return;
       this.stopAnim();
+      this.empty(null);
       this.stage = key;
       this.sel = null;
       for (const b of $("synChips").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.key === key);
@@ -1799,6 +1829,7 @@
         this.view.set({ boxes: [], lines: [], texts: [] });
         this.side(document.createElement("div"));
         const types = Object.entries(nl.types ?? {}).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${shortType(t)} ${n}`).join("  ");
+        this.empty(`<b>${tr(`${nl.n} \u500B\u5143\u4EF6\uFF0C\u592A\u591A\u4E86\uFF0C\u4E0D\u756B\u51FA\u4F86`, `${nl.n} cells: too many to draw`)}</b><span>${tr("\u9019\u500B\u968E\u6BB5\u8A18\u61B6\u9AD4\u9084\u662F\u4E00\u500B\u500B\u6B63\u53CD\u5668\u548C\u8B80\u53D6\u591A\u5DE5\u5668\uFF1B\u9078 \u2463 LUT4 Techmap \u770B\u5C0D\u61C9\u5F8C\u7684\u96FB\u8DEF\uFF08block RAM\u3001LUT\uFF09\u3002", "At this stage the memories are still flip-flops and read multiplexers; pick \u2463 LUT4 Techmap for the mapped circuit (block RAM, LUTs).")}</span><span class="types">${esc(types)}</span>`);
         this.info([
           key === "raw" ? "\u2461 Logic Netlist" : tr("\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09", "\u2462 Tech-indep Syn (technology-independent optimization)"),
           tr(
@@ -2325,7 +2356,7 @@
         if (this.asic) this.drawAsic(false);
         return;
       }
-      if (!isNet(k)) return;
+      if (!isNet(k) || this.tooBig(k)) return;
       const v = this.netView(k);
       const all = this.edges && edgeCount(v.nl) <= 6e3;
       for (const b of v.lay.scene.boxes) b.hl = b.id === this.sel;
@@ -2449,7 +2480,7 @@
     }
     pick(b) {
       const k = this.stage;
-      if (k === "cmp") return;
+      if (k === "cmp" || this.tooBig(k)) return;
       if (PNR.has(k)) {
         if (!this.pnr || this.anim) return;
         const n = this.pnr.lcs.length + this.pnr.ios.length;
@@ -5647,12 +5678,12 @@ test ${task.toLowerCase()}_doubles {
     }
   }
   var exFilter = load("exFilter", "all");
-  var EX_FILTERS = () => [["all", tr("\u5168\u90E8", "All")], ["test", "\u{1F9EA}"], ["board", "\u26A1"], ["emu", "\u{1F5A5}"], ["synth", "\u2699"]];
+  var EX_FILTERS = () => [["all", tr("\u5168\u90E8", "All")], ["test", "\u{1F9EA}"], ["board", "\u26A1"], ["emu", "\u{1F5A5}"], ["synth", "\u2699"], ["fluxa", "Fluxa"]];
   function filterHint(f) {
-    return f === "all" ? tr("\u6240\u6709\u7BC4\u4F8B", "every example") : f === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66\u3001\u770B\u6CE2\u5F62", "with testbenches: \u25B6 Test, waveforms") : f === "board" ? tr("\u80FD\u653E\u4E0A\u865B\u64EC\u677F\uFF08\u6709\u8173\u4F4D\uFF09", "go on the virtual board (have pins)") : f === "emu" ? tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: boot it in the \u{1F5A5} emulator") : tr("\u80FD\u5408\u6210\uFF1AFPGA\u3001ASIC \u6676\u7247\u7248\u5716", "can be synthesized: FPGA, ASIC layout");
+    return f === "all" ? tr("\u6240\u6709\u7BC4\u4F8B", "every example") : f === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66\u3001\u770B\u6CE2\u5F62", "with testbenches: \u25B6 Test, waveforms") : f === "board" ? tr("\u80FD\u653E\u4E0A\u865B\u64EC\u677F\uFF08\u6709\u8173\u4F4D\uFF09", "go on the virtual board (have pins)") : f === "emu" ? tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: boot it in the \u{1F5A5} emulator") : f === "fluxa" ? tr("Fluxa \u7A0B\u5F0F\uFF1A\u4EFB\u52D9\u8207\u901A\u9053\uFF0C\u25B6 \u8DD1\u5B83\u7684 test", "Fluxa programs: tasks and channels, \u25B6 runs their tests") : tr("\u80FD\u5408\u6210\uFF1AFPGA\u3001ASIC \u6676\u7247\u7248\u5716", "can be synthesized: FPGA, ASIC layout");
   }
   function exMatches(ex, f) {
-    return f === "all" || caps(exCapIn(ex))[f].on;
+    return f === "all" || (f === "fluxa" ? ex.lang === "fluxa" : caps(exCapIn(ex))[f].on);
   }
   var exCount = (f) => examples().filter((e) => exMatches(e, f)).length;
   function setExFilter(f) {
@@ -5692,6 +5723,14 @@ test ${task.toLowerCase()}_doubles {
       ex: "fifo",
       filter: "synth",
       text: tr("\u5408\u6210\u6210\u908F\u8F2F\u9598\uFF0C\u653E\u9032 FPGA \u4F48\u5C40\u7E5E\u7DDA\uFF0C\u6216\u505A\u6210 SKY130 \u6676\u7247\u7248\u5716\u3002", "Synthesize it to gates, place and route it on an FPGA, or make a SKY130 chip layout.")
+    },
+    {
+      goal: "fluxa",
+      icon: "\u21F6",
+      title: tr("\u7528 Fluxa \u5BEB\u8CC7\u6599\u6D41", "Write dataflow in Fluxa"),
+      ex: "fx_fir",
+      filter: "fluxa",
+      text: tr("\u9AD8\u968E\u5408\u6210\u8A9E\u8A00\uFF1A\u7528\u901A\u9053\u9023\u63A5\u7684\u4EFB\u52D9\uFF0C\u50CF FIR \u6FFE\u6CE2\u5668\u3001\u8108\u52D5\u9663\u5217\u3001\u7BA1\u7DDA\u5316 CPU\uFF1B\u8DD1 test\u3001\u770B\u6BCF\u689D\u901A\u9053\u7684\u7D71\u8A08\u3002", "The high-level synthesis language: tasks connected by channels, like a FIR filter, a systolic array, a pipelined CPU; run the tests, see each channel's statistics.")
     }
   ];
   async function startGoal(goal) {
@@ -5704,7 +5743,7 @@ test ${task.toLowerCase()}_doubles {
     renderExamples();
     if (!core) return;
     await check();
-    if (goal === "learn") runTests();
+    if (goal === "learn" || goal === "fluxa") runTests();
     else if (goal === "board") flashBoard();
     else if (goal === "emu") openEmu();
     else runSynth();
@@ -6514,7 +6553,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     g.classList.toggle("hidden", !show);
     if (!show) return;
     const ci = capIn();
-    g.innerHTML = `<span class="lbl">${tr("\u5EFA\u8B70\u6B65\u9A5F", "Suggested steps")}</span>` + steps(ci).map((a, i) => `<button class="step${i ? "" : " first"}" data-step="${a}"><b>${"\u2460\u2461\u2462"[i]} ${esc4(actName(a))}</b><span>${esc4(actHint(a, ci))}</span></button>`).join('<span class="arr">\u2192</span>') + `<button class="close" title="${attr(tr("\u95DC\u9589\uFF08\u547D\u4EE4\u9078\u55AE\u7684\u300C\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F\u300D\u53EF\u4EE5\u518D\u6253\u958B\uFF09", `Close (the command palette's "Show the suggested steps" brings it back)`))}">\xD7</button>`;
+    g.innerHTML = `<span class="lbl">${tr("\u5EFA\u8B70\u6B65\u9A5F", "Suggested steps")}</span>` + steps(ci).map((a, i) => `<button class="step${i ? "" : " first"}" data-step="${a}" title="${attr(actHint(a, ci))}"><b>${"\u2460\u2461\u2462"[i]} ${esc4(actName(a))}</b></button>`).join('<span class="arr">\u2192</span>') + `<button class="close" title="${attr(tr("\u95DC\u9589\uFF08\u547D\u4EE4\u9078\u55AE\u7684\u300C\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F\u300D\u53EF\u4EE5\u518D\u6253\u958B\uFF09", `Close (the command palette's "Show the suggested steps" brings it back)`))}">\xD7</button>`;
   }
   function openEmu() {
     const e = ensureEmu();

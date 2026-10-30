@@ -3,7 +3,7 @@
 #
 #   ./test.sh          what CI runs: cargo test of the whole workspace (eda, riscv, veryl, fluxa, reda),
 #                      reda sim on an example, the tutorial's flow, reda emu's check, the Fluxa processors,
-#                      the RV64 emulator's JIT in WebAssembly, npm test
+#                      the RV64 emulator's JIT in WebAssembly, npm test, the IDE end to end in Chrome (npm run e2e)
 #   ./test.sh --full   + veryl/synth/test.sh: yosys formal equivalence with `veryl build`, the FPGA flows
 #                        and the own place & route's co-simulation (needs OSS CAD Suite; tens of minutes)
 #
@@ -96,6 +96,18 @@ if command -v node > /dev/null; then
     run web web_tests
 else
     results+=("SKIP  web (Node.js not installed)")
+fi
+
+# the IDE in a real browser (Playwright with the installed Chrome)
+web_e2e() {
+    cd "$ROOT/web"
+    [ -d node_modules ] || npm ci
+    npm run e2e
+}
+if command -v node > /dev/null && { [ -n "${CHROME:-}" ] || [ -d "/Applications/Google Chrome.app" ] || command -v google-chrome > /dev/null; }; then
+    run web-e2e web_e2e
+else
+    results+=("SKIP  web-e2e (no Chrome; set CHROME=/path/to/chrome)")
 fi
 
 if $FULL; then

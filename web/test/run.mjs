@@ -554,8 +554,8 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   // the welcome page's starting points open these examples
   const main = fs.readFileSync(path.join(dist, '../src/ide/main.ts'), 'utf8');
   const goals = main.slice(main.indexOf('const goals = ')).split('\n];')[0];
-  for (const [, id] of goals.matchAll(/ex: '([\w-]+)'/g)) if (!ctx.VERYL_EXAMPLES.some((e) => e.id === id)) errs.push(`welcome: no example ${id}`);
-  if ([...goals.matchAll(/ex: '/g)].length !== 4) errs.push('welcome: not four starting points');
+  for (const [, id] of goals.matchAll(/ex: '([\w-]+)'/g)) if (!ALL_EXAMPLES.some((e) => e.id === id)) errs.push(`welcome: no example ${id}`);
+  if ([...goals.matchAll(/ex: '/g)].length !== 5) errs.push('welcome: not five starting points');
   const ok = !errs.length;
   if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} caps     ${ctx.VERYL_EXAMPLES.length} examples, first steps ${JSON.stringify(firsts)}${errs.length ? ': ' + errs.slice(0, 4).join('; ') : ''}`);

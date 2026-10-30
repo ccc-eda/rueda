@@ -571,11 +571,19 @@
       __publicField(this, "raf", 0);
       /** keep fitting the scene to the canvas until the user pans or zooms */
       __publicField(this, "autoFit", true);
+      /** a fit asked for while the canvas had no size (hidden, not laid out yet): done at the first paint that has one */
+      __publicField(this, "pendingFit", false);
       this.ctx = canvas.getContext("2d");
       new ResizeObserver(() => {
         if (this.autoFit) this.fit();
         else this.redraw();
       }).observe(canvas.parentElement);
+      new IntersectionObserver((es) => {
+        if (es.some((e) => e.isIntersecting)) {
+          if (this.autoFit) this.fit();
+          else this.redraw();
+        }
+      }).observe(canvas);
       canvas.addEventListener("wheel", (e) => {
         e.preventDefault();
         const r = canvas.getBoundingClientRect();
@@ -646,7 +654,12 @@
     fit() {
       this.autoFit = true;
       const r = this.canvas.parentElement.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) return;
+      if (r.width < 2 || r.height < 2) {
+        this.pendingFit = true;
+        this.redraw();
+        return;
+      }
+      this.pendingFit = false;
       const [x0, y0, x1, y1] = this.bounds();
       const pad = 20;
       const s = Math.min((r.width - 2 * pad) / Math.max(x1 - x0, 1), (r.height - 2 * pad) / Math.max(y1 - y0, 1));
@@ -679,6 +692,10 @@
     paint() {
       const c = this.canvas, ctx = this.ctx;
       const r = c.parentElement.getBoundingClientRect();
+      if (this.pendingFit && r.width >= 2 && r.height >= 2) {
+        this.fit();
+        return;
+      }
       const dpr = window.devicePixelRatio || 1;
       if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
         c.width = Math.round(r.width * dpr);
@@ -1483,6 +1500,7 @@
       this.nets.clear();
       this.note(tr("\u5408\u6210\u4E2D\u2026", "Synthesizing\u2026"));
       $("synSide").innerHTML = "";
+      this.empty(null);
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.buttons();
       const t0 = performance.now();
@@ -1706,9 +1724,21 @@
       items.push(`${tr("\u5408\u6210", "Synthesis")} <b>${ms.toFixed(0)}</b> ms` + (a ? `${tr("\uFF0CASIC \u6D41\u7A0B", ", ASIC flow")} <b>${(this.asicMs / 1e3).toFixed(1)}</b> s` : ""));
       $("synStats").innerHTML = items.join('<span class="sep">\u2502</span>');
     }
+    /** a netlist stage whose netlist was too big to send (cell counts only): nothing to draw or pick */
+    tooBig(key) {
+      return (key === "raw" || key === "opt") && this.res?.[key].n !== void 0;
+    }
+    /** the canvas's message when a stage has nothing to draw (null: none) */
+    empty(html) {
+      const e = document.getElementById("synEmpty");
+      if (!e) return;
+      e.innerHTML = html ?? "";
+      e.classList.toggle("hidden", html === null);
+    }
     show(key) {
       if (!this.res) return;
       this.stopAnim();
+      this.empty(null);
       this.stage = key;
       this.sel = null;
       for (const b of $("synChips").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.key === key);
@@ -1765,6 +1795,7 @@
         this.view.set({ boxes: [], lines: [], texts: [] });
         this.side(document.createElement("div"));
         const types = Object.entries(nl.types ?? {}).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${shortType(t)} ${n}`).join("  ");
+        this.empty(`<b>${tr(`${nl.n} \u500B\u5143\u4EF6\uFF0C\u592A\u591A\u4E86\uFF0C\u4E0D\u756B\u51FA\u4F86`, `${nl.n} cells: too many to draw`)}</b><span>${tr("\u9019\u500B\u968E\u6BB5\u8A18\u61B6\u9AD4\u9084\u662F\u4E00\u500B\u500B\u6B63\u53CD\u5668\u548C\u8B80\u53D6\u591A\u5DE5\u5668\uFF1B\u9078 \u2463 LUT4 Techmap \u770B\u5C0D\u61C9\u5F8C\u7684\u96FB\u8DEF\uFF08block RAM\u3001LUT\uFF09\u3002", "At this stage the memories are still flip-flops and read multiplexers; pick \u2463 LUT4 Techmap for the mapped circuit (block RAM, LUTs).")}</span><span class="types">${esc(types)}</span>`);
         this.info([
           key === "raw" ? "\u2461 Logic Netlist" : tr("\u2462 Tech-indep Syn\uFF08\u8207\u6280\u8853\u7121\u95DC\u7684\u6700\u4F73\u5316\uFF09", "\u2462 Tech-indep Syn (technology-independent optimization)"),
           tr(
@@ -2291,7 +2322,7 @@
         if (this.asic) this.drawAsic(false);
         return;
       }
-      if (!isNet(k)) return;
+      if (!isNet(k) || this.tooBig(k)) return;
       const v = this.netView(k);
       const all = this.edges && edgeCount(v.nl) <= 6e3;
       for (const b of v.lay.scene.boxes) b.hl = b.id === this.sel;
@@ -2415,7 +2446,7 @@
     }
     pick(b) {
       const k = this.stage;
-      if (k === "cmp") return;
+      if (k === "cmp" || this.tooBig(k)) return;
       if (PNR.has(k)) {
         if (!this.pnr || this.anim) return;
         const n = this.pnr.lcs.length + this.pnr.ios.length;

@@ -60,6 +60,10 @@ label.inl { flex-direction: row; align-items: center; gap: 6px; font-size: 12px;
 #synBody { flex: 1; display: flex; min-height: 0; }
 #synCanvasWrap { flex: 3; position: relative; overflow: hidden; background: #171c24; }
 #synCanvas { display: block; position: absolute; inset: 0; cursor: grab; touch-action: none; }
+/* a stage with nothing to draw (too many cells): why, in the middle of the canvas */
+#synEmpty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: #9aa7b4; font-size: 13px; line-height: 1.6; pointer-events: none; }
+#synEmpty b { color: #e6edf3; font-size: 15px; font-weight: 500; }
+#synEmpty .types { font-size: 12px; color: #7d8b99; max-width: 560px; }
 #synZoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
 #synZoom button { width: 32px; height: 32px; padding: 0; }
 #synSide { flex: 1; min-width: 280px; max-width: 400px; overflow: auto; background: #232b36; border-left: 1px solid #3a4a5e; padding: 10px 12px; font-size: 12px; }

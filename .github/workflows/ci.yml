@@ -65,6 +65,7 @@ jobs:
           npm ci
           npm run build
           npm test
+          npm run e2e
 
       # the site keeps the old URL layout: <site>/web/dist/index.html (the IDE), demo.html, ide.html (redirect)
       - name: Pages content

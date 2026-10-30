@@ -77,7 +77,7 @@ The features are exactly the same as on desktop (the same page); URL parameters 
 ## Projects
 
 - Projects are stored in the browser's localStorage (saved automatically on every edit; they are gone if you switch computers or clear site data — download anything important).
-- The welcome page (shown the first time you open the IDE; reopen from "Welcome page" in the command menu) first asks **what do you want to do?** (v2.28), with four cards, each with a starting example:
+- The welcome page (shown the first time you open the IDE; reopen from "Welcome page" in the command menu) first asks **what do you want to do?** (v2.28), with five cards, each with a starting example:
 
   | Card | Starting example | "Start here" does |
   |---|---|---|
@@ -85,6 +85,7 @@ The features are exactly the same as on desktop (the same page); URL parameters 
   | ⚡ Build a circuit and put it on a board (like Arduino) | Lab: traffic-light state machine | Open and flash to the virtual board (breadboard already wired) |
   | 🖥 Boot a computer and write programs (like a Raspberry Pi) | RV64 board | Open and boot |
   | ⚙ See the circuit become a chip | FIFO 256×8 | Open and synthesize |
+  | ⇶ Write dataflow in Fluxa | FIR filter (Fluxa) | Open and run the tests ([chapter 17](17-fluxa.md)) |
 
   "See examples like this" opens the example library filtered to that category. Below are ＋ New project, 📚 Open example, ⇪ Import `.veryl` files, and recent projects.
   Choosing a card only decides where you start; the interface is never locked: the main button and ▾ keep following the project.

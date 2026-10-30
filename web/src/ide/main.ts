@@ -559,20 +559,21 @@ function renderExamples(): void {
 // ---------------------------------------------------------------- where to start
 
 /** what the example list shows: every example, or those that can do one thing */
-type ExFilter = 'all' | 'test' | 'board' | 'emu' | 'synth';
+type ExFilter = 'all' | 'test' | 'board' | 'emu' | 'synth' | 'fluxa';
 let exFilter: ExFilter = load<ExFilter>('exFilter', 'all');
-const EX_FILTERS = (): [ExFilter, string][] => [['all', tr('全部', 'All')], ['test', '🧪'], ['board', '⚡'], ['emu', '🖥'], ['synth', '⚙']];
+const EX_FILTERS = (): [ExFilter, string][] => [['all', tr('全部', 'All')], ['test', '🧪'], ['board', '⚡'], ['emu', '🖥'], ['synth', '⚙'], ['fluxa', 'Fluxa']];
 function filterHint(f: ExFilter): string {
   return f === 'all' ? tr('所有範例', 'every example') : f === 'test' ? tr('有 testbench：▶ 測試、看波形', 'with testbenches: ▶ Test, waveforms')
     : f === 'board' ? tr('能放上虛擬板（有腳位）', 'go on the virtual board (have pins)') : f === 'emu' ? tr('一台機器：🖥 模擬機開機', 'a machine: boot it in the 🖥 emulator')
+    : f === 'fluxa' ? tr('Fluxa 程式：任務與通道，▶ 跑它的 test', 'Fluxa programs: tasks and channels, ▶ runs their tests')
     : tr('能合成：FPGA、ASIC 晶片版圖', 'can be synthesized: FPGA, ASIC layout');
 }
-function exMatches(ex: Example, f: ExFilter): boolean { return f === 'all' || caps(exCapIn(ex))[f].on; }
+function exMatches(ex: Example, f: ExFilter): boolean { return f === 'all' || (f === 'fluxa' ? ex.lang === 'fluxa' : caps(exCapIn(ex))[f].on); }
 const exCount = (f: ExFilter) => examples().filter(e => exMatches(e, f)).length;
 function setExFilter(f: ExFilter): void { exFilter = f; save('exFilter', f); renderExamples(); }
 
 /** the welcome page's starting points: what the user wants to do, an example to begin with, the matching examples */
-type Goal = 'learn' | 'board' | 'emu' | 'chip';
+type Goal = 'learn' | 'board' | 'emu' | 'chip' | 'fluxa';
 const goals = (): { goal: Goal; icon: string; title: string; text: string; ex: string; filter: ExFilter }[] => [
   { goal: 'learn', icon: '🧪', title: tr('學 Veryl', 'Learn Veryl'), ex: 'tut_blinky', filter: 'test',
     text: tr('從教學第 1 課開始：寫電路和它的 testbench，跑測試、看波形。', 'Begin with lesson 1 of the tutorial: write a circuit and its testbench, run the tests, read the waveform.') },
@@ -582,6 +583,8 @@ const goals = (): { goal: Goal; icon: string; title: string; text: string; ex: s
     text: tr('像樹莓派：RV64 開發板開 Linux，用 MicroPython、C 控制 GPIO、麵包板和螢幕。', 'Like a Raspberry Pi: the RV64 board boots Linux; MicroPython and C drive its GPIO, breadboard and screen.') },
   { goal: 'chip', icon: '⚙', title: tr('看電路變成晶片', 'See the circuit become a chip'), ex: 'fifo', filter: 'synth',
     text: tr('合成成邏輯閘，放進 FPGA 佈局繞線，或做成 SKY130 晶片版圖。', 'Synthesize it to gates, place and route it on an FPGA, or make a SKY130 chip layout.') },
+  { goal: 'fluxa', icon: '⇶', title: tr('用 Fluxa 寫資料流', 'Write dataflow in Fluxa'), ex: 'fx_fir', filter: 'fluxa',
+    text: tr('高階合成語言：用通道連接的任務，像 FIR 濾波器、脈動陣列、管線化 CPU；跑 test、看每條通道的統計。', 'The high-level synthesis language: tasks connected by channels, like a FIR filter, a systolic array, a pipelined CPU; run the tests, see each channel\'s statistics.') },
 ];
 
 /** a starting point: its example (opened, or switched to), the first thing to do, the matching examples in the list */
@@ -595,7 +598,7 @@ async function startGoal(goal: Goal): Promise<void> {
   renderExamples();
   if (!core) return;
   await check();
-  if (goal === 'learn') runTests();
+  if (goal === 'learn' || goal === 'fluxa') runTests();
   else if (goal === 'board') flashBoard();
   else if (goal === 'emu') openEmu();
   else runSynth();
@@ -1429,7 +1432,7 @@ function showWhy(a: Act, anchor: HTMLElement): void {
 }
 function hideWhy(): void { $('capPop').classList.add('hidden'); }
 
-/** the suggested steps above the editor (closed with ×, back from the command palette) */
+/** the suggested steps above the editor, one line (each step's explanation is its tooltip; closed with ×, back from the command palette) */
 function renderGuide(): void {
   const g = $('guide');
   // the welcome page has its own starting points
@@ -1438,7 +1441,7 @@ function renderGuide(): void {
   if (!show) return;
   const ci = capIn();
   g.innerHTML = `<span class="lbl">${tr('建議步驟', 'Suggested steps')}</span>`
-    + steps(ci).map((a, i) => `<button class="step${i ? '' : ' first'}" data-step="${a}"><b>${'①②③'[i]} ${esc(actName(a))}</b><span>${esc(actHint(a, ci))}</span></button>`).join('<span class="arr">→</span>')
+    + steps(ci).map((a, i) => `<button class="step${i ? '' : ' first'}" data-step="${a}" title="${attr(actHint(a, ci))}"><b>${'①②③'[i]} ${esc(actName(a))}</b></button>`).join('<span class="arr">→</span>')
     + `<button class="close" title="${attr(tr('關閉（命令選單的「顯示建議步驟」可以再打開）', 'Close (the command palette\'s "Show the suggested steps" brings it back)'))}">×</button>`;
 }
 

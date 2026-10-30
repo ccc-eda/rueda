@@ -33,7 +33,8 @@ cargo test --release -p rueda-veryl-synth       # 合成所有範例、在網表
 cargo test --release -p rueda --test cli        # 只測 reda 的各個子指令
 veryl/synth/test.sh                             # 形式等價 + FPGA 流程 + SKY130（含 GDS 檢查）
 veryl/synth/fpga/pnr_test.sh                    # 自己的佈局繞線：每個設計的位元流 vs 網表 + icetime
-cd web && npm test                              # 網頁（要先 npm run build）
+cd web && npm test                              # 網頁核心與 IDE 邏輯（要先 npm run build）
+cd web && npm run e2e                           # 在 Chrome 裡端對端測 IDE（Playwright）：流程圖、建議步驟、Fluxa
 ```
 
 `veryl/synth/test.sh` 用到的環境變數：

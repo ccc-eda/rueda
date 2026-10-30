@@ -132,6 +132,7 @@ export class SynthOverlay {
     this.nets.clear();
     this.note(tr('合成中…', 'Synthesizing…'));
     $('synSide').innerHTML = '';
+    this.empty(null);
     this.view.set({ boxes: [], lines: [], texts: [] });
     this.buttons();
     const t0 = performance.now();
@@ -341,9 +342,23 @@ export class SynthOverlay {
     $('synStats').innerHTML = items.join('<span class="sep">│</span>');
   }
 
+  /** a netlist stage whose netlist was too big to send (cell counts only): nothing to draw or pick */
+  private tooBig(key: string): boolean {
+    return (key === 'raw' || key === 'opt') && this.res?.[key].n !== undefined;
+  }
+
+  /** the canvas's message when a stage has nothing to draw (null: none) */
+  private empty(html: string | null): void {
+    const e = document.getElementById('synEmpty');
+    if (!e) return;
+    e.innerHTML = html ?? '';
+    e.classList.toggle('hidden', html === null);
+  }
+
   private show(key: string): void {
     if (!this.res) return;
     this.stopAnim();
+    this.empty(null);
     this.stage = key;
     this.sel = null;
     for (const b of $('synChips').querySelectorAll('button')) b.classList.toggle('cur', (b as HTMLElement).dataset.key === key);
@@ -393,6 +408,9 @@ export class SynthOverlay {
       this.view.set({ boxes: [], lines: [], texts: [] });
       this.side(document.createElement('div'));
       const types = Object.entries(nl.types ?? {}).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${shortType(t)} ${n}`).join('  ');
+      this.empty(`<b>${tr(`${nl.n} 個元件，太多了，不畫出來`, `${nl.n} cells: too many to draw`)}</b>`
+        + `<span>${tr('這個階段記憶體還是一個個正反器和讀取多工器；選 ④ LUT4 Techmap 看對應後的電路（block RAM、LUT）。', 'At this stage the memories are still flip-flops and read multiplexers; pick ④ LUT4 Techmap for the mapped circuit (block RAM, LUTs).')}</span>`
+        + `<span class="types">${esc(types)}</span>`);
       this.info([
         key === 'raw' ? '② Logic Netlist' : tr('③ Tech-indep Syn（與技術無關的最佳化）', '③ Tech-indep Syn (technology-independent optimization)'),
         tr(`${nl.n} 個元件，太多了，不畫出來：在這個階段記憶體還是一個個正反器和讀取多工器，到了 ④ 才變成 block RAM（SB_RAM40_4K）。`,
@@ -830,7 +848,7 @@ export class SynthOverlay {
     const k = this.stage;
     if (PNR.has(k)) { if (this.pnr) this.drawPnr(false); return; }
     if (APHYS.has(k)) { if (this.asic) this.drawAsic(false); return; }
-    if (!isNet(k)) return;
+    if (!isNet(k) || this.tooBig(k)) return;
     const v = this.netView(k);
     const all = this.edges && edgeCount(v.nl) <= 6000;
     for (const b of v.lay.scene.boxes) b.hl = b.id === this.sel;
@@ -954,7 +972,7 @@ export class SynthOverlay {
 
   private pick(b: Box | null): void {
     const k = this.stage;
-    if (k === 'cmp') return;
+    if (k === 'cmp' || this.tooBig(k)) return;
     if (PNR.has(k)) {
       if (!this.pnr || this.anim) return;
       const n = this.pnr.lcs.length + this.pnr.ios.length;

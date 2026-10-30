@@ -40,10 +40,14 @@ export class CanvasView {
   private raf = 0;
   /** keep fitting the scene to the canvas until the user pans or zooms */
   private autoFit = true;
+  /** a fit asked for while the canvas had no size (hidden, not laid out yet): done at the first paint that has one */
+  private pendingFit = false;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
     new ResizeObserver(() => { if (this.autoFit) this.fit(); else this.redraw(); }).observe(canvas.parentElement!);
+    // a scene set while the canvas was hidden is painted (and fitted) when it shows
+    new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { if (this.autoFit) this.fit(); else this.redraw(); } }).observe(canvas);
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const r = canvas.getBoundingClientRect();
@@ -104,7 +108,9 @@ export class CanvasView {
   fit(): void {
     this.autoFit = true;
     const r = this.canvas.parentElement!.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return;
+    // no size yet: fit at the first paint that has one (never leave the new scene unpainted)
+    if (r.width < 2 || r.height < 2) { this.pendingFit = true; this.redraw(); return; }
+    this.pendingFit = false;
     const [x0, y0, x1, y1] = this.bounds();
     const pad = 20;
     const s = Math.min((r.width - 2 * pad) / Math.max(x1 - x0, 1), (r.height - 2 * pad) / Math.max(y1 - y0, 1));
@@ -137,6 +143,7 @@ export class CanvasView {
   private paint(): void {
     const c = this.canvas, ctx = this.ctx;
     const r = c.parentElement!.getBoundingClientRect();
+    if (this.pendingFit && r.width >= 2 && r.height >= 2) { this.fit(); return; }
     const dpr = window.devicePixelRatio || 1;
     if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
       c.width = Math.round(r.width * dpr);
