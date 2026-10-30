@@ -13,6 +13,8 @@ pub mod asic;
 pub mod bram;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod flow;
 pub mod fpga;
 pub mod netlist;
 pub mod netsim;
