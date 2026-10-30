@@ -274,7 +274,3 @@ UART 接到分頁裡的終端機。
 
 例：`index.html#ex=tut_knight&board=1`、`index.html#ex=fifo&stage=adetail&pdk=sky130`。
 範例的 ID 在 `web/build.mjs`。
-
-## 展示頁
-
-`demo.html` 是最早的單頁展示（繁體中文）：選範例、模擬、合成流程以全螢幕覆蓋顯示。功能是 IDE 的子集。

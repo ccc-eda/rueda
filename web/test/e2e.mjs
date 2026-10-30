@@ -160,6 +160,16 @@ for (const size of SIZES) {
     return errors.length ? `page errors: ${errors[0]}` : null;
   });
 
+  // the largest Fluxa example: the RV64G processor's 90 tests run in the browser (the cooperative scheduler)
+  await check('Fluxa RV64 example: all tests pass in the browser', size, async () => {
+    const { ctx, page } = await open(size, '#ex=fx_rv64');
+    await page.click('#mainBtn');
+    await page.waitForSelector('#p-results .banner', { timeout: 120000 });
+    const banner = await page.textContent('#p-results .banner');
+    await ctx.close();
+    return /✓ 90 /.test(banner) ? null : `tests: ${banner}`;
+  });
+
   // a Fluxa example from the list: the deadlock is reported, synthesis is off
   await check('Fluxa deadlock example reported, synthesis off', size, async () => {
     const { ctx, page } = await open(size, '#ex=fx_deadlock');

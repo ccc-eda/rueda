@@ -275,7 +275,3 @@ Parameters can follow the `#` in the URL, joined with `&`, handy in course mater
 
 Example: `index.html#ex=tut_knight&board=1`, `index.html#ex=fifo&stage=adetail&pdk=sky130`.
 Example IDs are in `web/build.mjs`.
-
-## Demo page
-
-`demo.html` is the original single-page demo (Traditional Chinese): pick an example, simulate, and the synthesis flow is shown as a full-screen overlay. A subset of the IDE's features.

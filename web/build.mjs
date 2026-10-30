@@ -1,15 +1,14 @@
 // Build the front-end-only web environment into dist/:
 //   wasm.js      the Rust core (web/wasm) as base64, so file:// works
 //   examples.js  example projects (sources read from the repository)
-//   app.js       TypeScript UI bundled by esbuild into one classic script
 //   api.cjs      the same core API for the Node tests
-//   ide.js       the IDE page (M11), same core
+//   ide.js       the IDE (TypeScript bundled by esbuild into one classic script)
 //   img_linux.js the emulator's Linux image for the RV64 example (OpenSBI + Linux + busybox, gzip + base64),
 //                loaded by the page only when the emulator boots it
 //   img_snap_linux.js  the same machine booted to its shell (snapshot.mjs: memory, gzip + base64), so the
 //                board starts in seconds; remade only when the model or the image changed
 // Usage: node build.mjs [--skip-wasm] [--skip-snapshot]
-//   index.html (the IDE), ide.css, demo.html (the demo page), style.css, ide.html (redirects to index.html)
+//   index.html (the IDE), ide.css, style.css, ide.html (redirects to index.html)
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -203,6 +202,10 @@ const EX = [
   { id: 'fx_rv32i', group: 'Fluxa', lang: 'fluxa', title: 'RV32I 處理器（四個 task 的管線）', title_en: 'RV32I processor (a pipeline of four tasks)',
     files: ['fluxa/rv32i/tests_basic.fx', 'fluxa/rv32i/rv32i.fx'],
     note: 'Fetch / Decode / Execute / Mem 四個 task 用通道串成管線；tests_basic.fx 用內建組譯器寫測試程式', note_en: 'Fetch / Decode / Execute / Mem tasks chained by channels; tests_basic.fx writes its programs with the built-in assembler' },
+  { id: 'fx_rv64', group: 'Fluxa', lang: 'fluxa', title: 'RV64G 處理器（M/S/U、Sv39、FPU、迷你 OS）', title_en: 'RV64G processor (M/S/U, Sv39, FPU, a mini OS)',
+    files: ['tests_basic.fx', 'rv64.fx', 'fpu.fx', 'smoke.fx', 'tests_mmu.fx', 'tests_amo.fx', 'tests_fp.fx', 'tests_irq.fx', 'tests_system.fx'].map((f) => `fluxa/rv64/${f}`),
+    note: 'RV64IMAFD + Zicsr，M / S / U 特權模式、Sv39 MMU、計數器與 timer 中斷、整數精確的 IEEE-754 FPU（fpu.fx），以及在上面跑的迷你 OS（tests_system.fx）；90 個 test。FPU 的 1.2 MB 隨機測試向量（tests_fpu.fx）只在命令列跑：fluxa/rv64.sh',
+    note_en: 'RV64IMAFD + Zicsr, M / S / U privilege modes, an Sv39 MMU, counters and timer interrupts, an integer-exact IEEE-754 FPU (fpu.fx) and a mini OS running on it (tests_system.fx); 90 tests. The FPU\'s 1.2 MB of random test vectors (tests_fpu.fx) run on the command line only: fluxa/rv64.sh' },
   { id: 'alu_fail', group: '其他', title: 'Alu（含一個故意失敗的斷言）', files: ['veryl/sim/examples/alu.veryl'], synth: 'Alu',
     note: '示範斷言失敗的樣子：tb_alu 有一個 "should fail on purpose" 的斷言' },
 ].map((e) => ({ ...e, ...EN[e.id], group_en: GROUP_EN[e.group], pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined, machine: undefined,
@@ -241,16 +244,14 @@ const worker = await esbuild.build({ entryPoints: [path.join(here, 'src/worker.t
 const workerSrc = worker.outputFiles[0].text;
 const emuWorker = await esbuild.build({ entryPoints: [path.join(here, 'src/emu_worker.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
 const emuWorkerSrc = emuWorker.outputFiles[0].text;
-await esbuild.build({ entryPoints: [path.join(here, 'src/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'app.js'), logLevel: 'warning',
-  define: { WORKER_SRC: JSON.stringify(workerSrc) } });
 await esbuild.build({ entryPoints: [path.join(here, 'src/ide/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'ide.js'), logLevel: 'warning',
   define: { WORKER_SRC: JSON.stringify(workerSrc), EMU_WORKER_SRC: JSON.stringify(emuWorkerSrc) } });
 // the emulator's machine for the Node tests
 await esbuild.build({ entryPoints: [path.join(here, 'src/emu_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'emu_machine.cjs'), logLevel: 'warning' });
 await esbuild.build({ entryPoints: [path.join(here, 'src/rv_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'rv_machine.cjs'), logLevel: 'warning' });
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
-for (const f of ['index.html', 'ide.css', 'demo.html', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
-console.log('app.js, ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');
+for (const f of ['index.html', 'ide.css', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
+console.log('ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, style.css, ide.html (redirect)');
 
 // ---- the emulator's snapshots (needs dist/: after everything above) ----
 if (!process.argv.includes('--skip-snapshot')) execFileSync('node', [path.join(here, 'snapshot.mjs')], { cwd: here, stdio: 'inherit' });

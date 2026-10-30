@@ -3,7 +3,7 @@
 
 这是 [rueda](../README.tw.md) 里原本叫 veryl2chip 的部分；它原本包含、与语言无关的后端现在在 [`eda/`](../eda/)。
 
-**在线直接使用**（免安装）：[IDE](https://ccc-eda.github.io/rueda/web/dist/index.html) · [展示页](https://ccc-eda.github.io/rueda/web/dist/demo.html)
+**在线直接使用**（免安装）：[IDE](https://ccc-eda.github.io/rueda/web/dist/index.html)
 
 **从零开始的教学**（课程教材）：[写 Veryl → 仿真 → 看波形 → 综合 → 烧进 iCEBreaker](tutorial/README.tw.md)；**虚拟实验课**（不用买板子）：[虚拟 iCEBreaker 上的 8 个实验](tutorial/labs.tw.md)
 
@@ -40,24 +40,7 @@ Veryl HDL 的 EDA 工具：仿真、逻辑综合、FPGA 流程（iCE40UP5K，一
 `index.html#ex=fifo&stage=place` 会打开某个示例并跳到某个阶段；加上 `&run=1` / `&verify=1` 会直接开始测试，`&board=1` 会刻录到虚拟板。
 IDE 以前是 `ide.html`：那一页现在会（带着 `#…`）转到 `index.html`，旧链接照样能用。
 
-### 展示页
-`web/dist/demo.html` 是原本较简单的展示页，用同一个内核（接口只有繁体中文）：
-
-- **源代码**：示例项目（每个可有多个文件，含 UART、FIFO、VGA）放在编辑器里；修改存在浏览器（localStorage）。
-  可以添加文件（附模块 + testbench 范本）、删除、导入，也能把项目下载成 `.zip`（`Veryl.toml` + `src/`），
-  官方的 `veryl build` / `veryl test` 可以直接使用。
-- **▶ 仿真**：在 WebAssembly 里运行所有 `#[test]` testbench，有输出记录、可点的错误位置与波形查看。
-  旁边的菜单可切到**综合后仿真**：把示例的设计模块换成综合出来的网表（通用门、iCE40 LUT / block RAM、
-  或标准单元），用同一个 testbench 跑。
-- **⚙ 综合**：综合查看。每个阶段都有报告、可缩放的图与细节侧栏：
-  - 共用：① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn
-  - FPGA：④ LUT4 Techmap → ⑤ Placement（退火动画）→ ⑥ Global+Detail Routing → ⑦ Timing (STA)。
-    可下载 `.asc`、`.pcf` 与 `.bin`；`.bin` 与 icepack 的输出逐字节相同，可用 `iceprog` 刻录。
-  - ASIC：④ Standard Cell Map → ⑤ Row Placement（动画）→ ⑥ CTS + Global Routing → ⑦ Detail Routing →
-    ⑧ Timing (STA) → ⑨ Power + IR Drop。可下载标准单元 Verilog 与 DEF。
-  - ⇄ FPGA vs ASIC：两种布局并排，加上比较表（单元、面积、布线、Fmax、能量、功耗）。
-
-网址的 hash 可以指定示例与阶段，例如 `demo.html#ex=soc&synth=1&target=asic`（IDE 也接受同样的 hash）。
+网址的 hash 可以指定示例与阶段，例如 `index.html#ex=soc&synth=1&target=asic`。
 
 在项目根目录一次建置、一次测试全部：
 

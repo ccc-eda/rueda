@@ -67,7 +67,7 @@ jobs:
           npm test
           npm run e2e
 
-      # the site keeps the old URL layout: <site>/web/dist/index.html (the IDE), demo.html, ide.html (redirect)
+      # the site keeps the old URL layout: <site>/web/dist/index.html (the IDE), ide.html (redirect)
       - name: Pages content
         if: github.event_name != 'pull_request'
         run: |
@@ -78,7 +78,7 @@ jobs:
           <meta charset="utf-8">
           <meta http-equiv="refresh" content="0; url=web/dist/index.html">
           <title>rueda</title>
-          <a href="web/dist/index.html">rueda IDE</a> · <a href="web/dist/demo.html">demo</a>
+          <a href="web/dist/index.html">rueda IDE</a>
           HTML
 
       - name: Setup Pages

@@ -3,7 +3,7 @@
 
 This part of [rueda](../README.md) was the veryl2chip project; the language-independent back end it used to contain now lives in [`eda/`](../eda/).
 
-**Try it online** (no install): [IDE](https://ccc-eda.github.io/rueda/web/dist/index.html) · [demo page](https://ccc-eda.github.io/rueda/web/dist/demo.html)
+**Try it online** (no install): [IDE](https://ccc-eda.github.io/rueda/web/dist/index.html)
 
 **Tutorial from scratch** (Traditional Chinese, course material): [write Veryl → simulate → waveforms → synthesize → flash an iCEBreaker](tutorial/README.tw.md); **virtual lab course** (no board needed): [8 labs on the virtual iCEBreaker](tutorial/labs.tw.md)
 
@@ -41,24 +41,7 @@ Open `web/dist/index.html` in a browser: a VS Code style IDE. It needs no server
 `index.html#ex=fifo&stage=place` opens an example at a stage; `&run=1` / `&verify=1` start the tests, `&board=1` flashes the virtual board.
 The IDE used to be `ide.html`: that page now forwards to `index.html` (with the `#…`), so old links keep working.
 
-### Demo page
-`web/dist/demo.html` is the original, simpler page on the same core (interface in Traditional Chinese only):
-
-- **Source**: example projects (several files each, incl. UART, FIFO and VGA) in an editor; edits are kept in the browser
-  (localStorage). Files can be added (with a module + testbench template), deleted or imported, and the project
-  downloaded as a `.zip` (`Veryl.toml` + `src/`) that the official `veryl build` / `veryl test` accept.
-- **▶ 模擬**: runs every `#[test]` testbench in WebAssembly, with a log, clickable errors and a waveform viewer.
-  The selector next to it switches to **post-synthesis simulation**: the example's design module is replaced by its
-  synthesized netlist (generic gates, iCE40 LUTs / block RAM, or standard cells) under the same testbench.
-- **⚙ 合成**: the synthesis view. Each stage shows a report, a zoomable drawing and a detail panel:
-  - common: ① RTL→Logic → ② Logic Netlist → ③ Tech-indep Syn
-  - FPGA: ④ LUT4 Techmap → ⑤ Placement (annealing animation) → ⑥ Global+Detail Routing → ⑦ Timing (STA).
-    Downloads: `.asc`, `.pcf` and `.bin`. The `.bin` is byte-identical to icepack's and can be flashed with `iceprog`.
-  - ASIC: ④ Standard Cell Map → ⑤ Row Placement (animation) → ⑥ CTS + Global Routing → ⑦ Detail Routing →
-    ⑧ Timing (STA) → ⑨ Power + IR Drop. Downloads: standard-cell Verilog and DEF.
-  - ⇄ FPGA vs ASIC: both placements side by side and a table (cells, area, wiring, Fmax, energy, power).
-
-The URL hash selects an example and stage, e.g. `demo.html#ex=soc&synth=1&target=asic` (the IDE accepts the same hash).
+The URL hash selects an example and stage, e.g. `index.html#ex=soc&synth=1&target=asic`.
 
 Build and test everything from the repository root:
 

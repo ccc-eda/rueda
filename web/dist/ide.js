@@ -5518,10 +5518,6 @@ test ${task.toLowerCase()}_doubles {
     showActive();
     changed();
     persist();
-    demoLink();
-  }
-  function demoLink() {
-    $2("demoLink").href = "demo.html" + (proj.from ? "#ex=" + proj.from : "");
   }
   function mainFile(p) {
     const has = (n) => !!n && p.files.some((f) => f.name === n);
@@ -7070,7 +7066,6 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     fillStages();
     showActive();
     renderProblems();
-    demoLink();
     if (labCode) await labFromHash(labCode);
     try {
       const t0 = performance.now();

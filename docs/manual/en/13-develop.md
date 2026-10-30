@@ -74,7 +74,7 @@ a front end (Veryl today, Fluxa later) produces it, and nothing after it knows t
 | `riscv/rvtools/` | the C compiler, assembler and RV32IMA instruction-set simulator |
 | `riscv/rvemu/` | the RV64 board's instruction-set emulator (with a WebAssembly JIT) |
 | `fluxa/` | the Fluxa language: `sim/` its simulator (a Kahn process network interpreter), `examples/`, `rv32i/`, `rv64/`, `docs/` |
-| `web/` | the IDE and demo page (TypeScript); `web/wasm/` the WebAssembly core (C ABI, JSON in and out); `web/dist/` the built page (committed to git) |
+| `web/` | the IDE (TypeScript); `web/wasm/` the WebAssembly core (C ABI, JSON in and out); `web/dist/` the built page (committed to git) |
 | `docs/manual/` | this manual |
 
 More detail is in `AGENTS.md` and `web/PLAN.md`.

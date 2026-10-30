@@ -74,7 +74,7 @@ rueda 是一個 Cargo workspace。閘級網表（`eda::netlist::Netlist`）是�
 | `riscv/rvtools/` | C 編譯器、組譯器、RV32IMA 指令集模擬器 |
 | `riscv/rvemu/` | RV64 開發板的指令集模擬機（含 WebAssembly JIT） |
 | `fluxa/` | Fluxa 語言：`sim/` 模擬器（Kahn 程序網路直譯器）、`examples/`、`rv32i/`、`rv64/`、`docs/` |
-| `web/` | IDE 與展示頁（TypeScript）；`web/wasm/` WebAssembly 核心（C ABI，JSON 進出）；`web/dist/` 建好的網頁（提交進 git） |
+| `web/` | IDE（TypeScript）；`web/wasm/` WebAssembly 核心（C ABI，JSON 進出）；`web/dist/` 建好的網頁（提交進 git） |
 | `docs/manual/` | 本手冊 |
 
 更多細節見 `AGENTS.md`、`web/PLAN.md`。

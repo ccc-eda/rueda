@@ -390,7 +390,7 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
    larger text and touch targets; the stacked flow view */
 @media (max-width: 760px) {
   #titlebar { height: auto; min-height: 40px; flex-wrap: wrap; gap: 6px; padding: 4px 6px; overflow: visible; }
-  #titlebar .brand, #demoLink { display: none; }
+  #titlebar .brand { display: none; }
   .tb-group { display: contents; }
   #mainAct { order: 1; } #titlebar > .spacer { order: 3; } #cmdPalette { order: 4; } #tbMore { order: 5; display: inline-block; }
   #titlebar .tb-group, body.basic.tab-flow #grpFlow { display: none; }

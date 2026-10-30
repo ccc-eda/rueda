@@ -274,7 +274,3 @@ UART 接到分页里的终端机。
 
 例：`index.html#ex=tut_knight&board=1`、`index.html#ex=fifo&stage=adetail&pdk=sky130`。
 示例的 ID 在 `web/build.mjs`。
-
-## 展示页
-
-`demo.html` 是最早的单页展示（繁体中文）：选示例、仿真、综合流程以全屏幕覆盖显示。功能是 IDE 的子集。

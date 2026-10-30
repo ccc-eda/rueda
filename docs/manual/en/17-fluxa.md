@@ -52,7 +52,8 @@ regression tests run every example both ways and compare).
 - **▶ Run** runs the tests (all of them, or one from the Tests side bar). The Output panel shows each test's `print`
   output, `[PASS]` / `[FAIL]` with the reason, and the channel statistics.
 - The example library has a **Fluxa** group: basics, a FIR filter, a multiply-accumulate unit, a systolic-array
-  matrix multiply, a broadcast fan-out, a deadlock (on purpose) and an RV32I processor written as four pipelined tasks.
+  matrix multiply, a broadcast fan-out, a deadlock (on purpose), an RV32I processor written as four pipelined tasks, and an
+  RV64G processor (M/S/U modes, Sv39, an IEEE-754 FPU, a mini OS; 90 tests).
 
 ## What is not there yet
 

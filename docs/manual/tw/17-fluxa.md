@@ -50,7 +50,8 @@ reda list fluxa/examples/fir.fx                 # 列出 test
 - **▶ 執行** 跑 test（全部，或從側欄的「測試」點一個）。「輸出」面板顯示每個 test 的 `print` 輸出、
   `[PASS]` / `[FAIL]` 與原因，以及通道統計。
 - 範例庫有 **Fluxa** 一組：基本語法、FIR 濾波器、乘加器、脈動陣列矩陣乘法、broadcast 扇出、（故意的）死結，
-  以及用四個管線任務寫成的 RV32I 處理器。
+  用四個管線任務寫成的 RV32I 處理器，
+  以及 RV64G 處理器（M/S/U 特權模式、Sv39、IEEE-754 FPU、迷你 OS；90 個 test）。
 
 ## 還沒有的
 

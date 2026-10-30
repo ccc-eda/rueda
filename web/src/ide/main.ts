@@ -397,11 +397,6 @@ function switchProject(id: string): void {
   showActive();
   changed();
   persist();
-  demoLink();
-}
-
-function demoLink(): void {
-  $<HTMLAnchorElement>('demoLink').href = 'demo.html' + (proj.from ? '#ex=' + proj.from : '');
 }
 
 /** the file a project opens on: its example's first file, else a program for the board, else the first .veryl file */
@@ -1921,7 +1916,6 @@ async function boot(): Promise<void> {
   fillStages();
   showActive();
   renderProblems();
-  demoLink();
   if (labCode) await labFromHash(labCode);
   try {
     const t0 = performance.now();
