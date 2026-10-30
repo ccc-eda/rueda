@@ -5,7 +5,7 @@
 //! moves into a free run of sites, or two cells swap places).
 
 use crate::netlist::{Bit, Dir, Netlist};
-use crate::pnr::place::Rng;
+use crate::fpga::pnr::place::Rng;
 use std::collections::HashMap;
 
 #[derive(Clone)]

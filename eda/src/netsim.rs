@@ -41,14 +41,14 @@ impl<'n> NetSim<'n> {
     }
 
     /// ports wider than 128 bits
-    pub fn set_wide(&mut self, name: &str, val: crate::value::Bits) {
+    pub fn set_wide(&mut self, name: &str, val: bits::Bits) {
         for (i, b) in self.port(name).bits.iter().enumerate() {
             if let Bit::W(w) = b { self.v.insert(*w, val.bit(i as u32)); }
         }
         self.settle();
     }
-    pub fn get_wide(&self, name: &str) -> crate::value::Bits {
-        let mut v = crate::value::Bits::ZERO;
+    pub fn get_wide(&self, name: &str) -> bits::Bits {
+        let mut v = bits::Bits::ZERO;
         for (i, b) in self.port(name).bits.iter().enumerate() { if self.get_bit(*b) { v.0[i / 64] |= 1 << (i % 64); } }
         v
     }
@@ -91,7 +91,7 @@ impl<'n> NetSim<'n> {
             for c in &self.nl.cells {
                 if c.is_ff() || c.typ == "SB_RAM40_4K" || c.typ == "SRAM" || c.typ == "DP16KD" || c.typ == "DIODE" { continue; }
                 if c.typ == "CCU2C" {
-                    let (s0, s1, co) = crate::ecp5::ccu2c(c, |p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
+                    let (s0, s1, co) = crate::fpga::ecp5::ccu2c(c, |p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
                     for (p, v) in [("S0", s0), ("S1", s1), ("COUT", co)] {
                         if let Some(Bit::W(w)) = c.port(p) { self.v.insert(w, v); }
                     }
@@ -251,10 +251,10 @@ impl<'n> NetSim<'n> {
         }
         // ECP5 DP16KD as ecp5::brams uses it (2048 × 9, port A writes, port B reads)
         for (i, c) in self.nl.cells.iter().enumerate().filter(|(i, c)| c.typ == "DP16KD" && sel[*i]) {
-            let (wa, wd, ra, re, we) = crate::ecp5::dp16kd_ports(|p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
+            let (wa, wd, ra, re, we) = crate::fpga::ecp5::dp16kd_ports(|p| self.get_bit(c.port(p).unwrap_or(Bit::C0)));
             let mem = self.sram.entry(i).or_insert_with(|| vec![0; 2048]);
             if re {
-                for (k, p) in crate::ecp5::DOB.iter().enumerate() {
+                for (k, p) in crate::fpga::ecp5::DOB.iter().enumerate() {
                     if let Some(Bit::W(w)) = c.port(p) { next_ram.push((w, (mem[ra] >> k) & 1 == 1)); }
                 }
             }

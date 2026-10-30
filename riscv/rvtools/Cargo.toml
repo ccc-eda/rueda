@@ -1,0 +1,10 @@
+[package]
+name = "rueda-rvtools"
+description = "RISC-V software tools: a C compiler (RV32 SoC programs, RV64 Linux executables), an assembler and an RV32IMA instruction-set simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "rvtools"

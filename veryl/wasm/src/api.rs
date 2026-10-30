@@ -2,8 +2,8 @@
 
 use serde_json::{json, Value};
 use std::cell::RefCell;
-use veryl_eda::netlist::{Bit, Dir, Netlist};
-use veryl_eda::pnr::chipdb::{Chip, Kind};
+use eda::netlist::{Bit, Dir, Netlist};
+use eda::fpga::pnr::chipdb::{Chip, Kind};
 
 thread_local! {
     static CHIP: RefCell<Option<Chip>> = const { RefCell::new(None) };
@@ -13,7 +13,7 @@ pub fn set_chip(c: Chip) { CHIP.with(|x| *x.borrow_mut() = Some(c)); }
 
 thread_local! {
     /// the virtual iCEBreaker: the loaded design (kept for power cycles), its pin file and the running board
-    static BOARD: RefCell<Option<(veryl_eda::board::Design, Option<String>, veryl_eda::board::Board, Value)>> = const { RefCell::new(None) };
+    static BOARD: RefCell<Option<(eda::fpga::board::Design, Option<String>, eda::fpga::board::Board, Value)>> = const { RefCell::new(None) };
 }
 
 thread_local! {
@@ -24,7 +24,7 @@ thread_local! {
 
 enum Loaded {
     Netlist(Netlist),
-    Bitstream { asc: String, map: Vec<veryl_eda::pnr::RamPos> },
+    Bitstream { asc: String, map: Vec<eda::fpga::pnr::RamPos> },
     /// RvSoc with its CPU as an instruction-set simulator: the program and the RAM size
     Cpu(Vec<u8>, usize),
 }
@@ -35,12 +35,12 @@ type R<T> = Result<T, String>;
 fn apply_program(v: &Value, nl: &mut Netlist) -> R<Option<usize>> {
     let Some(b64) = v.get("program").and_then(|p| p.as_str()) else { return Ok(None) };
     let bytes = unbase64(b64)?;
-    for (m, words) in veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &bytes)? { veryl_eda::bram::set_mem_init(nl, &m, &words); }
+    for (m, words) in eda::bram::program_lanes(&eda::bram::mem_names(nl), &bytes)? { eda::bram::set_mem_init(nl, &m, &words); }
     Ok(Some(bytes.len()))
 }
 
 /// whether the design has a program memory (byte lanes in block RAM, see `bram::program_lanes`)
-fn has_program_mem(nl: &Netlist) -> bool { veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &[]).is_ok() }
+fn has_program_mem(nl: &Netlist) -> bool { eda::bram::program_lanes(&eda::bram::mem_names(nl), &[]).is_ok() }
 
 fn bit(b: &Bit) -> Value {
     match b { Bit::C0 => json!("0"), Bit::C1 => json!("1"), Bit::W(w) => json!(w) }
@@ -107,30 +107,30 @@ fn asic_gds(_v: &Value) -> R<Value> {
 /// the timing constraints of a request (`sdc`: SDC text), for the length of `f`
 fn with_sdc<T>(v: &Value, f: impl FnOnce() -> R<T>) -> R<T> {
     let c = match v.get("sdc").and_then(|s| s.as_str()).filter(|s| !s.trim().is_empty()) {
-        Some(t) => Some(veryl_eda::sdc::parse(t).map_err(|e| format!("timing constraints (.sdc): {}", e))?),
+        Some(t) => Some(eda::sdc::parse(t).map_err(|e| format!("timing constraints (.sdc): {}", e))?),
         None => None,
     };
-    veryl_eda::sdc::set(c);
+    eda::sdc::set(c);
     let r = f();
-    veryl_eda::sdc::set(None);
+    eda::sdc::set(None);
     r
 }
 
 /// the first clock's period (the FPGA's target), when there are constraints
 fn target_period() -> Option<f64> {
-    veryl_eda::sdc::current().and_then(|c| c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| k.period))
+    eda::sdc::current().and_then(|c| c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| k.period))
 }
 
 /// the ASIC flow on the vlib standard cells, or a PDK's (`pdk`: "sky130")
 fn asic(v: &Value) -> R<Value> {
     let pdk = v.get("pdk").and_then(|p| p.as_str()).unwrap_or("vlib").to_string();
-    let tech = veryl_eda::pdk::by_name(&pdk)?;
-    veryl_eda::pdk::with_tech(tech, || with_sdc(v, || asic_in(v)))
+    let tech = eda::pdk::by_name(&pdk)?;
+    eda::pdk::with_tech(tech, || with_sdc(v, || asic_in(v)))
 }
 
 fn asic_in(v: &Value) -> R<Value> {
-    use veryl_eda::asic;
-    let tech = veryl_eda::pdk::tech();
+    use eda::asic;
+    let tech = eda::pdk::tech();
     let (top, (st, _)) = synth_netlists(v)?;
     let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1);
     let o = asic::flow(&st.opt, seed)?;
@@ -143,14 +143,14 @@ fn asic_in(v: &Value) -> R<Value> {
     let maxf = if n > 3000 { 20 } else { 30 };
     let hl = pl.history.len();
     let frames: Vec<usize> = if hl <= maxf { (0..hl).collect() } else { (0..maxf).map(|i| i * (hl - 1) / (maxf - 1)).collect() };
-    let lib_nl = veryl_eda::pdk::to_library(&o.mapped);
-    let mut verilog = veryl_eda::output::to_verilog(&lib_nl);
-    verilog += &veryl_eda::pdk::verilog_models();
+    let lib_nl = eda::pdk::to_library(&o.mapped);
+    let mut verilog = eda::output::to_verilog(&lib_nl);
+    verilog += &eda::pdk::verilog_models();
     // a library technology: design rules and the GDS
     let drc_json = if tech.is_vlib() { Value::Null } else {
         let l = asic::layout::build(&o)?;
         let d = asic::drc::check(&l, &o.mapped);
-        let g = asic::gds::write(&l, &o.mapped.name, veryl_eda::pdk::SKY130_GDS)?;
+        let g = asic::gds::write(&l, &o.mapped.name, eda::pdk::SKY130_GDS)?;
         let out = json!({ "shapes": d.shapes, "shorts": d.shorts, "spacing": d.spacing, "area": d.area, "opens": d.opens,
             "taps": o.pdn.taps.len(), "tap_viol": o.pdn.tap_viol, "gds_bytes": g.len(), "instances": l.insts.len(), "details": d.details });
         LAST_GDS.with(|x| *x.borrow_mut() = Some((top.clone(), g)));
@@ -243,14 +243,14 @@ fn pnr(v: &Value) -> R<Value> { with_sdc(v, || pnr_in(v)) }
 fn pnr_in(v: &Value) -> R<Value> {
     let (top, lib_out) = synth_netlists(v)?;
     let (st, mapped) = lib_out;
-    let pcf = v.get("pcf").and_then(|p| p.as_str()).map(veryl_eda::pnr::parse_pcf).unwrap_or_default();
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).map(eda::fpga::pnr::parse_pcf).unwrap_or_default();
     let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1);
     CHIP.with(|c| -> R<Value> {
         let cb = c.borrow();
         let chip = cb.as_ref().ok_or("chip database not loaded")?;
         let timing_driven = v.get("timing_driven").and_then(|t| t.as_bool()).unwrap_or(true);
-        let opts = veryl_eda::pnr::Opts { chipdb: None, package: "sg48".into(), pcf, seed, verbose: false, timing_driven };
-        let out = veryl_eda::pnr::place_and_route_on(chip, &mapped, &opts)?;
+        let opts = eda::fpga::pnr::Opts { chipdb: None, package: "sg48".into(), pcf, seed, verbose: false, timing_driven };
+        let out = eda::fpga::pnr::place_and_route_on(chip, &mapped, &opts)?;
         let names = |b: Option<Bit>| -> String {
             match b {
                 None => String::new(),
@@ -347,14 +347,14 @@ fn pnr_in(v: &Value) -> R<Value> {
                 "power": { "freq": out.power.freq_mhz, "e_nets": out.power.e_nets, "e_clock": out.power.e_clock, "e_ram": out.power.e_ram, "dynamic": out.power.dynamic, "static": out.power.static_mw, "total": out.power.total },
             },
             "pips": out.wires,
-            "bin": base64(&veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?),
+            "bin": base64(&eda::fpga::pnr::bitstream::asc_to_bin(&out.asc)?),
             "asc": out.asc,
             "pcf": out.pcf,
         }))
     })
 }
 
-type SynthOut = (veryl_eda::elab::Stages, Netlist);
+type SynthOut = (veryl_synth::elab::Stages, Netlist);
 
 /// parse + synthesize + map; (top, (stages, iCE40 netlist))
 fn synth_netlists(v: &Value) -> R<(String, SynthOut)> {
@@ -363,20 +363,20 @@ fn synth_netlists(v: &Value) -> R<(String, SynthOut)> {
     for (name, src) in &fs {
         parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?);
     }
-    let mut lib = veryl_eda::elab::Lib::new();
+    let mut lib = veryl_synth::elab::Lib::new();
     for p in &parsers { lib.add(&p.veryl); }
     let top = match v.get("top").and_then(|t| t.as_str()) {
         Some(t) => t.to_string(),
         None => lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()).ok_or("no synthesizable (non-#[test]) module")?,
     };
-    let st = veryl_eda::elab::synthesize_stages(&lib, &top)?;
-    let mapped = veryl_eda::ice40::map(&st.opt)?;
+    let st = veryl_synth::elab::synthesize_stages(&lib, &top)?;
+    let mapped = eda::fpga::ice40::map(&st.opt)?;
     Ok((top, (st, mapped)))
 }
 
 /// the virtual board: synthesize, map to iCE40 and power up an iCEBreaker with the design
 fn board_load(v: &Value) -> R<Value> {
-    use veryl_eda::board::{icebreaker, Design};
+    use eda::fpga::board::{icebreaker, Design};
     let (top, (_, mut mapped)) = synth_netlists(v)?;
     let prog = apply_program(v, &mut mapped)?;
     let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
@@ -397,21 +397,21 @@ fn board_load(v: &Value) -> R<Value> {
 /// synthesize, place and route (own P&R, on the loaded chipdb), write the bitstream,
 /// decode it and power up the board with it: the board runs what would be flashed
 fn board_flash(v: &Value) -> R<Value> {
-    use veryl_eda::board::{bitstream, icebreaker};
+    use eda::fpga::board::{bitstream, icebreaker};
     let (top, (_, mut mapped)) = synth_netlists(v)?;
     let prog = apply_program(v, &mut mapped)?;
     let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
-    let opts = veryl_eda::pnr::Opts {
-        chipdb: None, package: "sg48".into(), pcf: veryl_eda::pnr::parse_pcf(pcf.as_deref().unwrap_or(icebreaker::DEFAULT_PCF)),
+    let opts = eda::fpga::pnr::Opts {
+        chipdb: None, package: "sg48".into(), pcf: eda::fpga::pnr::parse_pcf(pcf.as_deref().unwrap_or(icebreaker::DEFAULT_PCF)),
         seed: v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1), verbose: false, timing_driven: true,
     };
-    let out = CHIP.with(|c| -> R<veryl_eda::pnr::Output> {
+    let out = CHIP.with(|c| -> R<eda::fpga::pnr::Output> {
         let c = c.borrow();
         let chip = c.as_ref().ok_or("chip database not loaded")?;
-        veryl_eda::pnr::place_and_route_on(chip, &mapped, &opts)
+        eda::fpga::pnr::place_and_route_on(chip, &mapped, &opts)
     })?;
-    let bin = veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?;
-    let (d, rep) = CHIP.with(|c| -> R<(veryl_eda::board::Design, bitstream::Report)> {
+    let bin = eda::fpga::pnr::bitstream::asc_to_bin(&out.asc)?;
+    let (d, rep) = CHIP.with(|c| -> R<(eda::fpga::board::Design, bitstream::Report)> {
         let c = c.borrow();
         bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
     })?;
@@ -419,7 +419,7 @@ fn board_flash(v: &Value) -> R<Value> {
     let mut b = icebreaker::board(d.clone(), Some(&pins_pcf))?;
     b.warnings.extend(rep.warnings.iter().cloned());
     // the design's port on each pin, from the pin assignment the place and route used
-    let names: std::collections::HashMap<u32, String> = veryl_eda::pnr::parse_pcf(&out.pcf).into_iter().filter_map(|(port, pin)| Some((pin.parse().ok()?, port))).collect();
+    let names: std::collections::HashMap<u32, String> = eda::fpga::pnr::parse_pcf(&out.pcf).into_iter().filter_map(|(port, pin)| Some((pin.parse().ok()?, port))).collect();
     for (name, _) in mapped.ports.iter().flat_map(|p| (0..p.bits.len()).map(move |i| (if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }, ()))) {
         if !opts.pcf.contains_key(&name) {
             let pin = names.iter().find(|(_, n)| **n == name).map(|(p, _)| p.to_string()).unwrap_or_else(|| "?".into());
@@ -443,10 +443,10 @@ fn board_flash(v: &Value) -> R<Value> {
 
 /// any iCE40UP5K bitstream (e.g. from nextpnr + icepack) onto the board
 fn board_load_bin(v: &Value) -> R<Value> {
-    use veryl_eda::board::{bitstream, icebreaker};
+    use eda::fpga::board::{bitstream, icebreaker};
     let b64 = v.get("bin").and_then(|b| b.as_str()).ok_or("missing bin")?;
     let bin = unbase64(b64)?;
-    let (d, rep) = CHIP.with(|c| -> R<(veryl_eda::board::Design, bitstream::Report)> {
+    let (d, rep) = CHIP.with(|c| -> R<(eda::fpga::board::Design, bitstream::Report)> {
         let c = c.borrow();
         bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
     })?;
@@ -481,9 +481,9 @@ fn board_load_cpu(v: &Value) -> R<Value> {
     Ok(info)
 }
 
-fn cpu_board(bytes: &[u8], mem: usize, pcf: &str) -> R<veryl_eda::board::Board> {
-    use veryl_eda::board::icebreaker;
-    let mut b = veryl_eda::board::Board::cpu(bytes, mem, pcf, icebreaker::CLOCK_PIN)?;
+fn cpu_board(bytes: &[u8], mem: usize, pcf: &str) -> R<eda::fpga::board::Board> {
+    use eda::fpga::board::icebreaker;
+    let mut b = eda::fpga::board::Board::cpu(bytes, mem, pcf, icebreaker::CLOCK_PIN)?;
     // buttons released (BTN1-3 read 1 when pressed: idle 0)
     for p in icebreaker::PINS { if let icebreaker::Kind::Button { pressed } = p.kind { b.set_pin(p.pin, !pressed); } }
     Ok(b)
@@ -493,13 +493,13 @@ fn cpu_board(bytes: &[u8], mem: usize, pcf: &str) -> R<veryl_eda::board::Board> 
 /// without synthesizing or placing and routing again: the netlist's block RAMs get the
 /// new contents, or the bitstream's (`pnr::patch_ram`); the board powers up with it.
 fn board_program(v: &Value) -> R<Value> {
-    use veryl_eda::board::{bitstream, icebreaker, Design};
+    use eda::fpga::board::{bitstream, icebreaker, Design};
     let bytes = unbase64(v.get("program").and_then(|p| p.as_str()).ok_or("missing program")?)?;
     let done = LOADED.with(|l| -> R<(Design, Option<String>, Option<Vec<u8>>)> {
         let mut l = l.borrow_mut();
         match l.as_mut().ok_or("load a design with a program memory first")? {
             Loaded::Netlist(nl) => {
-                for (m, words) in veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &bytes)? { veryl_eda::bram::set_mem_init(nl, &m, &words); }
+                for (m, words) in eda::bram::program_lanes(&eda::bram::mem_names(nl), &bytes)? { eda::bram::set_mem_init(nl, &m, &words); }
                 let pcf = BOARD.with(|x| x.borrow().as_ref().and_then(|b| b.1.clone()));
                 Ok((Design::from_netlist(nl)?, pcf, None))
             }
@@ -517,8 +517,8 @@ fn board_program(v: &Value) -> R<Value> {
             }
             Loaded::Bitstream { asc, map } => {
                 let names: Vec<String> = { let mut v: Vec<String> = map.iter().filter_map(|p| p.slot.rsplit_once(':').map(|x| x.0.to_string())).collect(); v.dedup(); v };
-                for (m, words) in veryl_eda::bram::program_lanes(&names, &bytes)? { *asc = veryl_eda::pnr::patch_ram(asc, map, &m, &words)?.0; }
-                let bin = veryl_eda::pnr::bitstream::asc_to_bin(asc)?;
+                for (m, words) in eda::bram::program_lanes(&names, &bytes)? { *asc = eda::fpga::pnr::patch_ram(asc, map, &m, &words)?.0; }
+                let bin = eda::fpga::pnr::bitstream::asc_to_bin(asc)?;
                 let (d, _) = CHIP.with(|c| -> R<(Design, bitstream::Report)> {
                     let c = c.borrow();
                     bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
@@ -552,7 +552,7 @@ fn board_program(v: &Value) -> R<Value> {
 /// { ok, compiled, asm, listing, bin (base64), size, end, symbols, errors: [{file, line, msg}], run?, elf? }
 /// (compile errors are a normal answer: ok with compiled = false)
 fn cc(v: &Value) -> R<Value> {
-    use veryl_eda::rv;
+    use rvtools as rv;
     let src = v.get("src").and_then(|s| s.as_str()).ok_or("missing src")?;
     let name = v.get("name").and_then(|s| s.as_str()).unwrap_or("main.c");
     let mem = v.get("mem").and_then(|m| m.as_u64()).unwrap_or(8192) as u32;
@@ -592,7 +592,7 @@ fn board_periph(v: &Value) -> R<Value> {
     })
 }
 
-fn attach(b: &mut veryl_eda::board::Board, p: &Value) {
+fn attach(b: &mut eda::fpga::board::Board, p: &Value) {
     let pin = |v: &Value| v.as_u64().map(|p| p as u32);
     let pins = |v: Option<&Value>| -> Vec<u32> { v.and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|p| p as u32)).collect()).unwrap_or_default() };
     if let Some(u) = p.get("uart").filter(|u| !u.is_null()) {
@@ -634,8 +634,8 @@ fn unbase64(s: &str) -> R<Vec<u8>> {
     Ok(out)
 }
 
-fn board_info(top: &str, cells: Value, b: &veryl_eda::board::Board, default_pcf: bool, names: Option<&std::collections::HashMap<u32, String>>) -> Value {
-    use veryl_eda::board::icebreaker::{Kind, PINS};
+fn board_info(top: &str, cells: Value, b: &eda::fpga::board::Board, default_pcf: bool, names: Option<&std::collections::HashMap<u32, String>>) -> Value {
+    use eda::fpga::board::icebreaker::{Kind, PINS};
     let pins: Vec<Value> = PINS.iter().map(|p| {
         let (kind, level) = match p.kind {
             Kind::Clock => ("clock", true), Kind::Button { pressed } => ("button", pressed), Kind::Led { on } => ("led", on),
@@ -648,7 +648,7 @@ fn board_info(top: &str, cells: Value, b: &veryl_eda::board::Board, default_pcf:
     }).collect();
     json!({
         "ok": true, "top": top, "pins": pins, "warnings": b.warnings, "default_pcf": default_pcf,
-        "clock_hz": veryl_eda::board::icebreaker::CLOCK_HZ, "cells": cells,
+        "clock_hz": eda::fpga::board::icebreaker::CLOCK_HZ, "cells": cells,
     })
 }
 
@@ -678,7 +678,7 @@ fn board_run(v: &Value) -> R<Value> {
         // a VGA frame newer than the one the page has (`vga_seen`), run-length encoded
         let seen = v.get("vga_seen").and_then(|s| s.as_u64());
         let vga = match (b.vga.as_ref(), seen) {
-            (Some(g), Some(seen)) if g.frames > seen => g.frame.as_ref().map(|(w, h, px)| json!({ "w": w, "h": h, "n": g.frames, "rle": base64(&veryl_eda::board::periph::rle(px)) })),
+            (Some(g), Some(seen)) if g.frames > seen => g.frame.as_ref().map(|(w, h, px)| json!({ "w": w, "h": h, "n": g.frames, "rle": base64(&eda::fpga::board::periph::rle(px)) })),
             (Some(g), _) => Some(json!({ "n": g.frames })),
             _ => None,
         };
@@ -692,7 +692,7 @@ fn board_reset() -> R<Value> {
         let mut x = x.borrow_mut();
         let (d, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
         let cpu = LOADED.with(|l| match l.borrow().as_ref() { Some(Loaded::Cpu(p, m)) => Some((p.clone(), *m)), _ => None });
-        *b = match cpu { Some((p, m)) => cpu_board(&p, m, pcf.as_deref().unwrap_or(""))?, None => veryl_eda::board::icebreaker::board(d.clone(), pcf.as_deref())? };
+        *b = match cpu { Some((p, m)) => cpu_board(&p, m, pcf.as_deref().unwrap_or(""))?, None => eda::fpga::board::icebreaker::board(d.clone(), pcf.as_deref())? };
         attach(b, periph);
         Ok(json!({ "ok": true, "cycle": 0 }))
     })
@@ -704,14 +704,14 @@ fn synth(v: &Value) -> R<Value> {
     for (name, src) in &fs {
         parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?);
     }
-    let mut lib = veryl_eda::elab::Lib::new();
+    let mut lib = veryl_synth::elab::Lib::new();
     for p in &parsers { lib.add(&p.veryl); }
     let top = match v.get("top").and_then(|t| t.as_str()) {
         Some(t) => t.to_string(),
         None => lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()).ok_or("no synthesizable (non-#[test]) module")?,
     };
-    let st = veryl_eda::elab::synthesize_stages(&lib, &top)?;
-    let mapped = veryl_eda::ice40::map(&st.opt)?;
+    let st = veryl_synth::elab::synthesize_stages(&lib, &top)?;
+    let mapped = eda::fpga::ice40::map(&st.opt)?;
     Ok(json!({
         "ok": true,
         "top": top,
@@ -761,9 +761,9 @@ pub fn dispatch(v: &Value) -> R<Value> {
             let r = if let (Some(kind), Some(synth_top)) = (v.get("gate").and_then(|g| g.as_str()), v.get("synth").and_then(|t| t.as_str())) {
                 let mut parsers = vec![];
                 for (name, src) in &fs { parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?); }
-                let mut lib = veryl_eda::elab::Lib::new();
+                let mut lib = veryl_synth::elab::Lib::new();
                 for p in &parsers { lib.add(&p.veryl); }
-                let prov = veryl_eda::gatesim::Provider::new(&lib, synth_top, kind);
+                let prov = veryl_synth::gatesim::Provider::new(&lib, synth_top, kind);
                 let f = |m: &str, ov: &std::collections::HashMap<String, veryl_sim::value::Val>| prov.get(m, ov);
                 let r = veryl_sim::run_gates(&fs, top, max_time, vcd, false, Some(&f))?;
                 let built = prov.built.borrow();

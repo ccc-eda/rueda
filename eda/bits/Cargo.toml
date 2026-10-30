@@ -1,0 +1,10 @@
+[package]
+name = "rueda-bits"
+description = "Fixed-width bit vectors shared by rueda's netlist tools and HDL front ends"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "bits"

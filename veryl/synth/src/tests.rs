@@ -3,7 +3,7 @@
 //! standard-cell mapping (`cargo test --release`).
 
 use crate::elab::{synthesize, Lib};
-use crate::netsim::NetSim;
+use eda::netsim::NetSim;
 use veryl_parser::Parser;
 use std::collections::HashMap;
 
@@ -21,14 +21,14 @@ fn synth(files: &[&str], top: &str, check: impl Fn(&mut NetSim)) {
     for p in &parsers { lib.add(&p.veryl); }
     let nl = synthesize(&lib, top).unwrap_or_else(|e| panic!("{}: {}", top, e)).0;
     check(&mut NetSim::new(&nl));
-    let mapped = crate::ice40::map(&nl).unwrap();
+    let mapped = eda::fpga::ice40::map(&nl).unwrap();
     assert!(mapped.cells.iter().all(|c| c.typ.starts_with("SB_")));
     check(&mut NetSim::new(&mapped));
-    let ecp5 = crate::ecp5::map(&nl).unwrap();
+    let ecp5 = eda::fpga::ecp5::map(&nl).unwrap();
     assert!(ecp5.cells.iter().all(|c| matches!(c.typ.as_str(), "LUT4" | "CCU2C" | "TRELLIS_FF" | "DP16KD")));
     check(&mut NetSim::new(&ecp5));
-    let cells = crate::asic::map::map(&nl).unwrap();
-    assert!(cells.cells.iter().all(|c| c.typ == "SRAM" || crate::asic::lib::LIB.iter().any(|l| l.name == c.typ)));
+    let cells = eda::asic::map::map(&nl).unwrap();
+    assert!(cells.cells.iter().all(|c| c.typ == "SRAM" || eda::asic::lib::LIB.iter().any(|l| l.name == c.typ)));
     check(&mut NetSim::new(&cells));
 }
 
@@ -143,7 +143,7 @@ fn ram() {
 }
 
 /// synthesize `top` from files in examples/src
-fn netlist(files: &[&str], top: &str) -> crate::netlist::Netlist {
+fn netlist(files: &[&str], top: &str) -> eda::netlist::Netlist {
     let mut parsers = vec![];
     for f in files {
         let path = format!("{}/../examples/src/{}", env!("CARGO_MANIFEST_DIR"), f);
@@ -254,15 +254,15 @@ fn asic_flow_legal() { asic_legal(&[(&["ram.veryl"][..], "Ram"), (&["sync_ram.ve
 /// memories are flip-flops, so no BramMix)
 #[test]
 fn asic_flow_legal_sky130() {
-    let t = crate::pdk::sky130_builtin().unwrap();
-    crate::pdk::with_tech(t.clone(), || asic_legal(&[(&["ram.veryl"][..], "Ram"), (&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"][..], "RiscvSoc")]));
+    let t = eda::pdk::sky130_builtin().unwrap();
+    eda::pdk::with_tech(t.clone(), || asic_legal(&[(&["ram.veryl"][..], "Ram"), (&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"][..], "RiscvSoc")]));
 }
 
 /// LVS on deliberately broken copies of a good layout: a net's routing taken out (open), two nets'
 /// wires joined (short), two IO labels swapped, a cell instance of the wrong type
-fn lvs_breaks(l: &crate::asic::layout::Layout, o: &crate::asic::Output, top: &str) {
-    use crate::asic::{layout::Shape, lvs};
-    let clone = || crate::asic::layout::Layout { layers: l.layers.clone(), shapes: l.shapes.clone(), insts: l.insts.clone(), nets: l.nets.clone(), net_of: l.net_of.clone(), labels: l.labels.clone(), die: l.die };
+fn lvs_breaks(l: &eda::asic::layout::Layout, o: &eda::asic::Output, top: &str) {
+    use eda::asic::{layout::Shape, lvs};
+    let clone = || eda::asic::layout::Layout { layers: l.layers.clone(), shapes: l.shapes.clone(), insts: l.insts.clone(), nets: l.nets.clone(), net_of: l.net_of.clone(), labels: l.labels.clone(), die: l.die };
     // the signal net with the most routed shapes
     let mut count: HashMap<usize, usize> = HashMap::new();
     for s in l.shapes.iter().filter(|s| s.net >= 2 && s.net < l.nets.len()) { *count.entry(s.net).or_default() += 1; }
@@ -272,7 +272,7 @@ fn lvs_breaks(l: &crate::asic::layout::Layout, o: &crate::asic::Output, top: &st
     let v = lvs::check(&b, o);
     assert!(v.opens >= 1 && v.shorts == 0, "{}: net {} unrouted: {:?}", top, l.nets[big], (v.opens, v.shorts));
     // a met2 bar from a wire of that net to the nearest met2 wire of another net
-    let m2 = crate::asic::layout::layer_index("met2").unwrap();
+    let m2 = eda::asic::layout::layer_index("met2").unwrap();
     let a = *l.shapes.iter().find(|s| s.net == big && s.layer == m2).unwrap();
     let c = *l.shapes.iter().filter(|s| s.layer == m2 && s.net >= 2 && s.net != big && s.net < l.nets.len()).min_by_key(|s| (s.x0 - a.x0).abs() + (s.y0 - a.y0).abs()).unwrap();
     let mut b = clone();
@@ -299,25 +299,25 @@ fn lvs_breaks(l: &crate::asic::layout::Layout, o: &crate::asic::Output, top: &st
 fn antenna_diodes_fix_ram() {
     // Ram on SKY130 has pieces of met2 / met3 over the limit without diodes (the KLayout check,
     // tools/antenna_check.py, finds them too); with them, none, and DRC / LVS stay clean
-    let t = crate::pdk::sky130_builtin().unwrap();
-    crate::pdk::with_tech(t, || {
+    let t = eda::pdk::sky130_builtin().unwrap();
+    eda::pdk::with_tech(t, || {
         let path = format!("{}/../examples/src/ram.veryl", env!("CARGO_MANIFEST_DIR"));
         let p = Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
         let mut lib = Lib::new();
         lib.add(&p.veryl);
         let nl = synthesize(&lib, "Ram").unwrap().0;
-        let o = crate::asic::flow_opts(&nl, 1, 0.0, false).unwrap();
-        let a = crate::asic::antenna::check(&crate::asic::layout::build(&o).unwrap(), &o.mapped);
+        let o = eda::asic::flow_opts(&nl, 1, 0.0, false).unwrap();
+        let a = eda::asic::antenna::check(&eda::asic::layout::build(&o).unwrap(), &o.mapped);
         assert!(!a.violations.is_empty() && o.diodes == 0, "{} violations without diodes", a.violations.len());
         assert!(a.violations.iter().all(|v| v.ratio > v.limit && v.cell < o.mapped.cells.len()));
-        let o = crate::asic::flow_opts(&nl, 1, 0.0, true).unwrap();
-        let l = crate::asic::layout::build(&o).unwrap();
-        let a = crate::asic::antenna::check(&l, &o.mapped);
+        let o = eda::asic::flow_opts(&nl, 1, 0.0, true).unwrap();
+        let l = eda::asic::layout::build(&o).unwrap();
+        let a = eda::asic::antenna::check(&l, &o.mapped);
         assert!(a.violations.is_empty() && o.diodes > 0, "{} violations with {} diodes", a.violations.len(), o.diodes);
         assert_eq!(o.mapped.cells.iter().filter(|c| c.typ == "DIODE").count(), o.diodes);
-        let d = crate::asic::drc::check(&l, &o.mapped);
+        let d = eda::asic::drc::check(&l, &o.mapped);
         assert_eq!(d.total(), 0, "{:?}", d.details);
-        assert_eq!(crate::asic::lvs::check(&l, &o).errors(), 0);
+        assert_eq!(eda::asic::lvs::check(&l, &o).errors(), 0);
     });
 }
 
@@ -331,9 +331,9 @@ fn sdc_slack() {
     lib.add(&p.veryl);
     let nl = synthesize(&lib, "Adder").unwrap().0;
     let run = |sdc: &str| {
-        crate::sdc::set(Some(crate::sdc::parse(sdc).unwrap()));
-        let o = crate::asic::flow(&nl, 1).unwrap();
-        crate::sdc::set(None);
+        eda::sdc::set(Some(eda::sdc::parse(sdc).unwrap()));
+        let o = eda::asic::flow(&nl, 1).unwrap();
+        eda::sdc::set(None);
         o.timing
     };
     let t = run("create_clock -name v -period 5\nset_input_delay 2 -clock v [all_inputs]\nset_output_delay 1 -clock v [all_outputs]\n");
@@ -350,23 +350,23 @@ fn sdc_slack() {
     assert!(b.failing > 0 && b.wns < 0.0 && (m.wns - (1.0 - mc.period)).abs() < 1e-9, "{:?} {:?}", b, m);
     let none = run("create_clock -period 5\nset_false_path -to [all_outputs]\n");
     assert_eq!(none.slack.unwrap().checked, 0);
-    assert!(crate::sdc::current().is_none());
+    assert!(eda::sdc::current().is_none());
 }
 
 #[test]
 fn timing_repair_ram() {
     // Ram on SKY130 at 450 MHz misses timing; stronger cells and buffers on its critical path make it (each
     // change checked on the detailed routing and extraction), with DRC / LVS / antenna still clean
-    let t = crate::pdk::sky130_builtin().unwrap();
-    crate::pdk::with_tech(t, || {
+    let t = eda::pdk::sky130_builtin().unwrap();
+    eda::pdk::with_tech(t, || {
         let path = format!("{}/../examples/src/ram.veryl", env!("CARGO_MANIFEST_DIR"));
         let p = Parser::parse(&std::fs::read_to_string(&path).unwrap(), &path).unwrap();
         let mut lib = Lib::new();
         lib.add(&p.veryl);
         let nl = synthesize(&lib, "Ram").unwrap().0;
-        crate::sdc::set(Some(crate::sdc::parse("create_clock -name clk -period 2.2222 [get_ports i_clk]\n").unwrap()));
-        let o = crate::asic::flow(&nl, 1);
-        crate::sdc::set(None);
+        eda::sdc::set(Some(eda::sdc::parse("create_clock -name clk -period 2.2222 [get_ports i_clk]\n").unwrap()));
+        let o = eda::asic::flow(&nl, 1);
+        eda::sdc::set(None);
         let o = o.unwrap();
         let s = o.timing.slack.clone().unwrap();
         let before = o.repair.before.unwrap();
@@ -374,21 +374,21 @@ fn timing_repair_ram() {
         assert!(o.mapped.cells.iter().any(|c| c.typ.contains('@')));
         let e = o.extraction.as_ref().unwrap();
         assert!(e.nets > 500 && e.worst > 0.0 && e.worst < 0.1);
-        let l = crate::asic::layout::build(&o).unwrap();
-        assert_eq!(crate::asic::drc::check(&l, &o.mapped).total(), 0);
-        assert_eq!(crate::asic::lvs::check(&l, &o).errors(), 0);
-        assert!(crate::asic::antenna::check(&l, &o.mapped).violations.is_empty());
+        let l = eda::asic::layout::build(&o).unwrap();
+        assert_eq!(eda::asic::drc::check(&l, &o.mapped).total(), 0);
+        assert_eq!(eda::asic::lvs::check(&l, &o).errors(), 0);
+        assert!(eda::asic::antenna::check(&l, &o.mapped).violations.is_empty());
         // a stronger cell is the same function: the library binding was checked against its Liberty function
-        assert!(o.mapped.cells.iter().filter(|c| c.typ.contains('@')).all(|c| crate::pdk::tech().binding(&c.typ).is_some()));
+        assert!(o.mapped.cells.iter().filter(|c| c.typ.contains('@')).all(|c| eda::pdk::tech().binding(&c.typ).is_some()));
     });
 }
 
 #[test]
 fn antenna_pwl() {
     // SKY130's met1 limit: 400 with no diffusion, 2609 at 0.0225 µm², linear up to 11600 at 22.5
-    let t = crate::pdk::sky130_builtin().unwrap();
+    let t = eda::pdk::sky130_builtin().unwrap();
     let m1 = t.lef.as_ref().unwrap().layer("met1").unwrap();
-    let f = |x: f64| crate::pdk::lef::Layer::pwl(&m1.antenna_side, x);
+    let f = |x: f64| eda::pdk::lef::Layer::pwl(&m1.antenna_side, x);
     assert_eq!((f(0.0), f(0.0125), f(0.0225), f(22.5), f(100.0)), (400.0, 400.0, 2609.0, 11600.0, 11600.0));
     assert!((f(11.26125) - 7104.5).abs() < 1e-6);
     assert!((m1.thickness - 0.35).abs() < 1e-9 && !t.lef.as_ref().unwrap().layer("via").unwrap().antenna_area.is_empty());
@@ -399,22 +399,22 @@ fn antenna_pwl() {
 #[test]
 fn spice_pin_order_is_the_cdls() {
     // the CDL of the full PDK files (tools/sky130.sh), when it is there
-    let Some(cdl) = crate::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists()) else { eprintln!("no sky130hd.cdl: skipped"); return };
+    let Some(cdl) = eda::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists()) else { eprintln!("no sky130hd.cdl: skipped"); return };
     let text = std::fs::read_to_string(cdl).unwrap();
     let subckt: HashMap<&str, Vec<&str>> = text.lines().filter_map(|l| l.strip_prefix(".SUBCKT ")).map(|l| { let mut w = l.split_whitespace(); (w.next().unwrap(), w.collect()) }).collect();
-    let t = crate::pdk::sky130_builtin().unwrap();
+    let t = eda::pdk::sky130_builtin().unwrap();
     let lef = t.lef.as_ref().unwrap();
     let mut n = 0;
     for b in t.cells.values() {
         let m = lef.macro_(&b.cell).unwrap();
-        assert_eq!(crate::asic::spice::pin_order(m), subckt[b.cell.as_str()], "{}", b.cell);
+        assert_eq!(eda::asic::spice::pin_order(m), subckt[b.cell.as_str()], "{}", b.cell);
         n += 1;
     }
     assert!(n > 20, "{} cells", n);
 }
 
 fn asic_legal(designs: &[(&[&str], &str)]) {
-    let tech = crate::pdk::tech();
+    let tech = eda::pdk::tech();
     for &(files, top) in designs {
         let mut parsers = vec![];
         for f in files {
@@ -425,37 +425,37 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
         let mut lib = Lib::new();
         for p in &parsers { lib.add(&p.veryl); }
         let nl = synthesize(&lib, top).unwrap().0;
-        let o = crate::asic::flow(&nl, 1).unwrap();
+        let o = eda::asic::flow(&nl, 1).unwrap();
         if !tech.is_vlib() {
             assert!(o.mapped.cells.iter().all(|c| tech.binding(&c.typ).is_some()), "{}: a cell without a {} binding", top, tech.name);
-            let v = crate::output::to_verilog(&crate::pdk::to_library(&o.mapped));
+            let v = eda::output::to_verilog(&eda::pdk::to_library(&o.mapped));
             assert!(v.contains("sky130_fd_sc_hd__") && !v.contains(" DFF") && !v.contains(" NAND2 "), "{}", top);
             // the DEF read back against the LEF: cells on the unithd rows, no overlaps, every site covered
-            let def = crate::pdk::def::parse(&crate::asic::def(&o)).unwrap();
-            let bad = crate::pdk::def::check_placement(&def, tech.lef.as_ref().unwrap());
+            let def = eda::pdk::def::parse(&eda::asic::def(&o)).unwrap();
+            let bad = eda::pdk::def::check_placement(&def, tech.lef.as_ref().unwrap());
             assert!(bad.is_empty(), "{}: {:?}", top, &bad[..bad.len().min(5)]);
             assert_eq!(def.comps.len(), o.mapped.cells.len() + def.comps.iter().filter(|c| c.name.starts_with("fill") || c.name.starts_with("tap")).count());
             assert!(!o.pdn.taps.is_empty() && o.pdn.tap_viol == 0, "{}: {} taps, {} sites too far from one", top, o.pdn.taps.len(), o.pdn.tap_viol);
-            assert!(def.nets.iter().any(|n| n.routes.iter().any(|r| matches!(r, crate::pdk::def::Route::Via { via, .. } if via == "L1M1_PR"))));
+            assert!(def.nets.iter().any(|n| n.routes.iter().any(|r| matches!(r, eda::pdk::def::Route::Via { via, .. } if via == "L1M1_PR"))));
             // the layout with the cells' own shapes: design rules from the tech LEF
-            let l = crate::asic::layout::build(&o).unwrap();
-            let d = crate::asic::drc::check(&l, &o.mapped);
+            let l = eda::asic::layout::build(&o).unwrap();
+            let d = eda::asic::drc::check(&l, &o.mapped);
             assert_eq!((d.shorts, d.spacing, d.area, d.opens), (0, 0, 0, 0), "{}: DRC {:?}", top, d.details);
             // LVS from the geometry alone: clean, and not the router checking itself (broken layouts fail)
-            let v = crate::asic::lvs::check(&l, &o);
+            let v = eda::asic::lvs::check(&l, &o);
             assert_eq!(v.errors(), 0, "{}: LVS {:?}", top, v.details);
             assert_eq!(v.devices, o.mapped.cells.len());
             assert!(v.nets > 10 && v.floating == 0, "{}: {} nets, {} floating", top, v.nets, v.floating);
             lvs_breaks(&l, &o, top);
             // antenna rules after the diodes: none on Ram; RiscvSoc keeps 8 (every placement of their diodes
             // left the dense detailed routing with conflicts, so the flow keeps the clean routing instead)
-            let a = crate::asic::antenna::check(&l, &o.mapped);
+            let a = eda::asic::antenna::check(&l, &o.mapped);
             assert!(a.checked > 0);
             let allowed = if top == "RiscvSoc" { 8 } else { 0 };
             assert!(a.violations.len() <= allowed, "{}: antenna {:?}", top, &a.violations[..a.violations.len().min(3)]);
             // GDS: the cells used and a top structure placing each instance (SREF) with the routing (BOUNDARY)
-            let g = crate::asic::gds::write(&l, &o.mapped.name, crate::pdk::SKY130_GDS).unwrap();
-            let st = crate::asic::gds::structures(&g);
+            let g = eda::asic::gds::write(&l, &o.mapped.name, eda::pdk::SKY130_GDS).unwrap();
+            let st = eda::asic::gds::structures(&g);
             let topst = &st[&o.mapped.name];
             let count = |rt: u8| { let (mut i, mut n) = (0, 0); while i + 4 <= topst.len() { let len = u16::from_be_bytes([topst[i], topst[i + 1]]) as usize; if topst[i + 2] == rt { n += 1; } i += len.max(4); } n };
             assert_eq!(count(0x0A), l.insts.len(), "{}: SREFs", top);
@@ -466,7 +466,7 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
         let mut occ = vec![vec![false; pl.sites as usize]; pl.rows as usize];
         for (i, c) in o.mapped.cells.iter().enumerate() {
             let (r, x) = pl.pos[i];
-            let (w, h) = crate::asic::lib::dims(c);
+            let (w, h) = eda::asic::lib::dims(c);
             assert!(r + h <= pl.rows && x + w <= pl.sites, "{}: cell {} outside the die", top, i);
             for rr in r..r + h {
                 for s in x..x + w { assert!(!occ[rr as usize][s as usize], "{}: overlap at row {} site {}", top, rr, s); occ[rr as usize][s as usize] = true; }
@@ -483,7 +483,7 @@ fn asic_legal(designs: &[(&[&str], &str)]) {
         }
         assert!(occ.iter().all(|row| row.iter().all(|o| *o)), "{}: a site is neither cell nor filler", top);
         // signal wires stay off the power straps and via stacks
-        let ny = pl.rows * crate::asic::detail::TRACKS + 1;
+        let ny = pl.rows * eda::asic::detail::TRACKS + 1;
         let power: std::collections::HashSet<(u8, u32, u32)> = o.pdn.blocked(ny).into_iter().map(|(l, x, y)| (l as u8, x, y)).collect();
         assert!(!o.pdn.straps.is_empty(), "{}: no power straps", top);
         for n in &o.detail.nets {
@@ -579,7 +579,7 @@ fn brams(files: &[&str], top: &str) -> usize {
     let mut lib = Lib::new();
     for p in &parsers { lib.add(&p.veryl); }
     let nl = synthesize(&lib, top).unwrap().0;
-    crate::ice40::map(&nl).unwrap().cells.iter().filter(|c| c.typ == "SB_RAM40_4K").count()
+    eda::fpga::ice40::map(&nl).unwrap().cells.iter().filter(|c| c.typ == "SB_RAM40_4K").count()
 }
 
 #[test]
@@ -619,7 +619,7 @@ fn bram_mix() {
 #[test]
 fn asic_hold_fix() {
     let nl = netlist(&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"], "RiscvSoc");
-    let o = crate::asic::flow_with(&nl, 1, 0.4).unwrap();
+    let o = eda::asic::flow_with(&nl, 1, 0.4).unwrap();
     assert!(o.hold_bufs > 0, "no hold buffers inserted");
     assert!(o.timing.hold_viol.is_empty(), "{} hold violations left", o.timing.hold_viol.len());
     let mut s = NetSim::new(&o.mapped);
@@ -634,13 +634,13 @@ fn asic_hold_fix() {
 #[test]
 fn power_activity() {
     let nl = netlist(&["features.veryl"], "Counter");
-    let act = crate::power::activity(&nl, 1000, 7);
+    let act = eda::power::activity(&nl, 1000, 7);
     let q = &nl.ports.iter().find(|p| p.name == "o_q").unwrap().bits;
     let r0 = act.rate.get(&q[0]).copied().unwrap_or(0.0);
     let r1 = act.rate.get(&q[1]).copied().unwrap_or(0.0);
     assert!(r0 > 0.35 && r0 < 0.65, "bit 0 toggles {}", r0);
     assert!(r1 > 0.15 && r1 < 0.35, "bit 1 toggles {}", r1);
-    let o = crate::asic::flow(&netlist(&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"], "RiscvSoc"), 1).unwrap();
+    let o = eda::asic::flow(&netlist(&["rv32i.veryl", "rv32i_rom.veryl", "soc.veryl"], "RiscvSoc"), 1).unwrap();
     let p = &o.power;
     assert!(p.e_clock > 0.0 && p.e_nets > 0.0 && p.leakage > 0.0 && p.ir_worst >= 0.0);
     assert!((p.total - p.dynamic - p.leakage).abs() < 1e-9);
@@ -755,7 +755,7 @@ fn peripheral_testbenches() {
 // ---- the virtual board (src/board) ----
 
 /// synthesize and map to iCE40 the given files (paths from the repository root)
-fn ice40_of(files: &[&str], top: &str, ov: &[(&str, u128)]) -> crate::netlist::Netlist {
+fn ice40_of(files: &[&str], top: &str, ov: &[(&str, u128)]) -> eda::netlist::Netlist {
     let mut parsers = vec![];
     for f in files {
         let path = format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), f);
@@ -766,7 +766,7 @@ fn ice40_of(files: &[&str], top: &str, ov: &[(&str, u128)]) -> crate::netlist::N
     for p in &parsers { lib.add(&p.veryl); }
     let ov = ov.iter().map(|(k, v)| (k.to_string(), crate::value::Val::new(32, *v))).collect();
     let nl = crate::elab::synthesize_with(&lib, top, &ov).unwrap_or_else(|e| panic!("{}: {}", top, e)).0;
-    crate::ice40::map(&nl).unwrap()
+    eda::fpga::ice40::map(&nl).unwrap()
 }
 
 /// the board engine against netsim: random inputs every cycle, every output equal after every clock
@@ -775,20 +775,20 @@ fn board_engine_matches_netsim() {
     let designs: &[(&[&str], &str)] = &[
         (&["examples/src/adder.veryl"], "Adder"), (&["examples/src/seq101.veryl"], "Seq101"), (&["examples/src/pkt_reg.veryl"], "PktReg"),
         (&["examples/src/ram.veryl"], "Ram"), (&["examples/src/sync_ram.veryl"], "SyncRam"),
-        (&["examples/src/sync_ram.veryl", "eda/examples/bram_tests.veryl"], "BramMix"),
-        (&["eda/examples/features.veryl"], "Top"), (&["eda/examples/pnr_tests.veryl"], "AccTest"),
-        (&["eda/examples/lang.veryl"], "HsTop"), (&["examples/src/fifo.veryl"], "Fifo"), (&["examples/src/uart.veryl"], "UartLoop"),
+        (&["examples/src/sync_ram.veryl", "synth/examples/bram_tests.veryl"], "BramMix"),
+        (&["synth/examples/features.veryl"], "Top"), (&["synth/examples/pnr_tests.veryl"], "AccTest"),
+        (&["synth/examples/lang.veryl"], "HsTop"), (&["examples/src/fifo.veryl"], "Fifo"), (&["examples/src/uart.veryl"], "UartLoop"),
         (&["examples/src/vga.veryl"], "VgaTiming"), (&["tutorial/src/blinky.veryl"], "Blinky"), (&["tutorial/src/knight.veryl"], "KnightRider"),
-        (&["examples/src/rv32i.veryl", "eda/examples/soc.veryl"], "RiscvSoc"),
+        (&["examples/src/rv32i.veryl", "synth/examples/soc.veryl"], "RiscvSoc"),
     ];
     let mut seed = 12345u64;
     let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
     for (files, top) in designs {
         let nl = ice40_of(files, top, &[]);
         let mut s = NetSim::new(&nl);
-        let mut e = crate::board::Engine::new(crate::board::Design::from_netlist(&nl).unwrap()).unwrap();
+        let mut e = eda::fpga::board::Engine::new(eda::fpga::board::Design::from_netlist(&nl).unwrap()).unwrap();
         let clk = nl.ports.iter().find(|p| p.name == "i_clk").map(|p| p.name.clone());
-        let ins: Vec<(String, usize)> = nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::In && Some(&p.name) != clk.as_ref()).map(|p| (p.name.clone(), p.bits.len())).collect();
+        let ins: Vec<(String, usize)> = nl.ports.iter().filter(|p| p.dir == eda::netlist::Dir::In && Some(&p.name) != clk.as_ref()).map(|p| (p.name.clone(), p.bits.len())).collect();
         for cycle in 0..300 {
             for (name, w) in &ins {
                 let v = if name == "i_rst" { (cycle >= 2 && rnd() % 50 != 0) as u128 } else { (rnd() as u128) & ((1u128 << (*w).min(64)) - 1) };
@@ -809,7 +809,7 @@ fn board_engine_matches_netsim() {
                 e.set(n, false);
                 e.propagate();
             }
-            for p in nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::Out) {
+            for p in nl.ports.iter().filter(|p| p.dir == eda::netlist::Dir::Out) {
                 for (i, b) in p.bits.iter().enumerate() {
                     let bit = if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() };
                     assert_eq!(e.get(e.output(&bit).unwrap()), s.bit(*b), "{}: {} at cycle {}", top, bit, cycle);
@@ -823,7 +823,7 @@ fn board_engine_matches_netsim() {
 #[test]
 fn board_blinky_pins() {
     let nl = ice40_of(&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)]);
-    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), None).unwrap();
+    let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), None).unwrap();
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     let leds = [26, 27, 25, 23, 21]; // LED1..LED5 = o_led[0..4]
     // reset held: the button BTN_N (pin 10) pressed
@@ -845,9 +845,9 @@ fn board_blinky_pins() {
 #[test]
 fn board_knight_button() {
     let nl = ice40_of(&["tutorial/src/knight.veryl"], "KnightRider", &[("TICK", 2), ("DIV_W", 2)]);
-    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), None).unwrap();
+    let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), None).unwrap();
     let leds = [26, 27, 25, 23, 21];
-    let pos = |b: &crate::board::Board| leds.iter().position(|p| b.pin(*p) == Some(true));
+    let pos = |b: &eda::fpga::board::Board| leds.iter().position(|p| b.pin(*p) == Some(true));
     b.set_pin(10, false);
     b.run(2);
     b.set_pin(10, true);
@@ -867,11 +867,11 @@ fn board_knight_button() {
 /// speed of the board engine (printed; `cargo test --release board_speed -- --nocapture`)
 #[test]
 fn board_speed() {
-    for (files, top) in [(&["tutorial/src/blinky.veryl"][..], "Blinky"), (&["examples/src/rv32i.veryl", "eda/examples/soc.veryl"][..], "RiscvSoc")] {
+    for (files, top) in [(&["tutorial/src/blinky.veryl"][..], "Blinky"), (&["examples/src/rv32i.veryl", "synth/examples/soc.veryl"][..], "RiscvSoc")] {
         let nl = ice40_of(files, top, &[]);
         let luts = nl.cells.iter().filter(|c| c.typ == "SB_LUT4").count();
         let pcf = std::fs::read_to_string(format!("{}/examples/icebreaker.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
-        let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), if top == "Blinky" { None } else { Some(&pcf) }).unwrap();
+        let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), if top == "Blinky" { None } else { Some(&pcf) }).unwrap();
         let t0 = std::time::Instant::now();
         let n = if top == "Blinky" { 2_000_000 } else { 200_000 };
         b.run(n);
@@ -881,11 +881,11 @@ fn board_speed() {
     }
     // the multi-cycle SoC running a C program (a busy CPU)
     let src = std::fs::read_to_string(format!("{}/../examples/c/hello.c", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let o = crate::rv::cc::compile("hello.c", &src, &Default::default()).unwrap();
+    let o = rvtools::cc::compile("hello.c", &src, &Default::default()).unwrap();
     let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
-    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &o.program.bytes).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
+    for (m, w) in eda::bram::program_lanes(&eda::bram::mem_names(&nl), &o.program.bytes).unwrap() { eda::bram::set_mem_init(&mut nl, &m, &w); }
     let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
     let t0 = std::time::Instant::now();
     let n = 200_000;
     b.run(n);
@@ -894,25 +894,25 @@ fn board_speed() {
 }
 
 /// the chip database, when one is installed (the bitstream tests skip without it)
-fn chip() -> Option<crate::pnr::chipdb::Chip> {
-    let path = crate::pnr::chipdb::default_path()?;
-    Some(crate::pnr::chipdb::Chip::load(&path, "sg48").unwrap())
+fn chip() -> Option<eda::fpga::pnr::chipdb::Chip> {
+    let path = eda::fpga::pnr::chipdb::default_path()?;
+    Some(eda::fpga::pnr::chipdb::Chip::load(&path, "sg48").unwrap())
 }
 
-fn pnr_of(chip: &crate::pnr::chipdb::Chip, nl: &crate::netlist::Netlist, pcf: &str) -> crate::pnr::Output {
-    let o = crate::pnr::Opts { chipdb: None, package: "sg48".into(), pcf: crate::pnr::parse_pcf(pcf), seed: 1, verbose: false, timing_driven: false };
-    crate::pnr::place_and_route_on(chip, nl, &o).unwrap()
+fn pnr_of(chip: &eda::fpga::pnr::chipdb::Chip, nl: &eda::netlist::Netlist, pcf: &str) -> eda::fpga::pnr::Output {
+    let o = eda::fpga::pnr::Opts { chipdb: None, package: "sg48".into(), pcf: eda::fpga::pnr::parse_pcf(pcf), seed: 1, verbose: false, timing_driven: false };
+    eda::fpga::pnr::place_and_route_on(chip, nl, &o).unwrap()
 }
 
 /// .bin -> .asc -> .bin gives the same bitstream (after the comment header)
 #[test]
 fn bitstream_roundtrip() {
     let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
-    for (files, top) in [(&["examples/src/sync_ram.veryl"][..], "SyncRam"), (&["examples/src/rv32i.veryl", "eda/examples/soc.veryl"][..], "RiscvSoc")] {
+    for (files, top) in [(&["examples/src/sync_ram.veryl"][..], "SyncRam"), (&["examples/src/rv32i.veryl", "synth/examples/soc.veryl"][..], "RiscvSoc")] {
         let nl = ice40_of(files, top, &[]);
         let o = pnr_of(&chip, &nl, "set_io i_clk 35\n");
-        let bin = crate::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
-        let again = crate::pnr::bitstream::asc_to_bin(&crate::pnr::bitstream::bin_to_asc(&bin).unwrap()).unwrap();
+        let bin = eda::fpga::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
+        let again = eda::fpga::pnr::bitstream::asc_to_bin(&eda::fpga::pnr::bitstream::bin_to_asc(&bin).unwrap()).unwrap();
         let body = |b: &[u8]| b[b.windows(4).position(|w| w == [0x7E, 0xAA, 0x99, 0x7E]).unwrap()..].to_vec();
         assert!(body(&bin) == body(&again), "{}: bitstream changed by bin_to_asc", top);
     }
@@ -925,11 +925,11 @@ fn bitstream_decode_matches_netlist() {
     let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
     let designs: &[(&[&str], &str, &[(&str, u128)])] = &[
         (&["examples/src/seq101.veryl"], "Seq101", &[]), (&["examples/src/pkt_reg.veryl"], "PktReg", &[]),
-        (&["eda/examples/features.veryl"], "Top", &[]), (&["eda/examples/pnr_tests.veryl"], "AccTest", &[]),
-        (&["examples/src/sync_ram.veryl"], "SyncRam", &[]), (&["examples/src/sync_ram.veryl", "eda/examples/bram_tests.veryl"], "BramMix", &[]),
+        (&["synth/examples/features.veryl"], "Top", &[]), (&["synth/examples/pnr_tests.veryl"], "AccTest", &[]),
+        (&["examples/src/sync_ram.veryl"], "SyncRam", &[]), (&["examples/src/sync_ram.veryl", "synth/examples/bram_tests.veryl"], "BramMix", &[]),
         (&["examples/src/fifo.veryl"], "Fifo", &[]), (&["examples/src/uart.veryl"], "UartLoop", &[]),
         (&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)]), (&["tutorial/src/knight.veryl"], "KnightRider", &[("TICK", 3), ("DIV_W", 2)]),
-        (&["examples/src/rv32i.veryl", "eda/examples/soc.veryl"], "RiscvSoc", &[]),
+        (&["examples/src/rv32i.veryl", "synth/examples/soc.veryl"], "RiscvSoc", &[]),
     ];
     let mut seed = 777u64;
     let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
@@ -937,15 +937,15 @@ fn bitstream_decode_matches_netlist() {
         let nl = ice40_of(files, top, ov);
         // pins: any free ones (the place and route picks them), the clock on its global-capable pin
         let o = pnr_of(&chip, &nl, "set_io i_clk 35\n");
-        let pin_of = crate::pnr::parse_pcf(&o.pcf);
-        let bin = crate::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
-        let (dd, rep) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
+        let pin_of = eda::fpga::pnr::parse_pcf(&o.pcf);
+        let bin = eda::fpga::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
+        let (dd, rep) = eda::fpga::board::bitstream::decode(&chip, &eda::fpga::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
         assert!(rep.warnings.is_empty(), "{}: {:?}", top, rep.warnings);
-        let mut g = crate::board::Engine::new(dd).unwrap();
-        let mut e = crate::board::Engine::new(crate::board::Design::from_netlist(&nl).unwrap()).unwrap();
-        let bit_names = |p: &crate::netlist::Port| -> Vec<String> { (0..p.bits.len()).map(|i| if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }).collect() };
-        let ins: Vec<&crate::netlist::Port> = nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::In && p.name != "i_clk").collect();
-        let outs: Vec<&crate::netlist::Port> = nl.ports.iter().filter(|p| p.dir == crate::netlist::Dir::Out).collect();
+        let mut g = eda::fpga::board::Engine::new(dd).unwrap();
+        let mut e = eda::fpga::board::Engine::new(eda::fpga::board::Design::from_netlist(&nl).unwrap()).unwrap();
+        let bit_names = |p: &eda::netlist::Port| -> Vec<String> { (0..p.bits.len()).map(|i| if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }).collect() };
+        let ins: Vec<&eda::netlist::Port> = nl.ports.iter().filter(|p| p.dir == eda::netlist::Dir::In && p.name != "i_clk").collect();
+        let outs: Vec<&eda::netlist::Port> = nl.ports.iter().filter(|p| p.dir == eda::netlist::Dir::Out).collect();
         let has_clk = nl.ports.iter().any(|p| p.name == "i_clk");
         for cycle in 0..300 {
             for p in &ins {
@@ -985,10 +985,10 @@ fn bitstream_decode_matches_netlist() {
 fn bitstream_blinky_on_board() {
     let Some(chip) = chip() else { eprintln!("no chipdb: skipped"); return };
     let nl = ice40_of(&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)]);
-    let o = pnr_of(&chip, &nl, crate::board::icebreaker::DEFAULT_PCF);
-    let bin = crate::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
-    let (dd, _) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
-    let mut b = crate::board::icebreaker::board_from_pins(dd).unwrap();
+    let o = pnr_of(&chip, &nl, eda::fpga::board::icebreaker::DEFAULT_PCF);
+    let bin = eda::fpga::pnr::bitstream::asc_to_bin(&o.asc).unwrap();
+    let (dd, _) = eda::fpga::board::bitstream::decode(&chip, &eda::fpga::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
+    let mut b = eda::fpga::board::icebreaker::board_from_pins(dd).unwrap();
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     b.set_pin(10, false);
     b.run(3);
@@ -1011,25 +1011,25 @@ fn bitstream_decode_nextpnr() {
     let dir = std::env::temp_dir().join(format!("veryl-eda-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let tut_pcf = dir.join("tut.pcf");
-    std::fs::write(&tut_pcf, crate::board::icebreaker::DEFAULT_PCF).unwrap();
+    std::fs::write(&tut_pcf, eda::fpga::board::icebreaker::DEFAULT_PCF).unwrap();
     let designs: &[(&[&str], &str, &[(&str, u128)], &std::path::Path)] = &[
         (&["tutorial/src/blinky.veryl"], "Blinky", &[("WIDTH", 6)], &tut_pcf),
         (&["tutorial/src/knight.veryl"], "KnightRider", &[("TICK", 3), ("DIV_W", 2)], &tut_pcf),
-        (&["examples/src/rv32i.veryl", "eda/examples/soc.veryl"], "RiscvSoc", &[], std::path::Path::new(&soc_pcf)),
+        (&["examples/src/rv32i.veryl", "synth/examples/soc.veryl"], "RiscvSoc", &[], std::path::Path::new(&soc_pcf)),
     ];
     let mut seed = 99u64;
     let mut rnd = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
     for (files, top, ov, pcf) in designs {
         let nl = ice40_of(files, top, ov);
         let (json, asc) = (dir.join(format!("{}.json", top)), dir.join(format!("{}.asc", top)));
-        std::fs::write(&json, crate::output::to_json(&nl)).unwrap();
+        std::fs::write(&json, eda::output::to_json(&nl)).unwrap();
         let out = std::process::Command::new(nextpnr).args(["--up5k", "--package", "sg48", "--json"]).arg(&json).arg("--pcf").arg(pcf).arg("--asc").arg(&asc).output().unwrap();
         assert!(out.status.success(), "nextpnr failed on {}: {}", top, String::from_utf8_lossy(&out.stderr));
-        let (dd, rep) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_asc(&std::fs::read_to_string(&asc).unwrap()).unwrap()).unwrap();
+        let (dd, rep) = eda::fpga::board::bitstream::decode(&chip, &eda::fpga::board::bitstream::Config::parse_asc(&std::fs::read_to_string(&asc).unwrap()).unwrap()).unwrap();
         assert!(rep.warnings.is_empty(), "{}: {:?}", top, rep.warnings);
-        let pin_of = crate::pnr::parse_pcf(&std::fs::read_to_string(pcf).unwrap());
-        let mut g = crate::board::Engine::new(dd).unwrap();
-        let mut e = crate::board::Engine::new(crate::board::Design::from_netlist(&nl).unwrap()).unwrap();
+        let pin_of = eda::fpga::pnr::parse_pcf(&std::fs::read_to_string(pcf).unwrap());
+        let mut g = eda::fpga::board::Engine::new(dd).unwrap();
+        let mut e = eda::fpga::board::Engine::new(eda::fpga::board::Design::from_netlist(&nl).unwrap()).unwrap();
         for cycle in 0..300 {
             if let (Some(a), Some(b)) = (e.input("i_rst"), pin_of.get("i_rst").and_then(|p| g.input(p))) {
                 let v = cycle >= 2 && rnd() % 50 != 0;
@@ -1062,10 +1062,10 @@ fn bitstream_decode_nextpnr() {
 
 // ---- the virtual board's peripherals (src/board/periph.rs) ----
 
-fn board_of(files: &[&str], top: &str, ov: &[(&str, u128)], pcf: Option<&str>) -> crate::board::Board {
+fn board_of(files: &[&str], top: &str, ov: &[(&str, u128)], pcf: Option<&str>) -> eda::fpga::board::Board {
     let nl = ice40_of(files, top, ov);
     let pcf = pcf.map(|p| std::fs::read_to_string(format!("{}/../{}", env!("CARGO_MANIFEST_DIR"), p)).unwrap());
-    crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), pcf.as_deref()).unwrap()
+    eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), pcf.as_deref()).unwrap()
 }
 
 /// tutorial lesson 3 on the USB serial port: greeting, then the echo with the case swapped
@@ -1131,7 +1131,7 @@ fn board_vga() {
         let want = (if rgb & 4 != 0 { 0xf00 } else { 0 }) | (if rgb & 2 != 0 { 0x0f0 } else { 0 }) | (if rgb & 1 != 0 { 0x00f } else { 0 });
         assert_eq!(px[row * w + col], want, "pixel x {} y {}", x, y);
     }
-    let rle = crate::board::periph::rle(px);
+    let rle = eda::fpga::board::periph::rle(px);
     assert!(rle.len() < px.len() / 10, "color bars compress: {} bytes", rle.len());
 }
 
@@ -1163,7 +1163,7 @@ fn rvsoc_test_program() -> (Vec<u8>, Vec<(usize, u64)>) {
 }
 
 /// the SoC's 32-bit words from its four byte lanes on a board
-fn rvsoc_words(b: &crate::board::Board, lanes: &[(String, Vec<u64>)], map: &[crate::pnr::RamPos]) -> Vec<u64> {
+fn rvsoc_words(b: &eda::fpga::board::Board, lanes: &[(String, Vec<u64>)], map: &[eda::fpga::pnr::RamPos]) -> Vec<u64> {
     let l: Vec<Vec<u64>> = lanes.iter().map(|(m, _)| b.mem_words(m, map)).collect();
     (0..l[0].len()).map(|i| (0..4).fold(0, |a, k| a | (l[k][i] & 0xff) << (8 * k))).collect()
 }
@@ -1176,11 +1176,11 @@ fn rvsoc_program_on_board() {
     let (bytes, exp) = rvsoc_test_program();
     let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let empty = ice40_of(&RVSOC, "RvBoard", &[]);
-    let lanes = crate::bram::program_lanes(&crate::bram::mem_names(&empty), &bytes).unwrap();
+    let lanes = eda::bram::program_lanes(&eda::bram::mem_names(&empty), &bytes).unwrap();
     assert_eq!(lanes.len(), 4);
     let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
-    for (m, w) in &lanes { assert_eq!(crate::bram::set_mem_init(&mut nl, m, w), 4, "{}: 2048×8 = four 512×8 blocks", m); }
-    let check = |b: &mut crate::board::Board, map: &[crate::pnr::RamPos], what: &str| {
+    for (m, w) in &lanes { assert_eq!(eda::bram::set_mem_init(&mut nl, m, w), 4, "{}: 2048×8 = four 512×8 blocks", m); }
+    let check = |b: &mut eda::fpga::board::Board, map: &[eda::fpga::pnr::RamPos], what: &str| {
         b.set_pin(10, false);
         b.run(3);
         b.set_pin(10, true);
@@ -1188,7 +1188,7 @@ fn rvsoc_program_on_board() {
         let w = rvsoc_words(b, &lanes, map);
         for (i, v) in &exp { assert_eq!(w[*i], *v, "{}: word {} (0x{:x})", what, i, i * 4); }
     };
-    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     check(&mut b, &[], "netlist");
     let Some(chip) = chip() else { eprintln!("no chipdb: bitstream part skipped"); return };
@@ -1196,105 +1196,24 @@ fn rvsoc_program_on_board() {
     let map = o.ram_map();
     assert_eq!(map.len(), 20);
     let mut asc = o.asc.clone();
-    for (m, w) in &lanes { let (a, n) = crate::pnr::patch_ram(&asc, &map, m, w).unwrap(); assert_eq!(n, 4); asc = a; }
+    for (m, w) in &lanes { let (a, n) = eda::fpga::pnr::patch_ram(&asc, &map, m, w).unwrap(); assert_eq!(n, 4); asc = a; }
     assert!(asc == pnr_of(&chip, &nl, &pcf).asc, "patching the program equals placing and routing it");
-    let bin = crate::pnr::bitstream::asc_to_bin(&asc).unwrap();
-    let (dd, rep) = crate::board::bitstream::decode(&chip, &crate::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
+    let bin = eda::fpga::pnr::bitstream::asc_to_bin(&asc).unwrap();
+    let (dd, rep) = eda::fpga::board::bitstream::decode(&chip, &eda::fpga::board::bitstream::Config::parse_bin(&bin).unwrap()).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
-    let mut b = crate::board::icebreaker::board_from_pins(dd).unwrap();
+    let mut b = eda::fpga::board::icebreaker::board_from_pins(dd).unwrap();
     check(&mut b, &map, "bitstream");
 }
 
-// ---- the C compiler (src/rv): programs on the instruction-set simulator and on RvSoc ----
+// ---- the C compiler (riscv/rvtools): programs on RvSoc ----
 
-/// a C test program (src/rv/tests) compiled and run on the ISS: its serial output
+/// a C test program (riscv/rvtools/tests) compiled and run on the ISS: its serial output
 fn cc_run(name: &str) -> (Vec<u8>, String, u64) {
-    let dir = format!("{}/src/rv/tests", env!("CARGO_MANIFEST_DIR"));
-    let src = std::fs::read_to_string(format!("{}/{}.c", dir, name)).unwrap();
-    let o = crate::rv::cc::compile(&format!("{}.c", name), &src, &Default::default()).unwrap_or_else(|e| panic!("{:?}", e));
-    let mut s = crate::rv::iss::Iss::new(&o.program.bytes, 8192);
+    let src = std::fs::read_to_string(format!("{}/../../riscv/rvtools/tests/{}.c", env!("CARGO_MANIFEST_DIR"), name)).unwrap();
+    let o = rvtools::cc::compile(&format!("{}.c", name), &src, &Default::default()).unwrap_or_else(|e| panic!("{:?}", e));
+    let mut s = rvtools::iss::Iss::new(&o.program.bytes, 8192);
     assert!(s.run(20_000_000).unwrap(), "{} did not halt", name);
     (o.program.bytes, String::from_utf8_lossy(&s.tx).to_string(), s.cycles)
-}
-
-/// each program prints what the host C compiler's build of it prints (the .out files,
-/// from `cc -funsigned-char -fwrapv`; RISC-V's char is unsigned)
-#[test]
-fn cc_programs() {
-    let dir = format!("{}/src/rv/tests", env!("CARGO_MANIFEST_DIR"));
-    let mut n = 0;
-    for f in std::fs::read_dir(&dir).unwrap() {
-        let p = f.unwrap().path();
-        if p.extension().map(|e| e == "c") != Some(true) { continue; }
-        let name = p.file_stem().unwrap().to_string_lossy().to_string();
-        let want = std::fs::read_to_string(p.with_extension("out")).unwrap();
-        let (_, got, _) = cc_run(&name);
-        assert_eq!(got.replace("\r\n", "\n"), want, "{}", name);
-        n += 1;
-    }
-    assert!(n >= 3);
-}
-
-/// the same programs, and those in tests/linux (system calls: files, the heap), compiled
-/// for Linux on RV64 (`Options::linux`) and run with spike's proxy kernel (pk: the same
-/// system call numbers as Linux): the same output. Without spike / pk (SPIKE, PK) only
-/// the executables are checked.
-#[test]
-fn cc_linux_programs() {
-    let dir = format!("{}/src/rv/tests", env!("CARGO_MANIFEST_DIR"));
-    let spike = std::env::var("SPIKE").unwrap_or("spike".into());
-    let pk = std::env::var("PK").unwrap_or("/opt/homebrew/opt/riscv-pk/riscv64-unknown-elf/bin/pk".into());
-    let have = std::path::Path::new(&pk).exists() && std::process::Command::new(&spike).arg("--help").output().is_ok();
-    let tmp = std::env::temp_dir().join(format!("veryl_cc_linux_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let mut n = 0;
-    let files: Vec<std::path::PathBuf> = [dir.clone(), format!("{}/linux", dir)].iter().flat_map(|d| std::fs::read_dir(d).unwrap().map(|f| f.unwrap().path())).collect();
-    for p in files {
-        if p.extension().map(|e| e == "c") != Some(true) { continue; }
-        let name = p.file_stem().unwrap().to_string_lossy().to_string();
-        let src = std::fs::read_to_string(&p).unwrap();
-        let o = crate::rv::cc::compile(&format!("{}.c", name), &src, &crate::rv::cc::Options { linux: true, ..Default::default() }).unwrap_or_else(|e| panic!("{}: {:?}", name, e));
-        let elf = o.elf.unwrap();
-        assert_eq!(&elf[..4], b"\x7fELF");
-        assert_eq!(u16::from_le_bytes([elf[18], elf[19]]), 243, "EM_RISCV");
-        n += 1;
-        if !have { continue; }
-        let exe = tmp.join(&name);
-        std::fs::write(&exe, &elf).unwrap();
-        let r = std::process::Command::new(&spike).args(["--isa=rv64imac", &pk, exe.to_str().unwrap()]).current_dir(&tmp).output().unwrap();
-        let got = String::from_utf8_lossy(&r.stdout).replace("bbl loader\r\n", "").replace("bbl loader\n", "");
-        let want = std::fs::read_to_string(p.with_extension("out")).unwrap();
-        assert_eq!(got, want, "{} (spike pk)", name);
-    }
-    let _ = std::fs::remove_dir_all(&tmp);
-    assert!(n >= 4);
-    eprintln!("cc_linux_programs: {} programs{}", n, if have { " match on spike + pk" } else { " compiled (no spike / pk)" });
-}
-
-/// compile errors point at the line
-#[test]
-fn cc_errors() {
-    let e = |src: &str| crate::rv::cc::compile("t.c", src, &Default::default()).err().unwrap_or_default();
-    let x = e("int main(void) {\n  int a;\n  b = 1;\n  return 0;\n}\n");
-    assert!(x.iter().any(|d| d.line == 3 && d.msg.contains("'b' is not declared")), "{:?}", x);
-    let x = e("int main(void) {\n  int *p;\n  p = 5;\n  foo(1);\n}\n");
-    assert!(x.iter().any(|d| d.line == 3 && d.msg.contains("cast")), "{:?}", x);
-    assert!(x.iter().any(|d| d.line == 4 && d.msg.contains("foo is not declared")), "{:?}", x);
-    let x = e("int f(int a) { return a; }\nint main(void) { return f(1, 2) }\n");
-    assert!(x.iter().any(|d| d.line == 2), "{:?}", x);
-    let x = e("int main(void) { struct s x; }\n");
-    assert!(!x.is_empty());
-}
-
-/// the assembler round trip: every RV32I instruction the compiler can emit, assembled and executed
-#[test]
-fn asm_and_iss() {
-    let p = crate::rv::asm::assemble(".text\n_start:\n li sp, 0x1000\n li a0, 0x12345678\n li a1, -5\n add a2, a0, a1\n la t0, val\n lw t1, 0(t0)\n sw a2, 4(t0)\n lbu t2, 3(t0)\n lb t3, 2(t0)\n call f\n j .\nf:\n addi a0, a0, 1\n ret\n .data\nval: .word 0x80ff0102, 0\n").unwrap();
-    let mut s = crate::rv::iss::Iss::new(&p.bytes, 8192);
-    assert!(s.run(100).unwrap());
-    let r = |n: &str| s.x[crate::rv::asm::reg(n).unwrap() as usize];
-    assert_eq!((r("a0"), r("a2"), r("t1"), r("t2"), r("t3")), (0x12345679, 0x12345673, 0x80ff0102, 0x80, 0xffffffff));
-    assert!(crate::rv::asm::assemble("addi a0, a0, 5000").is_err());
 }
 
 /// a compiled C program on the gate-level RvBoard (program in its block RAMs) on the virtual
@@ -1304,8 +1223,8 @@ fn cc_on_rvsoc() {
     let (bytes, want, cycles) = cc_run("pointers");
     let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
-    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &bytes).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
-    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    for (m, w) in eda::bram::program_lanes(&eda::bram::mem_names(&nl), &bytes).unwrap() { eda::bram::set_mem_init(&mut nl, &m, &w); }
+    let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
     b.attach_uart(9, 6, 104.0);
     b.set_pin(10, false);
     b.run(3);
@@ -1323,17 +1242,17 @@ fn cc_on_rvsoc() {
 fn threads_on_rvsoc() {
     let src = std::fs::read_to_string(format!("{}/../examples/c/threads.c", env!("CARGO_MANIFEST_DIR"))).unwrap()
         .replace("#define SLICE    120000", "#define SLICE    3000").replace("frame[10] * 12000", "frame[10] * 150").replace("count % 200 == 0", "count % 20 == 0");
-    let bytes = crate::rv::cc::compile("threads.c", &src, &Default::default()).unwrap_or_else(|e| panic!("{:?}", e)).program.bytes;
+    let bytes = rvtools::cc::compile("threads.c", &src, &Default::default()).unwrap_or_else(|e| panic!("{:?}", e)).program.bytes;
     const CYCLES: u64 = 600_000;
-    let mut s = crate::rv::iss::Iss::new(&bytes, 8192);
+    let mut s = rvtools::iss::Iss::new(&bytes, 8192);
     s.tx_cycles = 1040;
     while s.cycles < CYCLES { s.step_until(CYCLES).unwrap(); }
     let want = String::from_utf8_lossy(&s.tx).to_string();
     assert!(want.contains("A: 16") && want.contains("B: 8") && want.contains("primes: #40 "), "{}", want);
     let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let mut nl = ice40_of(&RVSOC, "RvBoard", &[]);
-    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &bytes).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
-    let mut b = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    for (m, w) in eda::bram::program_lanes(&eda::bram::mem_names(&nl), &bytes).unwrap() { eda::bram::set_mem_init(&mut nl, &m, &w); }
+    let mut b = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
     b.attach_uart(9, 6, 104.0);
     b.set_pin(10, false);
     b.run(3);
@@ -1351,7 +1270,7 @@ fn threads_on_rvsoc() {
 /// a C example (examples/c) compiled
 fn c_example(name: &str) -> Vec<u8> {
     let src = std::fs::read_to_string(format!("{}/../examples/c/{}.c", env!("CARGO_MANIFEST_DIR"), name)).unwrap();
-    crate::rv::cc::compile(&format!("{}.c", name), &src, &Default::default()).unwrap().program.bytes
+    rvtools::cc::compile(&format!("{}.c", name), &src, &Default::default()).unwrap().program.bytes
 }
 
 /// the CPU board (RvSoc's pins, the CPU as an instruction-set simulator): the serial port at
@@ -1359,7 +1278,7 @@ fn c_example(name: &str) -> Vec<u8> {
 #[test]
 fn cpu_board() {
     let pcf = std::fs::read_to_string(format!("{}/../examples/rvsoc.pcf", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    let mut b = crate::board::Board::cpu(&c_example("hello"), 8192, &pcf, 35).unwrap();
+    let mut b = eda::fpga::board::Board::cpu(&c_example("hello"), 8192, &pcf, 35).unwrap();
     assert!(b.warnings.is_empty(), "{:?}", b.warnings);
     b.attach_uart(9, 6, 104.0);
     b.run(60_000);
@@ -1371,7 +1290,7 @@ fn cpu_board() {
     assert!(String::from_utf8_lossy(&b.uart.as_ref().unwrap().received).ends_with("OK!"));
     // the LEDs count every 200 ms
     b.run(2_400_000 * 2);
-    let led = |b: &crate::board::Board| [4, 2, 47, 45, 3, 48, 46, 44].iter().enumerate().fold(0, |a, (i, p)| a | (b.pin(*p).unwrap() as u32) << i);
+    let led = |b: &eda::fpga::board::Board| [4, 2, 47, 45, 3, 48, 46, 44].iter().enumerate().fold(0, |a, (i, p)| a | (b.pin(*p).unwrap() as u32) << i);
     assert_eq!(led(&b), 2);
     // switches -> LEDs; the reset button restarts the program
     b.load_program(&c_example("switches")).unwrap();
@@ -1385,7 +1304,7 @@ fn cpu_board() {
     b.run(100_000);
     assert_eq!(led(&b), 0b0100_1001);
     // seven-segment: 00 then counting; both digits lit about half the time
-    let mut b = crate::board::Board::cpu(&c_example("sevenseg"), 8192, &pcf, 35).unwrap();
+    let mut b = eda::fpga::board::Board::cpu(&c_example("sevenseg"), 8192, &pcf, 35).unwrap();
     b.attach_seg([Some(4), Some(2), Some(47), Some(45), Some(3), Some(48), Some(46), None], &[(44, false), (44, true)], true);
     b.run(12_000_000 / 4 * 3 + 50_000);
     b.take_segs(1);
@@ -1396,7 +1315,7 @@ fn cpu_board() {
     let pattern = |d: &[f64; 8]| d[..7].iter().enumerate().fold(0u8, |a, (k, x)| a | ((*x > 0.2) as u8) << k);
     assert_eq!((pattern(&s[0][0]), pattern(&s[0][1])), (0x4f, 0x3f), "3 and 0 after 0.75 s: {:?}", s);
     // speed
-    let mut b = crate::board::Board::cpu(&c_example("knight"), 8192, &pcf, 35).unwrap();
+    let mut b = eda::fpga::board::Board::cpu(&c_example("knight"), 8192, &pcf, 35).unwrap();
     let t0 = std::time::Instant::now();
     b.run(12_000_000);
     println!("CPU board: {:.1} x real time", 1.0 / t0.elapsed().as_secs_f64());
@@ -1411,18 +1330,18 @@ fn vga_text_on_board() {
     let files = ["examples/src/rv32i.veryl", "examples/src/sync_ram.veryl", "examples/src/uart.veryl", "examples/src/rvsoc.veryl", "examples/src/vga.veryl", "examples/src/rvvga.veryl"];
     let mut nl = ice40_of(&files, "RvVgaBoard", &[]);
     assert_eq!(nl.cells.iter().filter(|c| c.typ == "SB_RAM40_4K").count(), 26);
-    for (m, w) in crate::bram::program_lanes(&crate::bram::mem_names(&nl), &prog).unwrap() { crate::bram::set_mem_init(&mut nl, &m, &w); }
-    let frame = |b: &mut crate::board::Board| {
+    for (m, w) in eda::bram::program_lanes(&eda::bram::mem_names(&nl), &prog).unwrap() { eda::bram::set_mem_init(&mut nl, &m, &w); }
+    let frame = |b: &mut eda::fpga::board::Board| {
         b.attach_vga(42, 36, &[45, 47, 2, 4], &[31, 34, 38, 43], &[44, 46, 48, 3]);
         b.run(1_400_000);
         let (w, h, px) = b.vga.as_ref().unwrap().frame.clone().expect("a frame");
         assert_eq!((w, h), (800, 525));
         (0..480).flat_map(|y| (0..640).map(move |x| (x, y))).map(|(x, y)| px[(y + 35) * w + x + 144]).collect::<Vec<u16>>()
     };
-    let mut g = crate::board::icebreaker::board(crate::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
+    let mut g = eda::fpga::board::icebreaker::board(eda::fpga::board::Design::from_netlist(&nl).unwrap(), Some(&pcf)).unwrap();
     assert!(g.warnings.is_empty(), "{:?}", g.warnings);
     let hw = frame(&mut g);
-    let mut c = crate::board::Board::cpu(&prog, 8192, &pcf, 35).unwrap();
+    let mut c = eda::fpga::board::Board::cpu(&prog, 8192, &pcf, 35).unwrap();
     let sw = frame(&mut c);
     // yellow on dark blue, the title in the box
     assert!(hw.iter().filter(|p| **p == 0xff0).count() > 2000 && hw.iter().filter(|p| **p == 0x00a).count() > 200_000);
@@ -1446,7 +1365,7 @@ fn iss_rv32ima_matches_spike() {
         }
     }
     assert_eq!(exp.len(), 59);
-    let mut s = crate::rv::iss::Iss::new(&bytes, 2048);
+    let mut s = rvtools::iss::Iss::new(&bytes, 2048);
     assert!(s.run(10_000).unwrap(), "halts");
     for (i, v) in exp.iter().enumerate() {
         let a = 0x400 + 4 * i;

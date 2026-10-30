@@ -5,7 +5,7 @@
 //! passes the carry on, so the carry can leave the chain), `TRELLIS_FF` and `DP16KD`
 //! block RAMs for memories with synchronous reads (see `brams`).
 
-use crate::ice40::{find_carries, lut_cover, truth, PAT};
+use crate::fpga::ice40::{find_carries, lut_cover, truth, PAT};
 use crate::netlist::*;
 use std::collections::HashMap;
 

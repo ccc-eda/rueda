@@ -1,5 +1,5 @@
 //! Bitstream → circuit: decodes an iCE40UP5K configuration (`.asc`, or a
-//! `.bin` through [`crate::pnr::bitstream::bin_to_asc`]) into a [`Design`],
+//! `.bin` through [`crate::fpga::pnr::bitstream::bin_to_asc`]) into a [`Design`],
 //! so the virtual board runs exactly what would be flashed.
 //!
 //! Routing: every input mux whose config bits equal a pip's pattern connects
@@ -11,7 +11,7 @@
 //! The design's IO is named by package pin ("35").
 
 use super::{Comb, Ctl, Design, Ff, Ram, C0, C1};
-use crate::pnr::chipdb::Chip;
+use crate::fpga::pnr::chipdb::Chip;
 use std::collections::{HashMap, HashSet};
 
 type R<T> = Result<T, String>;
@@ -69,7 +69,7 @@ impl Config {
         Ok(c)
     }
 
-    pub fn parse_bin(bin: &[u8]) -> R<Config> { Self::parse_asc(&crate::pnr::bitstream::bin_to_asc(bin)?) }
+    pub fn parse_bin(bin: &[u8]) -> R<Config> { Self::parse_asc(&crate::fpga::pnr::bitstream::bin_to_asc(bin)?) }
 
     fn bit(&self, x: i32, y: i32, (r, c): (u8, u8)) -> bool {
         self.tiles.get(&(x, y)).and_then(|t| t.get(r as usize)).and_then(|row| row.get(c as usize)).copied().unwrap_or(false)

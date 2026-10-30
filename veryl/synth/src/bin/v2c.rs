@@ -125,12 +125,12 @@ fn main() {
     // argument errors in the tools point back to `v2c help <subcommand>`
     let name: &'static str = COMMANDS.iter().find(|x| x.0 == cmd).map(|x| x.0).unwrap_or("help");
     let _ = veryl_sim::cli::V2C.set(name);
-    let _ = veryl_eda::cli::V2C.set(name);
+    let _ = veryl_synth::cli::V2C.set(name);
     let with = |flag: &[&str]| -> Vec<String> { flag.iter().map(|s| s.to_string()).chain(rest.iter().cloned()).collect() };
     match cmd {
         "sim" | "test" => veryl_sim::cli::main(&rest),
         "list" => veryl_sim::cli::main(&with(&["--list"])),
-        "synth" => veryl_eda::cli::main(rest),
+        "synth" => veryl_synth::cli::main(rest),
         "fpga" => {
             // --arch ice40 (default) | ecp5
             let mut arch = "ice40".to_string();
@@ -141,22 +141,22 @@ fn main() {
             }
             let flag = match arch.as_str() { "ice40" => "--ice40", "ecp5" => "--ecp5", o => { eprintln!("v2c fpga: --arch is ice40 or ecp5, not '{}'", o); std::process::exit(2) } };
             a.insert(0, flag.to_string());
-            veryl_eda::cli::main(a)
+            veryl_synth::cli::main(a)
         }
-        "asic" => veryl_eda::cli::main(with(&["--asic"])),
+        "asic" => veryl_synth::cli::main(with(&["--asic"])),
         "gatesim" => {
             let Some(kind) = rest.first() else { help(Some("gatesim")) };
             if !matches!(kind.as_str(), "opt" | "ice40" | "ecp5" | "asic" | "sky130") { eprintln!("v2c gatesim: the netlist is opt, ice40, ecp5, asic or sky130, not '{}'", kind); std::process::exit(2); }
             let mut a = vec!["--gatesim".to_string(), kind.clone()];
             a.extend(rest[1..].iter().cloned());
-            veryl_eda::cli::main(a)
+            veryl_synth::cli::main(a)
         }
-        "cc" => veryl_eda::cli::main(with(&["--cc"])),
+        "cc" => veryl_synth::cli::main(with(&["--cc"])),
         "pdk" => {
             let dir: Vec<String> = rest.iter().filter(|a| *a != "check").cloned().collect();
             let mut a = vec!["--pdk-check".to_string()];
             a.extend(dir);
-            veryl_eda::cli::main(a)
+            veryl_synth::cli::main(a)
         }
         "version" | "--version" | "-V" => println!("v2c {} (veryl2chip-sim, veryl2chip-eda)", VERSION),
         "help" | "-h" | "--help" => help(rest.first().map(|s| s.as_str())),

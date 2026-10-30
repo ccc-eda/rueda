@@ -1,13 +1,13 @@
 [package]
-name = "rueda-veryl-eda"
-description = "Veryl HDL to chip: synthesis, FPGA place & route and bitstream, ASIC standard-cell flow"
+name = "rueda-veryl-synth"
+description = "Veryl synthesis front end: Veryl HDL to eda's gate netlist, post-synthesis simulation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [lib]
-name = "veryl_eda"
+name = "veryl_synth"
 
 [[bin]]
 name = "veryl-eda"
@@ -20,3 +20,5 @@ path = "src/bin/v2c.rs"
 [dependencies]
 veryl-parser.workspace = true
 veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }
+eda = { package = "rueda-eda", path = "../../eda" }
+rvtools = { package = "rueda-rvtools", path = "../../riscv/rvtools" }

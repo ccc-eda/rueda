@@ -1,6 +1,9 @@
 //! The `veryl-eda` command line, also behind `v2c synth / fpga / asic / gatesim / cc / pdk`.
 
-use crate::{asic, bram, ecp5, elab, ice40, netlist, output, pnr, rv};
+use crate::elab;
+use eda::fpga::{ecp5, ice40, pnr};
+use eda::{asic, bram, netlist, output};
+use rvtools as rv;
 use std::sync::OnceLock;
 
 /// set by `v2c` to its subcommand: argument errors point to `v2c help <subcommand>`
@@ -42,7 +45,7 @@ fn usage() -> ! {
 }
 
 /// the constraint report: per clock its period and endpoints, WNS / TNS, the failing endpoints
-pub fn slack_line(s: &crate::asic::sta::Slack) -> String {
+pub fn slack_line(s: &eda::asic::sta::Slack) -> String {
     let clocks: Vec<String> = s.clocks.iter().map(|(n, p, e)| format!("{} {:.3} ns ({:.1} MHz, {} endpoints)", n, p, 1000.0 / p, e)).collect();
     format!("timing: constraints {}: WNS {:+.3} ns, TNS {:.3} ns, {} of {} endpoints failing{}{}",
         if clocks.is_empty() { "(IO only)".to_string() } else { clocks.join(", ") }, s.wns, s.tns, s.failing, s.checked,
@@ -107,7 +110,7 @@ fn cc_main(args: &[String]) -> ! {
 
 /// `veryl-eda --pdk-check [DIR]`: read SKY130's Liberty and LEF files, print what the flow uses
 fn pdk_check(dir: Option<&String>) -> ! {
-    use crate::pdk;
+    use eda::pdk;
     let d = dir.map(PathBuf::from).or_else(pdk::sky130_dir).unwrap_or_else(|| { eprintln!("no SKY130 directory (give one, or set VERYL_EDA_SKY130)"); std::process::exit(1) });
     let t0 = std::time::Instant::now();
     let t = pdk::sky130_from_dir(&d).unwrap_or_else(|e| { eprintln!("{}: {}", d.display(), e); std::process::exit(1) });
@@ -141,7 +144,7 @@ pub fn main(all: Vec<String>) {
     let mut map_only = false;
     let mut gds_out: Option<String> = None;
     let mut spice_out: Option<String> = None;
-    let mut sdc: Option<crate::sdc::Constraints> = None;
+    let mut sdc: Option<eda::sdc::Constraints> = None;
     let mut gatesim: Option<String> = None;
     let mut timing_driven = true;
     let mut program: Option<String> = None;
@@ -167,11 +170,11 @@ pub fn main(all: Vec<String>) {
             "--sdc" => {
                 let f = a.next().unwrap_or_else(|| usage());
                 let text = std::fs::read_to_string(&f).unwrap_or_else(|e| { eprintln!("{}: {}", f, e); std::process::exit(1) });
-                sdc = Some(crate::sdc::parse(&text).unwrap_or_else(|e| { eprintln!("{}: {}", f, e); std::process::exit(2) }));
+                sdc = Some(eda::sdc::parse(&text).unwrap_or_else(|e| { eprintln!("{}: {}", f, e); std::process::exit(2) }));
             }
             "--clock" => {
                 let mhz: f64 = a.next().and_then(|s| s.parse().ok()).filter(|m: &f64| *m > 0.0).unwrap_or_else(|| usage());
-                sdc = Some(crate::sdc::Constraints { clocks: vec![crate::sdc::Clock { name: "clk".into(), period: 1000.0 / mhz, port: None }], ..Default::default() });
+                sdc = Some(eda::sdc::Constraints { clocks: vec![eda::sdc::Clock { name: "clk".into(), period: 1000.0 / mhz, port: None }], ..Default::default() });
             }
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "--no-timing-driven" => timing_driven = false,
@@ -190,11 +193,11 @@ pub fn main(all: Vec<String>) {
         }
     }
     if files.is_empty() { usage(); }
-    let tech = crate::pdk::by_name(&pdk_name).unwrap_or_else(|e| { eprintln!("--pdk: {}", e); std::process::exit(2) });
-    crate::pdk::set_tech(Some(tech.clone()));
+    let tech = eda::pdk::by_name(&pdk_name).unwrap_or_else(|e| { eprintln!("--pdk: {}", e); std::process::exit(2) });
+    eda::pdk::set_tech(Some(tech.clone()));
     // the target clock (the first constrained one) for nextpnr and the FPGA timing report
     let target = sdc.as_ref().and_then(|c| c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| k.period));
-    crate::sdc::set(sdc);
+    eda::sdc::set(sdc);
 
     let mut parsers = vec![];
     for f in &files {
@@ -243,11 +246,11 @@ pub fn main(all: Vec<String>) {
         if map_only {
             // technology mapping only (no place & route): for the netlist
             let m = asic::map::map(&nl).unwrap_or_else(|e| { eprintln!("ASIC mapping error: {}", e); std::process::exit(1) });
-            nl = crate::pdk::to_library(&m);
+            nl = eda::pdk::to_library(&m);
             if verilog.is_some() { asic_models = true; }
         } else {
             let out = asic::flow(&nl, seed).unwrap_or_else(|e| { eprintln!("ASIC flow error: {}", e); std::process::exit(1) });
-            nl = crate::pdk::to_library(&out.mapped);
+            nl = eda::pdk::to_library(&out.mapped);
             asic_out = Some(out);
         }
     }
@@ -417,14 +420,14 @@ pub fn main(all: Vec<String>) {
     if let (Some(p), Some(o)) = (&gds_out, &asic_out) {
         if tech.is_vlib() { eprintln!("--gds needs a PDK with cell layouts (--pdk sky130)"); std::process::exit(2); }
         let l = asic::layout::build(o).unwrap_or_else(|e| { eprintln!("layout: {}", e); std::process::exit(1) });
-        let g = asic::gds::write(&l, &o.mapped.name, crate::pdk::SKY130_GDS).unwrap_or_else(|e| { eprintln!("GDS: {}", e); std::process::exit(1) });
+        let g = asic::gds::write(&l, &o.mapped.name, eda::pdk::SKY130_GDS).unwrap_or_else(|e| { eprintln!("GDS: {}", e); std::process::exit(1) });
         std::fs::write(p, &g).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
         println!("wrote {} ({} bytes: {} cell instances, {} shapes, {} labels)", p, g.len(), l.insts.len(), l.shapes.len(), l.labels.len());
     }
     if let (Some(p), Some(o)) = (&spice_out, &asic_out) {
         if tech.is_vlib() { eprintln!("--spice needs a PDK (--pdk sky130)"); std::process::exit(2); }
         // the PDK's cell subcircuits, where the full SKY130 files are
-        let cdl = crate::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists());
+        let cdl = eda::pdk::sky130_dir().map(|d| d.join("sky130hd.cdl")).filter(|p| p.exists());
         let s = asic::spice::write(o, cdl.as_ref().and_then(|p| p.to_str())).unwrap_or_else(|e| { eprintln!("SPICE: {}", e); std::process::exit(1) });
         std::fs::write(p, &s).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
         println!("wrote {} ({} cells{})", p, o.mapped.cells.len(), if cdl.is_some() { "" } else { "; no sky130hd.cdl found: add the PDK's cell subcircuits yourself (tools/sky130.sh)" });
@@ -435,7 +438,7 @@ pub fn main(all: Vec<String>) {
     }
     if let Some(p) = verilog {
         let mut v = output::to_verilog(&nl);
-        if asic_out.is_some() || asic_models { v += &crate::pdk::verilog_models(); }
+        if asic_out.is_some() || asic_models { v += &eda::pdk::verilog_models(); }
         std::fs::write(&p, v).unwrap_or_else(|e| { eprintln!("{}: {}", p, e); std::process::exit(1) });
         println!("wrote {}", p);
     }

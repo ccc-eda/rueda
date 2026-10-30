@@ -2,7 +2,7 @@
 //! or vlib standard cells) as a gate model for veryl-sim, so the design's
 //! own RTL testbenches run against the gates.
 
-use crate::netlist::{Bit, Dir, Netlist};
+use eda::netlist::{Bit, Dir, Netlist};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use veryl_sim::gates::{GCell, GPort, GateNetlist, Pin};
@@ -15,7 +15,7 @@ pub fn to_gates(nl: &Netlist) -> GateNetlist {
         ports: nl.ports.iter().map(|p| GPort { name: p.name.clone(), output: p.dir == Dir::Out, bits: p.bits.iter().map(|b| pin(*b)).collect() }).collect(),
         // (antenna diodes have no function)
         cells: nl.cells.iter().filter(|c| c.typ != "DIODE").map(|c| GCell {
-            typ: crate::netlist::base(&c.typ).to_string(),
+            typ: eda::netlist::base(&c.typ).to_string(),
             conns: c.conns.iter().map(|(p, b)| (p.to_string(), pin(*b))).collect(),
             params: c.params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
         }).collect(),
@@ -33,11 +33,11 @@ pub fn netlist_with(lib: &crate::elab::Lib, top: &str, ov: &HashMap<String, Val>
     let (nl, _) = crate::elab::synthesize_with(lib, top, ov)?;
     match kind {
         "opt" | "gate" => Ok(nl),
-        "ice40" => crate::ice40::map(&nl),
-        "ecp5" => crate::ecp5::map(&nl),
-        "asic" => crate::asic::map::map(&nl),
+        "ice40" => eda::fpga::ice40::map(&nl),
+        "ecp5" => eda::fpga::ecp5::map(&nl),
+        "asic" => eda::asic::map::map(&nl),
         // SKY130 mapping (no SRAM macros, negative-edge flip-flops with a clock inverter)
-        "sky130" => crate::pdk::with_tech(crate::pdk::sky130_builtin()?, || crate::asic::map::map(&nl)),
+        "sky130" => eda::pdk::with_tech(eda::pdk::sky130_builtin()?, || eda::asic::map::map(&nl)),
         k => Err(format!("unknown netlist kind '{}' (opt, ice40, ecp5, asic, sky130)", k)),
     }
 }

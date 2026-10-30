@@ -10,8 +10,8 @@
 //! (placeholder bit -> driving bit) and resolved later in `netlist::optimize`.
 
 use crate::expr::*;
-use crate::netlist::*;
-use crate::netlist::{Bit, Dir, Port};
+use eda::netlist::*;
+use eda::netlist::{Bit, Dir, Port};
 use crate::value::*;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -1128,7 +1128,7 @@ impl<'l, 'a> Synth<'l, 'a> {
         for env in [&mut env_n, &mut env_r] {
             for (n, depth, w) in &arrays {
                 env.insert(mem_key(n, "we"), vec![Bit::C0]);
-                let (wa, wd) = (self.b.wires(crate::netlist::bits_for(*depth).max(1) as u32), self.b.wires(*w as u32));
+                let (wa, wd) = (self.b.wires(eda::netlist::bits_for(*depth).max(1) as u32), self.b.wires(*w as u32));
                 env.insert(mem_key(n, "wa"), wa);
                 env.insert(mem_key(n, "wd"), wd);
             }

@@ -1009,6 +1009,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "rueda-bits"
+version = "0.1.0"
+
+[[package]]
+name = "rueda-eda"
+version = "0.1.0"
+dependencies = [
+ "rueda-bits",
+ "rueda-rvtools",
+]
+
+[[package]]
 name = "rueda-fluxa"
 version = "0.1.0"
 
@@ -1017,12 +1029,8 @@ name = "rueda-rvemu"
 version = "0.1.0"
 
 [[package]]
-name = "rueda-veryl-eda"
+name = "rueda-rvtools"
 version = "0.1.0"
-dependencies = [
- "rueda-veryl-sim",
- "veryl-parser",
-]
 
 [[package]]
 name = "rueda-veryl-emu"
@@ -1036,6 +1044,17 @@ dependencies = [
 name = "rueda-veryl-sim"
 version = "0.1.0"
 dependencies = [
+ "rueda-bits",
+ "veryl-parser",
+]
+
+[[package]]
+name = "rueda-veryl-synth"
+version = "0.1.0"
+dependencies = [
+ "rueda-eda",
+ "rueda-rvtools",
+ "rueda-veryl-sim",
  "veryl-parser",
 ]
 
@@ -1043,9 +1062,11 @@ dependencies = [
 name = "rueda-veryl-wasm"
 version = "0.1.0"
 dependencies = [
- "rueda-veryl-eda",
+ "rueda-eda",
+ "rueda-rvtools",
  "rueda-veryl-emu",
  "rueda-veryl-sim",
+ "rueda-veryl-synth",
  "serde_json",
  "veryl-parser",
 ]

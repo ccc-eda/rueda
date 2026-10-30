@@ -343,7 +343,7 @@ pub fn bits_for(n: usize) -> usize {
     k
 }
 
-pub fn const_bits(v: impl Into<crate::value::Bits>, w: u32) -> Vec<Bit> {
+pub fn const_bits(v: impl Into<bits::Bits>, w: u32) -> Vec<Bit> {
     let v = v.into();
     (0..w).map(|i| Bit::of(v.bit(i))).collect()
 }

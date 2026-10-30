@@ -402,7 +402,7 @@ pub struct Board {
 /// memory map and cycle counts, fast enough for real time. Pins from the pcf: o_led[k] (the LED
 /// register), i_btn[k] / i_sw[k] (the buttons register), i_rst (BTN_N), the serial port (o_tx / i_rx).
 pub struct Cpu {
-    pub iss: crate::rv::iss::Iss,
+    pub iss: rvtools::iss::Iss,
     /// (pin_out index, LED register bit)
     led: Vec<(usize, u32)>,
     /// (input net, buttons register bit)
@@ -419,7 +419,7 @@ pub struct Cpu {
 impl Board {
     /// bind `d` to the board's pins with a pcf (`set_io name pin`); `clock_pin` runs at the board clock
     pub fn new(d: Design, pcf: &str, clock_pin: u32) -> R<Board> {
-        let map = crate::pnr::parse_pcf(pcf);
+        let map = crate::fpga::pnr::parse_pcf(pcf);
         let mut warnings = vec![];
         let mut pin_in = HashMap::new();
         let mut pin_out = vec![];
@@ -461,11 +461,11 @@ impl Board {
             let n = net(&mut d);
             outs.push((name, n));
         }
-        let map = crate::pnr::parse_pcf(pcf);
+        let map = crate::fpga::pnr::parse_pcf(pcf);
         d.inputs = ins.into_iter().filter(|(n, _)| map.contains_key(n)).collect();
         d.outputs = outs.into_iter().filter(|(n, _)| map.contains_key(n)).collect();
         let mut b = Board::new(d, pcf, clock_pin)?;
-        let mut iss = crate::rv::iss::Iss::new(program, mem);
+        let mut iss = rvtools::iss::Iss::new(program, mem);
         let led = b.pin_out.iter().enumerate().filter_map(|(i, p)| {
             let name = b.eng.d.outputs.iter().find(|o| o.1 == p.1)?.0.clone();
             Some((i, name.strip_prefix("o_led[")?.strip_suffix(']')?.parse().ok()?))
@@ -489,7 +489,7 @@ impl Board {
         let mem = c.iss.mem.len();
         if program.len() > mem { return Err(format!("the program ({} bytes) does not fit {} bytes of RAM", program.len(), mem)); }
         let tx = c.iss.tx_cycles;
-        c.iss = crate::rv::iss::Iss::new(program, mem);
+        c.iss = rvtools::iss::Iss::new(program, mem);
         c.iss.tx_cycles = tx;
         c.acct = c.iss.cycles;
         c.error = None;
@@ -573,7 +573,7 @@ impl Board {
     /// drive an input pin (buttons, switches); pins the design does not use are ignored
     /// The words of memory `name` as they are now: its blocks are found by their slot
     /// (a design from a netlist) or by their tile in `map` (from a bitstream, `pnr::Output::ram_map`)
-    pub fn mem_words(&self, name: &str, map: &[crate::pnr::RamPos]) -> Vec<u64> {
+    pub fn mem_words(&self, name: &str, map: &[crate::fpga::pnr::RamPos]) -> Vec<u64> {
         let mut words: Vec<u64> = vec![];
         for (i, r) in self.eng.d.rams.iter().enumerate() {
             let slot = r.slot.clone().or_else(|| map.iter().find(|p| Some((p.x, p.y)) == r.tile).map(|p| p.slot.clone()));

@@ -19,7 +19,7 @@ use super::lib::{row_h, site_w};
 use super::place::RowPlacement;
 use super::route::Routing;
 use crate::netlist::{is_out, Bit, Dir, Netlist};
-use crate::pnr::sta::Step;
+use crate::fpga::pnr::sta::Step;
 use std::collections::HashMap;
 
 /// wire delay (ns) to a sink `dist` µm from the driver on a net with `len` µm of metal

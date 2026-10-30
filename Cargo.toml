@@ -1,9 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "eda",
+    "eda/bits",
     "riscv/rvemu",
+    "riscv/rvtools",
     "veryl/sim",
-    "veryl/eda",
+    "veryl/synth",
     "veryl/emu",
     "veryl/wasm",
     "fluxa/sim",

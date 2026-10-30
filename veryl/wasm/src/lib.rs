@@ -47,7 +47,7 @@ pub extern "C" fn panic_message() -> *const u8 {
 #[no_mangle]
 pub unsafe extern "C" fn load_chipdb(p: *const u8, n: usize) -> i32 {
     let text = String::from_utf8_lossy(std::slice::from_raw_parts(p, n));
-    match veryl_eda::pnr::chipdb::Chip::parse(&text, "sg48") {
+    match eda::fpga::pnr::chipdb::Chip::parse(&text, "sg48") {
         Ok(c) => { api::set_chip(c); 0 }
         Err(e) => { PANIC.with(|p| *p.borrow_mut() = e); 1 }
     }

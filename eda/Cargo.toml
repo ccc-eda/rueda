@@ -1,0 +1,15 @@
+[package]
+name = "rueda-eda"
+description = "Language-independent EDA back end: gate netlist, iCE40 / ECP5 mapping, place & route and bitstream, ASIC standard-cell flow (vlib or SKY130, to GDS)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+exclude = ["bits"]
+
+[lib]
+name = "eda"
+
+[dependencies]
+bits = { package = "rueda-bits", path = "bits" }
+rvtools = { package = "rueda-rvtools", path = "../riscv/rvtools" }
