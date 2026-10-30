@@ -647,7 +647,8 @@ impl<'p> Gen<'p> {
         let mut vals = vec![];
         for x in a { vals.push((x.name.clone(), self.eval(&x.value)?)); }
         self.rename += 1;
-        let (params, body) = crate::lower::rename_fn(&decl, self.rename);
+        let consts: HashSet<String> = self.prog.consts.read().unwrap().keys().cloned().collect();
+        let (params, body) = crate::lower::rename_fn(&decl, self.rename, &consts);
         let mut positional = vals.iter().filter(|(n, _)| n.is_none()).map(|(_, v)| v.clone());
         for (p, u) in decl.params.iter().zip(&params) {
             let v = match vals.iter().find(|(n, _)| n.as_deref() == Some(p.name.as_str())) { Some((_, v)) => v.clone(), None => match positional.next() { Some(v) => v, None => return err(line, self.prog, format!("missing argument `{}`", p.name)) } };
@@ -695,7 +696,6 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         let h = match &p.ty {
             TypeExpr::Chan(t, _) => {
                 let ty = gen.ty(t, decl.line)?;
-                if !ty.is_scalar() { return Err(format!("{}: channel `{}`: channels of arrays or tuples are not synthesized yet", prog.loc(decl.line), p.name)); }
                 match crate::dir_of(decl, &p.name) {
                     Some(true) => ParamHw::OutChan(ty),
                     Some(false) => ParamHw::InChan(ty),
@@ -704,8 +704,9 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             }
             t => {
                 let ty = gen.ty(t, decl.line)?;
-                if !ty.is_scalar() { return Err(format!("{}: parameter `{}`: arrays as parameters are not synthesized yet", prog.loc(decl.line), p.name)); }
-                ParamHw::Scalar(ty, params.get(&p.name).copied())
+                // an array parameter is an input port of all its bits (a constant only when scalar)
+                let k = if ty.is_scalar() { params.get(&p.name).copied() } else { None };
+                ParamHw::Scalar(ty, k)
             }
         };
         hw.push((p.name.clone(), u.clone(), h));
@@ -780,7 +781,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             ParamHw::Scalar(t, None) => {
                 let bits = g.g.wires(t.width() as u32);
                 ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
-                scalars.insert(u.clone(), HV::S(SVal::of_ty(bits, t)));
+                scalars.insert(u.clone(), HV::of_ty(&bits, t));
             }
         }
     }
@@ -832,7 +833,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 } else {
                     ins = g.g.and(ins, valid);
                 }
-                let v = HV::S(SVal::of_ty(c.data.clone(), &chans[ch].ty));
+                let v = HV::of_ty(&c.data, &chans[ch].ty);
                 let v = fit_hv(&mut g.g, &v, &vars[dst])?;
                 g.env.insert(dst.clone(), v);
             }
@@ -866,7 +867,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 let take_close = { let x = g.g.and(is_s, c.valid); let y = g.g.and(x, c.close); g.g.and(y, nc) };
                 closed_set.entry(ch.clone()).or_default().push(take_close);
                 let t = vars[dst].clone();
-                let v = HV::S(SVal::of_ty(c.data.clone(), &chans[ch].ty));
+                let v = HV::of_ty(&c.data, &chans[ch].ty);
                 let v = fit_hv(&mut g.g, &v, &t)?;
                 g.env.insert(dst.clone(), v);
                 let kn = konst(*next);
@@ -874,9 +875,9 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 (valid, nx)
             }
             Term::Send { ch, val, next } => {
-                let v = g.scalar(val)?;
-                let v = fit(&mut g.g, &v, &chans[ch].ty);
-                offers.entry(ch.clone()).or_default().push((is_s, v.bits.clone(), Bit::C0));
+                let v = g.eval(val)?;
+                let v = fit_hv(&mut g.g, &v, &chans[ch].ty)?;
+                offers.entry(ch.clone()).or_default().push((is_s, v.flat(), Bit::C0));
                 (cp[ch].ready, konst(*next))
             }
             Term::Close { ch, next } => {
@@ -911,8 +912,8 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                     let o = g.g.reduce_and(&others);
                     let act = g.g.and(start, o);
                     let val = g.env.get(v).cloned().ok_or_else(|| format!("the value sent on `{}` is not known", base(ch)))?;
-                    let val = match val { HV::S(x) => fit(&mut g.g, &x, &chans[ch].ty), _ => return Err(format!("only scalars are sent on `{}`", base(ch))) };
-                    offers.entry(ch.clone()).or_default().push((act, val.bits.clone(), Bit::C0));
+                    let val = fit_hv(&mut g.g, &val, &chans[ch].ty)?;
+                    offers.entry(ch.clone()).or_default().push((act, val.flat(), Bit::C0));
                 }
                 for (k, (_, ch)) in head.iter().chain(recvs).enumerate() {
                     let c = &cp[ch];
@@ -1073,8 +1074,8 @@ fn scratch_env(g: &mut Gen, hw: &[(String, String, ParamHw)]) -> HashMap<String,
     for (n, t) in vars { let w = g.g.wires(t.width() as u32); env.insert(n, HV::of_ty(&w, &t)); }
     for (_, u, h) in hw {
         if let ParamHw::Scalar(t, k) = h {
-            let v = match k { Some(k) => fit(&mut g.g, &SVal::konst(*k), t), None => SVal::of_ty(g.g.wires(t.width() as u32), t) };
-            env.insert(u.clone(), HV::S(v));
+            let v = match k { Some(k) => HV::S(fit(&mut g.g, &SVal::konst(*k), t)), None => HV::of_ty(&g.g.wires(t.width() as u32), t) };
+            env.insert(u.clone(), v);
         }
     }
     env
@@ -1096,8 +1097,8 @@ fn term_values(g: &mut Gen, t: &Term, chans: &HashMap<String, Chan>, mems: &Hash
         Term::Recv { dst, ch, .. } => {
             let c = chans.get(ch).ok_or_else(|| format!("recv on `{}`, which is not a channel parameter", base(ch)))?;
             if c.out { return Err(format!("recv on `{}`, an output channel", base(ch))); }
-            let v = SVal::of_ty(g.g.wires(c.ty.width() as u32), &c.ty);
-            g.env.insert(dst.clone(), HV::S(v));
+            let v = HV::of_ty(&g.g.wires(c.ty.width() as u32), &c.ty);
+            g.env.insert(dst.clone(), v);
         }
         _ => {}
     }

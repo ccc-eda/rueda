@@ -36,7 +36,8 @@ pub fn synthesize(prog: &Arc<Program>, top: &str, params: &HashMap<String, i128>
     if !decl.generics.is_empty() { return Err(format!("`{}`: generic tasks are not synthesized yet", top)); }
     // a task that builds a network: its instances connected by FIFOs
     if graph::is_graph(&decl) { return graph::build(prog, &decl, params); }
-    let cfg = lower::lower(&decl)?;
+    let consts: std::collections::HashSet<String> = prog.consts.read().unwrap().keys().cloned().collect();
+    let cfg = lower::lower(&decl, &consts)?;
     gen::build(prog, &decl, &cfg, params)
 }
 

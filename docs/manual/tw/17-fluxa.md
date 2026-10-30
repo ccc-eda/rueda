@@ -79,7 +79,11 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以合成的 task
   iCE40 會把它做成 block RAM（`SB_RAM40_4K`）；其他用法退回暫存器陣列並給警告。
 - 建網路的 task（`chan`、`spawn`、`broadcast`）整個變成一個網表：每個 spawn 一個電路，每條內部通道一個
   照它的 `depth` 做的 FIFO（`fluxa/examples/pipeline.fx`）。
-- 還不能合成的：泛型 task、元素是 tuple 或陣列的通道、陣列參數（所以 RV32I / RV64 處理器還不行）。
+- 通道可以傳 tuple；陣列參數是一個輸入埠（全部位元）；`match` / `if` 的分支裡可以有通道操作與 `return`。
+  RV32I 處理器的四個階段（Fetch、Decode、Execute、Mem）都合成得出來，24 個 test 在閘級全部通過：
+  `reda gatesim opt fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx`（每個 task 換成網表，約 7 分鐘）。
+- 還不能合成的：泛型 task（所以 RV32I 的 `Core` 網路要在模擬器裡接起各階段）、用陣列當引數 spawn 的網路、
+  RV64 處理器。
 - 網頁 IDE 的 Fluxa 專案也有「⚙ 合成」：① 顯示 task 與它的實例，②–⑦ 和 Veryl 一樣；
   「模擬對象」選通用閘 / iCE40 / 標準元件時，▶ 執行 會把合成頂層換成它的網表再跑 test，
   「✔ 全面驗證」把每種實作的結果並排比對。虛擬板不收 Fluxa（它的埠是串流，不是板子的腳位）。

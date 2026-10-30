@@ -99,6 +99,8 @@ pub struct Shared {
 #[derive(Clone, Debug, PartialEq)]
 pub enum HwTok {
     Data(i128),
+    /// a tuple's elements
+    Tuple(Vec<i128>),
     Close,
 }
 
@@ -635,7 +637,8 @@ impl Shared {
                 (
                     ins.iter().map(|&c| {
                         let ch = &w.chans[c];
-                        match ch.queue.front() { Some(v) => Some(HwTok::Data(hw_int(v))), None if ch.closed => Some(HwTok::Close), None => None }
+                        match ch.queue.front() { Some(Value::Tuple(xs)) => Some(HwTok::Tuple(xs.iter().map(hw_int).collect())),
+                            Some(v) => Some(HwTok::Data(hw_int(v))), None if ch.closed => Some(HwTok::Close), None => None }
                     }).collect(),
                     outs.iter().map(|&c| { let ch = &w.chans[c]; !ch.closed && ch.queue.len() < ch.depth }).collect(),
                     w.epoch,
@@ -647,7 +650,7 @@ impl Shared {
                 let mut w = self.lock();
                 for (k, &c) in ins.iter().enumerate() {
                     if taken.get(k).copied().unwrap_or(false) {
-                        if let Some(HwTok::Data(_)) = offer[k] {
+                        if let Some(HwTok::Data(_) | HwTok::Tuple(_)) = offer[k] {
                             w.chans[c].queue.pop_front();
                             w.chans[c].received += 1;
                         }
@@ -656,8 +659,13 @@ impl Shared {
                 }
                 for (k, &c) in outs.iter().enumerate() {
                     match sent.get(k).cloned().flatten() {
-                        Some(HwTok::Data(n)) => {
-                            let v = hw_value(n, &w.chans[c].elem);
+                        Some(t @ (HwTok::Data(_) | HwTok::Tuple(_))) => {
+                            let v = match (t, &w.chans[c].elem) {
+                                (HwTok::Tuple(ns), RtType::Tuple(ts)) => Value::Tuple(ns.iter().zip(ts).map(|(n, t)| hw_value(*n, t)).collect()),
+                                (HwTok::Tuple(ns), _) => Value::Tuple(ns.iter().map(|n| Value::Int(*n)).collect()),
+                                (HwTok::Data(n), t) => hw_value(n, t),
+                                (t, e) => return Err(RtErr::Msg(0, format!("hardware sent {:?} on a channel of {:?}", t, e))),
+                            };
                             if self.trace { self.trace_line(format!("[{:>6}] {:<24} send {}", w.seq, w.chans[c].name, v)); }
                             let ch = &mut w.chans[c];
                             ch.queue.push_back(v);

@@ -79,7 +79,11 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以综合的 task
   iCE40 会把它做成 block RAM（`SB_RAM40_4K`）；其他用法退回寄存器数组并给警告。
 - 建网络的 task（`chan`、`spawn`、`broadcast`）整个变成一个网表：每个 spawn 一个电路，每条内部通道一个
   照它的 `depth` 做的 FIFO（`fluxa/examples/pipeline.fx`）。
-- 还不能综合的：泛型 task、元素是 tuple 或数组的通道、数组参数（所以 RV32I / RV64 处理器还不行）。
+- 通道可以传 tuple；数组参数是一个输入端口（全部位）；`match` / `if` 的分支里可以有通道操作与 `return`。
+  RV32I 处理器的四个阶段（Fetch、Decode、Execute、Mem）都综合得出来，24 个 test 在门级全部通过：
+  `reda gatesim opt fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx`（每个 task 换成网表，约 7 分钟）。
+- 还不能综合的：泛型 task（所以 RV32I 的 `Core` 网络要在仿真器里接起各阶段）、用数组当参数 spawn 的网络、
+  RV64 处理器。
 - 网页 IDE 的 Fluxa 项目也有「⚙ 综合」：① 显示 task 与它的实例，②–⑦ 和 Veryl 一样；
   「仿真对象」选通用门 / iCE40 / 标准单元时，▶ 运行 会把综合顶层换成它的网表再跑 test，
   「✔ 全面验证」把每种实现的结果并排比对。虚拟板不接收 Fluxa（它的端口是数据流，不是板子的引脚）。

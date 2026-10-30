@@ -67,6 +67,10 @@
   新增的 `examples/fir4.fx`（4 階、8 位元）是 191 個元件、77 MHz，做出位元流；16 階 FIR 做出 SKY130 GDS
   （38 MHz，DRC 0、LVS 相符）。網頁 IDE 的 Fluxa 專案有「⚙ 合成」（① 列出 task 與實例）、閘級的 ▶ 測試
   與 ✔ 全面驗證；`npm test` 對每個有合成頂層的 Fluxa 範例做合成與閘級測試，e2e 從合成跑到繞線再跑閘級測試。
+- F7 完成（各階段）：通道可傳 tuple（token 超過 128 位元也行）、陣列參數變成輸入埠、`match` / `if`
+  的分支可以有通道操作與 `return`（變成分支狀態），以及常數名稱當 match 樣式時是比較而不是綁定（之前的 bug）。
+  RV32I 的 Fetch / Decode / Execute / Mem 是 3.5k / 13k / 5.9k / 12k 個通用閘，24 個 test 全部換成閘級
+  （opt 與 iCE40）都通過。`Core` 是泛型 task，整個網路還不能合成成一個網表；RV64 還沒試。
 
 每個版本：先寫測試、再實作，`cargo test`、`npm test`、`npm run e2e` 全過才 commit。
 

@@ -204,7 +204,7 @@ const EX = [
       '兩個任務互相等待：模擬器偵測到死結，列出每個任務在等什麼', 'two tasks wait for each other: the simulator detects the deadlock and lists what each task waits for', ''],
   ].map(([id, f, title, title_en, note, note_en, synth]) => ({ id, group: 'Fluxa', lang: 'fluxa', title, title_en, note, note_en, synth: synth || undefined, files: [`fluxa/examples/${f}`] })),
   { id: 'fx_rv32i', group: 'Fluxa', lang: 'fluxa', title: 'RV32I 處理器（四個 task 的管線）', title_en: 'RV32I processor (a pipeline of four tasks)',
-    files: ['fluxa/rv32i/tests_basic.fx', 'fluxa/rv32i/rv32i.fx'],
+    files: ['fluxa/rv32i/tests_basic.fx', 'fluxa/rv32i/rv32i.fx'], synth: 'Execute',
     note: 'Fetch / Decode / Execute / Mem 四個 task 用通道串成管線；tests_basic.fx 用內建組譯器寫測試程式', note_en: 'Fetch / Decode / Execute / Mem tasks chained by channels; tests_basic.fx writes its programs with the built-in assembler' },
   { id: 'fx_rv64', group: 'Fluxa', lang: 'fluxa', title: 'RV64G 處理器（M/S/U、Sv39、FPU、迷你 OS）', title_en: 'RV64G processor (M/S/U, Sv39, FPU, a mini OS)',
     files: ['tests_basic.fx', 'rv64.fx', 'fpu.fx', 'smoke.fx', 'tests_mmu.fx', 'tests_amo.fx', 'tests_fp.fx', 'tests_irq.fx', 'tests_system.fx'].map((f) => `fluxa/rv64/${f}`),

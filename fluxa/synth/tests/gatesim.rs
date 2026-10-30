@@ -407,3 +407,61 @@ fn mem_is_a_block_ram() {
     let s = fluxa_synth::synthesize(&load(&other), "Rev", &Default::default()).unwrap();
     assert!(s.warnings.iter().any(|w| w.contains("stays registers")), "{:?}", s.warnings);
 }
+
+#[test]
+fn tuple_channels_match_with_sends_and_constant_patterns() {
+    let prog = load(r#"
+        const K_INC: u8 = 0;
+        const K_FWD: u8 = 1;
+        task E(x: in chan<(u8, u8)>, y: out chan<(u2, u8)>, r: out chan<u8>) {
+            for (c, a) in x {
+                let (k, v) = match c {
+                    K_INC => (1, a + 1),
+                    K_FWD => {
+                        r.send(a);
+                        (2, a)
+                    }
+                    _ => (0, 0),
+                };
+                if k == 0 { return; }
+                y.send((k, v.wrap::<u8>()));
+            }
+        }
+        test t {
+            let (tx, rx) = chan::<(u8, u8)>(depth = 8);
+            let (ty, ry) = chan::<(u2, u8)>(depth = 8);
+            let (tr, rr) = chan::<u8>(depth = 8);
+            spawn E(rx, ty, tr);
+            tx.send((0, 255)); tx.send((1, 7)); tx.send((2, 9)); tx.send((0, 1));
+            tx.close();
+            let a = ry.recv();
+            assert a.0 == 1 && a.1 == 0;
+            let b = ry.recv();
+            assert b.0 == 2 && b.1 == 7;
+            assert rr.recv() == 7;
+            for _ in ry { assert false, "E returns at the third token"; }
+        }
+    "#);
+    agree(&prog, "E", &["opt", "ice40"]);
+}
+
+/// the RV32I processor (four pipeline tasks) with every stage as gates: two programs (all 24
+/// tests take minutes; `reda gatesim opt fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx`)
+#[test]
+fn rv32i_pipeline_in_gates() {
+    let rd = |f: &str| std::fs::read_to_string(format!("{}/../rv32i/{}", env!("CARGO_MANIFEST_DIR"), f)).unwrap();
+    let prog = fluxa::load_many(&[("rv32i.fx".into(), rd("rv32i.fx")), ("tests_basic.fx".into(), rd("tests_basic.fx"))]).unwrap();
+    let p = Arc::new(Provider::all(&prog, "opt"));
+    let opts = fluxa::Options { coop: true, hw: Some(p.clone()), ..Default::default() };
+    for name in ["sum_1_to_10", "all_six_branches"] {
+        let t = prog.tests.iter().find(|t| t.name == name).unwrap();
+        let r = fluxa::run_test(&prog, t, &opts);
+        assert!(r.passed, "{}: {}", name, r.message);
+    }
+    // the four stages ran as gates (a task that does not synthesize would stay in the simulator)
+    let built = p.report();
+    for stage in ["Fetch", "Decode", "Execute", "Mem"] {
+        let r = built.iter().find(|(n, _)| n == stage).map(|(_, r)| r.clone());
+        assert!(matches!(r, Some(Ok(c)) if c > 1000), "{}: {:?}", stage, r);
+    }
+}

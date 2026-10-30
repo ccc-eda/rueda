@@ -33,23 +33,58 @@ pub struct HwSim<'n> {
     pub cycles: usize,
 }
 
-fn to_bits(v: i128, t: &Ty) -> u128 {
-    let w = t.width();
-    let m = if w >= 128 { u128::MAX } else { (1u128 << w) - 1 };
-    (v as u128) & m
+/// a scalar as `t`'s bits (two's complement)
+fn int_bits(v: i128, t: &Ty) -> Vec<bool> { (0..t.width()).map(|i| if i < 128 { (v >> i) & 1 == 1 } else { v < 0 }).collect() }
+
+fn bits_int(b: &[bool], t: &Ty) -> i128 {
+    let mut v: i128 = 0;
+    for (i, x) in b.iter().enumerate().take(128) { if *x { v |= 1i128 << i; } }
+    let w = b.len();
+    if t.range().0 < 0 && w > 0 && w < 128 && b[w - 1] { v - (1i128 << w) } else { v }
 }
 
-fn from_bits(b: u128, t: &Ty) -> i128 {
-    let w = t.width() as u32;
-    let (lo, _) = t.range();
-    if lo < 0 && w < 128 && (b >> (w - 1)) & 1 == 1 { (b as i128) - (1i128 << w) } else { b as i128 }
+/// a token's bits on a channel of type `t` (a tuple's first element in the low bits)
+fn tok_bits(tok: &Tok, t: &Ty) -> Vec<bool> {
+    match (tok, t) {
+        (Tok::Tuple(xs), Ty::Tuple(ts)) => xs.iter().zip(ts).flat_map(|(x, t)| int_bits(*x, t)).collect(),
+        (Tok::Data(v), t) => int_bits(*v, t),
+        _ => vec![false; t.width()],
+    }
+}
+
+fn bits_tok(b: &[bool], t: &Ty) -> Tok {
+    match t {
+        Ty::Tuple(ts) => {
+            let mut at = 0;
+            Tok::Tuple(ts.iter().map(|t| { let w = t.width(); let v = bits_int(&b[at..at + w], t); at += w; v }).collect())
+        }
+        t => Tok::Data(bits_int(b, t)),
+    }
+}
+
+/// a parameter's value as `t`'s bits (scalars, arrays, tuples)
+fn value_bits(v: &Value, t: &Ty) -> Option<Vec<bool>> {
+    match (v, t) {
+        (Value::Int(k), t) => Some(int_bits(*k, t)),
+        (Value::Bool(b), t) => Some(int_bits(*b as i128, t)),
+        (Value::Fixed(r, _), t) => Some(int_bits(*r, t)),
+        (Value::Array(xs), Ty::Array(e, n)) if xs.len() == *n => xs.iter().map(|x| value_bits(x, e)).collect::<Option<Vec<_>>>().map(|v| v.concat()),
+        (Value::Tuple(xs), Ty::Tuple(ts)) if xs.len() == ts.len() => xs.iter().zip(ts).map(|(x, t)| value_bits(x, t)).collect::<Option<Vec<_>>>().map(|v| v.concat()),
+        _ => None,
+    }
 }
 
 impl<'n> HwSim<'n> {
     /// the circuit after a reset cycle, with the scalar inputs set
     pub fn new(nl: &'n Netlist, io: &'n Iface, scalars: &[i128]) -> HwSim<'n> {
+        let bits: Vec<Vec<bool>> = io.scalars.iter().zip(scalars).map(|((_, t), v)| int_bits(*v, t)).collect();
+        HwSim::with_inputs(nl, io, &bits)
+    }
+
+    /// the same, the parameter inputs (arrays too) given as bits
+    pub fn with_inputs(nl: &'n Netlist, io: &'n Iface, inputs: &[Vec<bool>]) -> HwSim<'n> {
         let mut sim = NetSim::new(nl);
-        for ((n, t), v) in io.scalars.iter().zip(scalars) { sim.poke(n, to_bits(*v, t)); }
+        for ((n, _), v) in io.scalars.iter().zip(inputs) { sim.poke_bits(n, v); }
         sim.set("rst", 1);
         sim.step();
         sim.set("rst", 0);
@@ -62,17 +97,17 @@ impl<'n> HwSim<'n> {
     /// taken and what each output channel sent.
     pub fn cycle(&mut self, offer: &[Option<Tok>], room: &[bool]) -> (Vec<bool>, Vec<Option<Tok>>) {
         for ((n, t), o) in self.io.ins.iter().zip(offer) {
-            let (valid, close, data) = match o { Some(Tok::Data(v)) => (1, 0, to_bits(*v, t)), Some(Tok::Close) => (1, 1, 0), None => (0, 0, 0) };
+            let (valid, close, data) = match o { Some(Tok::Close) => (1, 1, vec![]), Some(d) => (1, 0, tok_bits(d, t)), None => (0, 0, vec![]) };
             self.sim.poke(&format!("{}_valid", n), valid);
             self.sim.poke(&format!("{}_close", n), close);
-            self.sim.poke(&format!("{}_data", n), data);
+            self.sim.poke_bits(&format!("{}_data", n), &data);
         }
         for ((n, _), r) in self.io.outs.iter().zip(room) { self.sim.poke(&format!("{}_ready", n), *r as u128); }
         self.sim.settle();
         let taken: Vec<bool> = self.io.ins.iter().zip(offer).map(|((n, _), o)| o.is_some() && self.sim.get(&format!("{}_ready", n)) == 1).collect();
         let sent: Vec<Option<Tok>> = self.io.outs.iter().zip(room).map(|((n, t), r)| {
             if !*r || self.sim.get(&format!("{}_valid", n)) == 0 { return None; }
-            Some(if self.sim.get(&format!("{}_close", n)) == 1 { Tok::Close } else { Tok::Data(from_bits(self.sim.get(&format!("{}_data", n)), t)) })
+            Some(if self.sim.get(&format!("{}_close", n)) == 1 { Tok::Close } else { bits_tok(&self.sim.get_bits(&format!("{}_data", n)), t) })
         }).collect();
         let before: Vec<bool> = self.state.iter().map(|b| self.sim.bit(*b)).collect();
         self.sim.step();
@@ -176,14 +211,13 @@ impl HwProvider for Provider {
             // replacing one task: its error; every task: the ones that do not synthesize stay in the interpreter
             Err(e) => return if self.only.is_some() { Some(Err(e)) } else { None },
         };
-        let mut scalars = vec![];
-        for (n, _) in &io.scalars {
-            match args.iter().find(|(a, _)| a == n).map(|(_, v)| v) {
-                Some(Value::Int(k)) => scalars.push(*k),
-                Some(Value::Bool(b)) => scalars.push(*b as i128),
-                _ => return Some(Err(format!("hardware `{}`: parameter `{}` needs an integer", task, n))),
+        let mut inputs = vec![];
+        for (n, t) in &io.scalars {
+            match args.iter().find(|(a, _)| a == n).and_then(|(_, v)| value_bits(v, t)) {
+                Some(b) => inputs.push(b),
+                None => return Some(Err(format!("hardware `{}`: parameter `{}` needs a value of type {:?}", task, n, t))),
             }
         }
-        Some(Ok(Box::new(Running(HwSim::new(nl, io, &scalars)))))
+        Some(Ok(Box::new(Running(HwSim::with_inputs(nl, io, &inputs)))))
     }
 }

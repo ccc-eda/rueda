@@ -83,8 +83,12 @@ reda synth --list fluxa/examples/pipeline.fx        # the tasks that can be synt
   register) and becomes block RAM on the iCE40 (`SB_RAM40_4K`); other uses keep it as registers, with a warning.
 - A task that builds a network (`chan`, `spawn`, `broadcast`) becomes one netlist: a circuit for each spawn and a
   FIFO of the channel's `depth` for each internal channel (`fluxa/examples/pipeline.fx`).
-- Not synthesized yet: generic tasks, channels of tuples or arrays, array parameters (so not the RV32I / RV64
-  processors yet).
+- Channels can carry tuples; an array parameter is one input port (all its bits); `match` / `if` arms may do
+  channel operations and `return`. The four stages of the RV32I processor (Fetch, Decode, Execute, Mem) all
+  synthesize, and its 24 tests pass at gate level: `reda gatesim opt fluxa/rv32i/rv32i.fx
+  fluxa/rv32i/tests_basic.fx` (every task replaced by its netlist, about 7 minutes).
+- Not synthesized yet: generic tasks (so RV32I's `Core` network connects the stages in the simulator), networks
+  that spawn with array arguments, the RV64 processor.
 - In the web IDE a Fluxa project has **⚙ Synthesize** too: ① shows the task and its instances, ②–⑦ are the same as
   for Veryl. With the simulation target set to generic gates / iCE40 / standard cells, **▶ Run** runs the tests with
   the synthesis top replaced by its netlist, and **✔ Verify all** compares every implementation side by side. The

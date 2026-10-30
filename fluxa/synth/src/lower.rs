@@ -68,6 +68,8 @@ struct Renamer {
     n: usize,
     /// the memory pass instead of renaming (see `mem_rewrite`)
     mem: Option<MemRw>,
+    /// the program's constants: a pattern naming one compares with it (it binds nothing)
+    consts: HashSet<String>,
 }
 
 struct MemRw {
@@ -162,6 +164,7 @@ impl Renamer {
 
     fn mpat(&mut self, p: &MatchPat) -> MatchPat {
         match p {
+            MatchPat::Bind(n) if self.lookup(n).is_none() && self.consts.contains(n) => MatchPat::Lit(path(n, 0)),
             MatchPat::Bind(n) => MatchPat::Bind(self.bind(n)),
             MatchPat::Tuple(ps) => MatchPat::Tuple(ps.iter().map(|p| self.mpat(p)).collect()),
             MatchPat::Lit(e) => MatchPat::Lit(self.expr(e)),
@@ -262,7 +265,7 @@ fn mems_of(b: &Block, out: &mut Vec<(String, TypeExpr, Expr)>) {
 /// used some other way (it then stays an array of registers).
 fn mem_rewrite(body: &Block, mems: &[(String, TypeExpr, Expr)]) -> Option<Block> {
     let names = mems.iter().map(|m| m.0.clone()).collect();
-    let mut rw = Renamer { scopes: vec![HashMap::new()], n: 0, mem: Some(MemRw { names, bad: false }) };
+    let mut rw = Renamer { scopes: vec![HashMap::new()], n: 0, mem: Some(MemRw { names, bad: false }), consts: HashSet::new() };
     let b = rw.block(body);
     (!rw.mem.unwrap().bad).then_some(b)
 }
@@ -276,10 +279,26 @@ fn is_chan_op(e: &Expr) -> bool { matches!(&e.kind, ExprKind::Method(_, n, _, _)
 
 /// does the expression contain a channel operation (it then needs states, not just gates)?
 pub fn has_chan(e: &Expr) -> bool {
-    if is_chan_op(e) { return true; }
+    if is_chan_op(e) || has_return(e) { return true; }
     let mut found = false;
     visit(e, &mut |x| if is_chan_op(x) { found = true });
     found
+}
+
+/// does an `if` / `match` / block contain a `return` (a jump to the task's end: states too)?
+fn has_return(e: &Expr) -> bool {
+    let blk = |b: &Block| b.stmts.iter().any(|s| match &s.kind {
+        StmtKind::Return(_) => true,
+        StmtKind::Expr(x) => has_return(x),
+        StmtKind::For { body, .. } => body.stmts.iter().any(|s| matches!(&s.kind, StmtKind::Return(_)) || matches!(&s.kind, StmtKind::Expr(x) if has_return(x))),
+        _ => false,
+    }) || b.tail.as_ref().is_some_and(|t| has_return(t));
+    match &e.kind {
+        ExprKind::Block(b) => blk(b),
+        ExprKind::If(_, t, el) => blk(t) || el.as_ref().is_some_and(|x| has_return(x)),
+        ExprKind::Match(_, arms) => arms.iter().any(|a| has_return(&a.body)),
+        _ => false,
+    }
 }
 
 /// does a statement need states (a channel operation, a loop over a channel, spawn, return)?
@@ -422,8 +441,74 @@ impl Lower {
                 for x in xs { v.push(self.lift(x, cur)?); }
                 Ok(Expr { kind: if matches!(e.kind, ExprKind::Tuple(_)) { ExprKind::Tuple(v) } else { ExprKind::Array(v) }, line })
             }
+            // a value made by statements with channel operations: their states, then the value
+            ExprKind::Block(b) => {
+                if self.pipe.is_some() { return Err("a channel operation in a block".into()); }
+                *cur = self.stmts(&b.stmts, None, *cur)?;
+                match &b.tail { Some(t) => self.lift(t, cur), None => Ok(Expr { kind: ExprKind::Tuple(vec![]), line }) }
+            }
+            ExprKind::If(c, t, el) => {
+                let c = self.lift(c, cur)?;
+                let pure = !block_has_chan(t, &self.chans) && !el.as_ref().is_some_and(|x| has_chan(x));
+                if pure { return Ok(Expr { kind: ExprKind::If(Box::new(c), t.clone(), el.clone()), line }); }
+                if self.pipe.is_some() { return Err("a channel operation under a condition (each iteration must do the same channel operations)".into()); }
+                let Some(el) = el else { return Err(format!("line {}: an `if` without `else` used as a value", line)) };
+                // each branch puts its value into one variable
+                self.n += 1;
+                let v = format!("if~{}", self.n);
+                let (bt, bf) = (self.new_block(), self.new_block());
+                self.blocks[*cur].term = Term::Branch(c, bt, bf);
+                let mut ends = vec![];
+                for (start, e) in [(bt, Expr { kind: ExprKind::Block(t.clone()), line }), (bf, (**el).clone())] {
+                    let mut b = start;
+                    let x = self.lift(&e, &mut b)?;
+                    self.blocks[b].stmts.push(let_stmt(&v, x, line));
+                    ends.push(b);
+                }
+                // after the branches (the type pass sees the value assigned before it is read)
+                let join = self.new_block();
+                for b in ends { self.blocks[b].term = Term::Goto(join); }
+                *cur = join;
+                Ok(path(&v, line))
+            }
+            ExprKind::Match(sc, arms) => {
+                let e = self.match_as_if(sc, arms, cur, line)?;
+                self.lift(&e, cur)
+            }
             _ => Err(format!("line {}: a channel operation in this kind of expression is not synthesized; give it its own statement", line)),
         }
+    }
+
+    /// `match s { p => e, .. }` with channel operations in its arms as `if s == p { e } else ..`
+    /// (the scrutinee evaluated once, into a variable)
+    fn match_as_if(&mut self, sc: &Expr, arms: &[Arm], cur: &mut B, line: u32) -> R<Expr> {
+        let sc = self.lift(sc, cur)?;
+        self.n += 1;
+        let s = format!("match~{}", self.n);
+        self.blocks[*cur].stmts.push(let_stmt(&s, sc, line));
+        let bin = |op, a: Expr, b: Expr| Expr { kind: ExprKind::Binary(op, Box::new(a), Box::new(b)), line };
+        let mut out: Option<Expr> = None;
+        for a in arms.iter().rev() {
+            let mut stmts = vec![];
+            let mut cond = match &a.pat {
+                MatchPat::Wild => None,
+                MatchPat::Bind(n) => { stmts.push(let_stmt(n, path(&s, line), line)); None }
+                MatchPat::Lit(e) => Some(bin(BinOp::Eq, path(&s, line), e.clone())),
+                MatchPat::Range(lo, hi, incl) => Some(bin(BinOp::And, bin(BinOp::Ge, path(&s, line), lo.clone()), bin(if *incl { BinOp::Le } else { BinOp::Lt }, path(&s, line), hi.clone()))),
+                MatchPat::Tuple(_) => return Err(format!("line {}: a tuple pattern in a `match` with channel operations is not synthesized", line)),
+            };
+            if let Some(g) = &a.guard {
+                if matches!(a.pat, MatchPat::Bind(_)) { return Err(format!("line {}: a guard on a binding in a `match` with channel operations is not synthesized", line)); }
+                cond = Some(match cond { Some(c) => bin(BinOp::And, c, g.clone()), None => g.clone() });
+            }
+            let body = Expr { kind: ExprKind::Block(Block { stmts, tail: Some(Box::new(a.body.clone())) }), line };
+            out = Some(match (cond, out) {
+                // the last arm, or one that always matches: what is left
+                (None, _) | (Some(_), None) => body,
+                (Some(c), Some(rest)) => Expr { kind: ExprKind::If(Box::new(c), Block { stmts: vec![], tail: Some(Box::new(body)) }, Some(Box::new(rest))), line },
+            });
+        }
+        out.ok_or_else(|| format!("line {}: an empty `match`", line))
     }
 
     /// lower statements starting in block `cur`; the block where control continues
@@ -477,6 +562,10 @@ impl Lower {
                 Ok(cur)
             }
             ExprKind::Block(b) => self.stmts(&b.stmts, b.tail.as_deref(), cur),
+            ExprKind::Match(sc, arms) if self.pipe.is_none() => {
+                let e = self.match_as_if(sc, arms, &mut cur, e.line)?;
+                self.chan_stmt(&e, cur)
+            }
             ExprKind::If(..) if self.pipe.is_some() => Err("a channel operation under a condition (each iteration must do the same channel operations)".into()),
             ExprKind::If(c, t, el) => {
                 let c = self.lift(c, &mut cur)?;
@@ -557,11 +646,6 @@ impl Lower {
                 }
             }
             StmtKind::For { pat, iter, body, .. } => {
-                let var = match pat {
-                    Pattern::Ident(n) => Some(n.clone()),
-                    Pattern::Wild => None,
-                    Pattern::Tuple(_) => return Err(format!("line {}: a tuple pattern in a synthesized loop is not supported yet", line)),
-                };
                 match &iter.kind {
                     // for v in rx: receive until the channel is closed
                     ExprKind::Path(p) if p.len() == 1 && self.chans.contains(&p[0]) => {
@@ -570,7 +654,7 @@ impl Lower {
                         let (head, first, exit) = (self.new_block(), self.new_block(), self.new_block());
                         self.blocks[cur].term = Term::Goto(head);
                         self.blocks[head].term = Term::Recv { dst: dst.clone(), ch, closed: Some(exit), next: first };
-                        if let Some(v) = var { self.blocks[first].stmts.push(let_stmt(&v, path(&dst, line), line)); }
+                        if let Some(b) = bind(pat, path(&dst, line), line) { self.blocks[first].stmts.push(b); }
                         let end = self.stmts(&body.stmts, body.tail.as_deref(), first)?;
                         self.commit(end, line);
                         self.blocks[end].term = Term::Goto(head);
@@ -589,7 +673,7 @@ impl Lower {
                         let op = if *incl { BinOp::Le } else { BinOp::Lt };
                         let cond = Expr { kind: ExprKind::Binary(op, Box::new(path(&i, line)), Box::new(path(&end, line))), line };
                         self.blocks[head].term = Term::Branch(cond, first, exit);
-                        if let Some(v) = var { self.blocks[first].stmts.push(let_stmt(&v, path(&i, line), line)); }
+                        if let Some(b) = bind(pat, path(&i, line), line) { self.blocks[first].stmts.push(b); }
                         let last = self.stmts(&body.stmts, body.tail.as_deref(), first)?;
                         self.commit(last, line);
                         let inc = Expr { kind: ExprKind::Binary(BinOp::Add, Box::new(path(&i, line)), Box::new(Expr { kind: ExprKind::Int(1), line })), line };
@@ -607,7 +691,7 @@ impl Lower {
                         let cond = Expr { kind: ExprKind::Binary(BinOp::Lt, Box::new(path(&k, line)), Box::new(len)), line };
                         self.blocks[head].term = Term::Branch(cond, first, exit);
                         let item = Expr { kind: ExprKind::Index(Box::new(iter.clone()), Box::new(path(&k, line))), line };
-                        if let Some(v) = var { self.blocks[first].stmts.push(let_stmt(&v, item, line)); }
+                        if let Some(b) = bind(pat, item, line) { self.blocks[first].stmts.push(b); }
                         let last = self.stmts(&body.stmts, body.tail.as_deref(), first)?;
                         self.commit(last, line);
                         let inc = Expr { kind: ExprKind::Binary(BinOp::Add, Box::new(path(&k, line)), Box::new(Expr { kind: ExprKind::Int(1), line })), line };
@@ -625,18 +709,13 @@ impl Lower {
 impl Lower {
     /// a `pipeline` loop as one `Pipe` state, or why it cannot start an iteration every clock
     fn pipelined(&mut self, pat: &Pattern, iter: &Expr, body: &Block, mut cur: B, line: u32) -> R<B> {
-        let var = match pat {
-            Pattern::Ident(n) => Some(n.clone()),
-            Pattern::Wild => None,
-            Pattern::Tuple(_) => return Err("a tuple pattern".into()),
-        };
         let (st, exit) = (self.new_block(), self.new_block());
         let (mut head, mut cond) = (None, None);
         let mut step = None;
         match &iter.kind {
             ExprKind::Path(p) if p.len() == 1 && self.chans.contains(&p[0]) => {
                 let dst = self.temp("recv", Temp::ChanElem(p[0].clone()));
-                if let Some(v) = &var { self.blocks[st].stmts.push(let_stmt(v, path(&dst, line), line)); }
+                if let Some(b) = bind(pat, path(&dst, line), line) { self.blocks[st].stmts.push(b); }
                 head = Some((dst, p[0].clone()));
             }
             _ => {
@@ -655,7 +734,7 @@ impl Lower {
                 let op = if incl { BinOp::Le } else { BinOp::Lt };
                 cond = Some(Expr { kind: ExprKind::Binary(op, Box::new(path(&i, line)), Box::new(path(&end, line))), line });
                 let at = match item { Some(a) => Expr { kind: ExprKind::Index(Box::new(a), Box::new(path(&i, line))), line }, None => path(&i, line) };
-                if let Some(v) = &var { self.blocks[st].stmts.push(let_stmt(v, at, line)); }
+                if let Some(b) = bind(pat, at, line) { self.blocks[st].stmts.push(b); }
                 step = Some(assign(&i, Expr { kind: ExprKind::Binary(BinOp::Add, Box::new(path(&i, line)), Box::new(Expr { kind: ExprKind::Int(1), line })), line }, line));
             }
         }
@@ -696,12 +775,17 @@ impl Lower {
 }
 
 fn path(n: &str, line: u32) -> Expr { Expr { kind: ExprKind::Path(vec![n.to_string()]), line } }
+/// a loop's pattern bound to the item (nothing for `_`)
+fn bind(p: &Pattern, e: Expr, line: u32) -> Option<Stmt> {
+    if matches!(p, Pattern::Wild) { return None; }
+    Some(Stmt { kind: StmtKind::Let { pat: p.clone(), ty: None, placement: None, init: Some(e) }, line })
+}
 fn let_stmt(n: &str, e: Expr, line: u32) -> Stmt { Stmt { kind: StmtKind::Let { pat: Pattern::Ident(n.to_string()), ty: None, placement: None, init: Some(e) }, line } }
 fn assign(n: &str, e: Expr, line: u32) -> Stmt { Stmt { kind: StmtKind::Assign { target: path(n, line), op: None, value: e }, line } }
 
 /// the task `decl` as states; `outs` are its output channel parameters (closed at the end)
-pub fn lower(decl: &FnDecl) -> R<Cfg> {
-    let mut rn = Renamer { scopes: vec![HashMap::new()], n: 0, mem: None };
+pub fn lower(decl: &FnDecl, consts: &HashSet<String>) -> R<Cfg> {
+    let mut rn = Renamer { scopes: vec![HashMap::new()], n: 0, mem: None, consts: consts.clone() };
     let params: Vec<String> = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
     let mut mems = vec![];
@@ -749,8 +833,8 @@ fn lower_body(decl: &FnDecl, params: &[String], body: &Block, mems: Vec<(String,
 fn param_dir_out(decl: &FnDecl, name: &str) -> bool { crate::dir_of(decl, name) == Some(true) }
 
 /// a function's parameters and body with fresh names (to inline it), numbered from `start`
-pub fn rename_fn(decl: &FnDecl, start: usize) -> (Vec<String>, Block) {
-    let mut rn = Renamer { scopes: vec![HashMap::new()], n: start * 1000, mem: None };
+pub fn rename_fn(decl: &FnDecl, start: usize, consts: &HashSet<String>) -> (Vec<String>, Block) {
+    let mut rn = Renamer { scopes: vec![HashMap::new()], n: start * 1000, mem: None, consts: consts.clone() };
     let params = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
     (params, body)

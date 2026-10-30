@@ -40,6 +40,14 @@ impl<'n> NetSim<'n> {
         self.settle();
     }
 
+    /// a port's bits (any width), without settling
+    pub fn poke_bits(&mut self, name: &str, val: &[bool]) {
+        for (i, b) in self.port(name).bits.iter().enumerate() {
+            if let Bit::W(w) = b { self.v.insert(*w, val.get(i).copied().unwrap_or(false)); }
+        }
+    }
+    pub fn get_bits(&self, name: &str) -> Vec<bool> { self.port(name).bits.iter().map(|b| self.get_bit(*b)).collect() }
+
     /// ports wider than 128 bits
     pub fn set_wide(&mut self, name: &str, val: bits::Bits) {
         for (i, b) in self.port(name).bits.iter().enumerate() {
