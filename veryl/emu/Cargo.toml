@@ -1,0 +1,19 @@
+[package]
+name = "rueda-veryl-emu"
+description = "Compiles Veryl designs to WebAssembly for fast cycle-based simulation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "veryl_emu"
+
+[[bin]]
+name = "veryl-emu"
+path = "src/main.rs"
+
+[dependencies]
+veryl-parser.workspace = true
+veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }

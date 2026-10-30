@@ -1,0 +1,146 @@
+// Device tree of Rv64Soc (examples/rv64/src/rv64soc.veryl) for OpenSBI and Linux.
+// The addresses are those of QEMU's virt machine; mtime counts clock cycles, and
+// timebase-frequency says how many make a second (any value works in simulation).
+/dts-v1/;
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	compatible = "veryl2chip,rv64soc";
+	model = "veryl2chip Rv64Soc";
+
+	chosen {
+		bootargs = "console=ttyS0 earlycon=sbi vt.global_cursor_default=0";
+		stdout-path = "/soc/serial@10000000";
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <10000000>;
+
+		cpu0: cpu@0 {
+			device_type = "cpu";
+			reg = <0>;
+			status = "okay";
+			compatible = "riscv";
+			riscv,isa = "rv64imac_zicntr_zicsr_zifencei_sstc_svadu";
+			riscv,isa-base = "rv64i";
+			riscv,isa-extensions = "i", "m", "a", "c", "zicntr", "zicsr", "zifencei", "sstc", "svadu";
+			mmu-type = "riscv,sv39";
+
+			cpu0_intc: interrupt-controller {
+				#interrupt-cells = <1>;
+				interrupt-controller;
+				compatible = "riscv,cpu-intc";
+			};
+		};
+	};
+
+	poweroff {
+		compatible = "syscon-poweroff";
+		regmap = <&test>;
+		offset = <0x0>;
+		value = <0x5555>;
+	};
+
+	reboot {
+		compatible = "syscon-reboot";
+		regmap = <&test>;
+		offset = <0x0>;
+		value = <0x7777>;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		led-act {
+			label = "act";
+			gpios = <&gpio 0 0>;
+			linux,default-trigger = "heartbeat";
+		};
+		led-user {
+			label = "user";
+			gpios = <&gpio 1 0>;
+		};
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x0 0x10000000>;
+	};
+
+	// the last 16 MB of the RAM (0x8F00_0000) is the exchange area for files from / to the IDE
+	// (getfiles / savefiles through /dev/mem): reserved, so Linux never allocates it, but still
+	// in its memory, so /dev/mem can read and write it
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		exchange@8f000000 {
+			reg = <0x0 0x8f000000 0x0 0x1000000>;
+		};
+		screen@8ef00000 {
+			reg = <0x0 0x8ef00000 0x0 0x40000>;
+			no-map;
+		};
+	};
+
+	// the screen (v2.21): 320 x 240 RGB565 in the RAM, drawn by the IDE (machine.json "fb")
+	framebuffer@8ef00000 {
+		compatible = "simple-framebuffer";
+		reg = <0x0 0x8ef00000 0x0 0x25800>;
+		width = <320>;
+		height = <240>;
+		stride = <640>;
+		format = "r5g6b5";
+	};
+
+	soc {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		compatible = "simple-bus";
+		ranges;
+
+		test: test@100000 {
+			compatible = "sifive,test1", "sifive,test0", "syscon";
+			reg = <0x0 0x100000 0x0 0x1000>;
+		};
+
+		clint@2000000 {
+			compatible = "sifive,clint0", "riscv,clint0";
+			reg = <0x0 0x2000000 0x0 0x10000>;
+			interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+		};
+
+		plic: interrupt-controller@c000000 {
+			compatible = "sifive,plic-1.0.0", "riscv,plic0";
+			reg = <0x0 0xc000000 0x0 0x4000000>;
+			#address-cells = <0>;
+			#interrupt-cells = <1>;
+			interrupt-controller;
+			interrupts-extended = <&cpu0_intc 11>, <&cpu0_intc 9>;
+			riscv,ndev = <31>;
+		};
+
+		// Rv64Gpio: 16 pins, pin k interrupts as PLIC source 16 + k; 0, 1 = the board's LEDs, 2 = its button
+		gpio: gpio@10060000 {
+			compatible = "sifive,gpio0";
+			reg = <0x0 0x10060000 0x0 0x1000>;
+			interrupt-parent = <&plic>;
+			interrupts = <16>, <17>, <18>, <19>, <20>, <21>, <22>, <23>, <24>, <25>, <26>, <27>, <28>, <29>, <30>, <31>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+			gpio-line-names = "LED_ACT", "LED_USER", "BUTTON", "GPIO3", "GPIO4", "GPIO5", "GPIO6", "GPIO7", "GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO12", "GPIO13", "GPIO14", "GPIO15";
+		};
+
+		serial@10000000 {
+			compatible = "ns16550a";
+			reg = <0x0 0x10000000 0x0 0x100>;
+			clock-frequency = <3686400>;
+			interrupt-parent = <&plic>;
+			interrupts = <10>;
+		};
+	};
+};

@@ -1,0 +1,18 @@
+[package]
+name = "rueda-rvemu"
+description = "An RV64IMAC instruction-set emulator (runs OpenSBI + Linux), with a WebAssembly JIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "riscv_emu"
+path = "src/lib.rs"
+# rlib for rvemu and the tests, cdylib for the web (wasm32: src/wasm.rs)
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "rvemu"
+path = "src/main.rs"

@@ -1,0 +1,11 @@
+# veryl build
+/target
+/dependencies
+/.build
+*.f
+# Verilator
+/sim/obj*
+/xv6/build
+/linux/build
+/verify/out
+/build

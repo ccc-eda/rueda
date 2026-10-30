@@ -1,0 +1,459 @@
+//! Row placement: standard cells in rows of sites, simulated annealing on
+//! half-perimeter wirelength plus a density penalty (bins of 16 × 16 µm may
+//! not be fuller than a target density, so cells do not pile up next to the
+//! IO pins and leave the rest of the die empty). Every move keeps the placement legal (a cell
+//! moves into a free run of sites, or two cells swap places).
+
+use crate::netlist::{Bit, Dir, Netlist};
+use crate::pnr::place::Rng;
+use std::collections::HashMap;
+
+#[derive(Clone)]
+pub struct Frame {
+    pub temp: f64,
+    pub cost: f64,
+    pub accept: f64,
+    /// cell -> (row, site)
+    pub pos: Vec<(u32, u32)>,
+}
+
+#[derive(Clone)]
+pub struct Pin {
+    pub name: String,
+    pub dir: Dir,
+    pub x: f64,
+    pub y: f64,
+    pub bit: Bit,
+}
+
+#[derive(Clone)]
+pub struct RowPlacement {
+    pub rows: u32,
+    pub sites: u32,
+    /// die size in µm
+    pub w: f64,
+    pub h: f64,
+    pub pos: Vec<(u32, u32)>,
+    pub pins: Vec<Pin>,
+    pub history: Vec<Frame>,
+    pub util: f64,
+    /// fullest 16 × 16 µm bin (fraction of its free sites); `target` is what the penalty allows
+    pub max_density: f64,
+    pub target_density: f64,
+}
+
+/// µm of wirelength one site of bin overflow costs
+pub const DENSITY_WEIGHT: f64 = 1.0;
+
+/// designs with at least this many cells (and no macros) get a global placement
+/// before the annealing (`global_place`); smaller ones anneal from the netlist order
+pub const GLOBAL_MIN: usize = 10000;
+
+/// Global placement of the standard cells for a large design: quadratic wirelength
+/// (star model: every cell moves to the weighted average of its nets' centres, the IO
+/// pins fixed) solved by Gauss-Seidel sweeps, alternating with spreading by recursive
+/// bisection (cells sorted along the longer side of a region, split where half of
+/// their width lies, until a region holds a few cells, spaced evenly in it); the spread
+/// positions pull the next solution with a growing weight. The last spread is
+/// legalized into rows: cells by y fill the rows in turn, each row in x order.
+#[allow(clippy::too_many_arguments)]
+fn global_place(movable: &[usize], widths: &[u32], pnets: &[PNet], pins: &[Pin], rows: u32, sites: u32, site_w: f64, row_h: f64, seed: u64) -> Vec<(u32, u32)> {
+    let n = widths.len();
+    let (w, h) = (sites as f64 * site_w, rows as f64 * row_h);
+    let mut rng = Rng::new(seed ^ 0x9e37_79b9);
+    let mut x: Vec<f64> = (0..n).map(|_| w * (0.45 + 0.1 * rng.unit())).collect();
+    let mut y: Vec<f64> = (0..n).map(|_| h * (0.45 + 0.1 * rng.unit())).collect();
+    // nets with up to 100 terminals; star weight 1 / (terminals - 1)
+    let gnets: Vec<&PNet> = pnets.iter().filter(|p| p.cells.len() + p.pins.len() <= 100).collect();
+    let mut cell_nets: Vec<Vec<usize>> = vec![vec![]; n];
+    for (k, p) in gnets.iter().enumerate() { for &c in &p.cells { cell_nets[c].push(k); } }
+    let wt: Vec<f64> = gnets.iter().map(|p| 1.0 / (p.cells.len() + p.pins.len() - 1).max(1) as f64).collect();
+    let (mut ax, mut ay) = (x.clone(), y.clone());
+    let mut cx = vec![0.0; gnets.len()];
+    let mut cy = vec![0.0; gnets.len()];
+    let rounds = 24;
+    for round in 0..=rounds {
+        let anchor = if round == 0 { 0.0 } else { 0.02 * (round * round) as f64 };
+        for _ in 0..if round == 0 { 60 } else { 20 } {
+            for (k, p) in gnets.iter().enumerate() {
+                let m = (p.cells.len() + p.pins.len()) as f64;
+                cx[k] = (p.cells.iter().map(|&c| x[c]).sum::<f64>() + p.pins.iter().map(|&q| pins[q].x).sum::<f64>()) / m;
+                cy[k] = (p.cells.iter().map(|&c| y[c]).sum::<f64>() + p.pins.iter().map(|&q| pins[q].y).sum::<f64>()) / m;
+            }
+            for &c in movable {
+                let (mut sx, mut sy, mut sw) = (anchor * ax[c], anchor * ay[c], anchor);
+                for &k in &cell_nets[c] { sx += wt[k] * cx[k]; sy += wt[k] * cy[k]; sw += wt[k]; }
+                if sw > 0.0 { x[c] = (sx / sw).clamp(0.0, w); y[c] = (sy / sw).clamp(0.0, h); }
+            }
+        }
+        // spread: recursive bisection over the die
+        let mut cells: Vec<usize> = movable.to_vec();
+        let mut stack = vec![(0usize, cells.len(), 0.0, 0.0, w, h)];
+        while let Some((lo, hi, x0, y0, x1, y1)) = stack.pop() {
+            let part = &mut cells[lo..hi];
+            let horiz = x1 - x0 >= y1 - y0;
+            if part.len() <= 4 || (x1 - x0 < 2.0 * site_w && y1 - y0 < row_h) {
+                let k = part.len();
+                part.sort_by(|a, b| if horiz { x[*a].total_cmp(&x[*b]) } else { y[*a].total_cmp(&y[*b]) });
+                for (i, &c) in part.iter().enumerate() {
+                    let f = (i as f64 + 0.5) / k as f64;
+                    if horiz { ax[c] = x0 + f * (x1 - x0); ay[c] = (y0 + y1) / 2.0; } else { ax[c] = (x0 + x1) / 2.0; ay[c] = y0 + f * (y1 - y0); }
+                }
+                continue;
+            }
+            part.sort_by(|a, b| if horiz { x[*a].total_cmp(&x[*b]) } else { y[*a].total_cmp(&y[*b]) });
+            let total: f64 = part.iter().map(|&c| widths[c] as f64).sum();
+            let mut acc = 0.0;
+            let mut cut = part.len() / 2;
+            for (i, &c) in part.iter().enumerate() { acc += widths[c] as f64; if acc >= total / 2.0 { cut = i + 1; break; } }
+            let cut = cut.clamp(1, part.len() - 1);
+            if horiz {
+                let xm = (x0 + x1) / 2.0;
+                stack.push((lo, lo + cut, x0, y0, xm, y1));
+                stack.push((lo + cut, hi, xm, y0, x1, y1));
+            } else {
+                let ym = (y0 + y1) / 2.0;
+                stack.push((lo, lo + cut, x0, y0, x1, ym));
+                stack.push((lo + cut, hi, x0, ym, x1, y1));
+            }
+        }
+    }
+    // legalize the last spread: rows in y order, each filled to its share of the width
+    let mut by_y: Vec<usize> = movable.to_vec();
+    by_y.sort_by(|a, b| ay[*a].total_cmp(&ay[*b]));
+    let total: f64 = movable.iter().map(|&c| widths[c] as f64).sum();
+    let mut pos = vec![(0u32, 0u32); n];
+    let mut next = 0;
+    let mut placed = 0.0;
+    for r in 0..rows {
+        let quota = total * (r + 1) as f64 / rows as f64;
+        let mut row: Vec<usize> = vec![];
+        let mut used = 0u32;
+        while next < by_y.len() && (placed < quota || r + 1 == rows) && used + widths[by_y[next]] <= sites {
+            row.push(by_y[next]);
+            used += widths[by_y[next]];
+            placed += widths[by_y[next]] as f64;
+            next += 1;
+        }
+        row.sort_by(|a, b| ax[*a].total_cmp(&ax[*b]));
+        let mut left = used;
+        let mut cursor = 0u32;
+        for &c in &row {
+            let want = ((ax[c] / site_w) - widths[c] as f64 / 2.0).round().max(0.0) as u32;
+            let xs = want.max(cursor).min(sites - left);
+            pos[c] = (r, xs);
+            cursor = xs + widths[c];
+            left -= widths[c];
+        }
+    }
+    assert!(next == by_y.len(), "global placement: cells left over after the last row");
+    pos
+}
+
+/// a net for wirelength: cells and pins it connects
+pub struct PNet { pub cells: Vec<usize>, pub pins: Vec<usize>, pub bit: Bit }
+
+pub fn nets(nl: &Netlist, pins: &[Pin]) -> Vec<PNet> {
+    let mut m: HashMap<Bit, PNet> = HashMap::new();
+    let mut order: Vec<Bit> = vec![];
+    for (i, c) in nl.cells.iter().enumerate() {
+        for (_, b) in &c.conns {
+            if b.is_const() { continue; }
+            let e = m.entry(*b).or_insert_with(|| { order.push(*b); PNet { cells: vec![], pins: vec![], bit: *b } });
+            if !e.cells.contains(&i) { e.cells.push(i); }
+        }
+    }
+    // (a net between IO pins alone, an input wired straight to an output, is a net too)
+    for (k, p) in pins.iter().enumerate() {
+        if p.bit.is_const() { continue; }
+        m.entry(p.bit).or_insert_with(|| { order.push(p.bit); PNet { cells: vec![], pins: vec![], bit: p.bit } }).pins.push(k);
+    }
+    order.into_iter().map(|b| m.remove(&b).unwrap()).filter(|n| n.cells.len() + n.pins.len() > 1).collect()
+}
+
+/// wires that drive clock / asynchronous set-reset pins, through their
+/// buffer trees (built by CTS, not placed by wirelength)
+pub fn special_nets(nl: &Netlist) -> std::collections::HashSet<Bit> {
+    let mut s: std::collections::HashSet<Bit> = nl.cells.iter().flat_map(|c| c.conns.iter().filter(|(p, _)| matches!(*p, "CK" | "RN" | "SN")).map(|x| x.1)).collect();
+    for c in nl.cells.iter().filter(|c| c.typ == "CLKBUF") { s.extend(c.conns.iter().map(|x| x.1)); }
+    s
+}
+
+/// `weights`: per net, a factor on its wirelength (timing-driven placement;
+/// empty = all 1). `start`: refine this placement (of the same netlist) at a
+/// low temperature with short moves instead of annealing from scratch.
+/// `util`: target row utilization (the die is sized from it).
+pub fn place(nl: &Netlist, seed: u64, util: f64, weights: &HashMap<Bit, f64>, start: Option<&[(u32, u32)]>) -> RowPlacement {
+    let (row_h, site_w) = (super::lib::row_h(), super::lib::site_w());
+    let n = nl.cells.len();
+    let dims: Vec<(u32, u32)> = nl.cells.iter().map(super::lib::dims).collect();
+    let widths: Vec<u32> = dims.iter().map(|d| d.0).collect();
+    let heights: Vec<u32> = dims.iter().map(|d| d.1).collect();
+    let fixed: Vec<bool> = heights.iter().map(|h| *h > 1).collect();
+    let total: u32 = (0..n).filter(|c| !fixed[*c]).map(|c| widths[c]).sum::<u32>().max(1);
+    // macro area in site-rows, with some room around them
+    let macro_area: f64 = (0..n).filter(|c| fixed[*c]).map(|c| (widths[c] * heights[c]) as f64 * 1.1).sum();
+    let need = total as f64 / util + macro_area;
+    let side = (need * site_w * row_h).sqrt();
+    let max_h = *heights.iter().max().unwrap_or(&1);
+    let mut rows = ((side / row_h).round() as u32).max(1).max(max_h + 1);
+    let max_w = *widths.iter().max().unwrap_or(&1);
+    let mut sites = ((need / rows as f64).ceil() as u32).max(max_w + 2);
+    // macros: shelf packing from the bottom left (grow the die until they fit)
+    let mut mpos: Vec<(usize, u32, u32)> = vec![];
+    loop {
+        mpos.clear();
+        let (mut x, mut y, mut shelf) = (0u32, 0u32, 0u32);
+        let mut ok = true;
+        for c in (0..n).filter(|c| fixed[*c]) {
+            if x + widths[c] > sites { x = 0; y += shelf; shelf = 0; }
+            if y + heights[c] > rows || x + widths[c] > sites { ok = false; break; }
+            mpos.push((c, y, x));
+            x += widths[c];
+            shelf = shelf.max(heights[c]);
+        }
+        if ok { break; }
+        rows += 1;
+        sites += sites / 20 + 1;
+    }
+    // a library technology: room on the die's edges for every IO pin (two grid nodes each)
+    if !crate::pdk::tech().is_vlib() {
+        let ins = nl.ports.iter().filter(|p| p.dir == Dir::In).map(|p| p.bits.len()).sum::<usize>() as u32;
+        let outs = nl.ports.iter().filter(|p| p.dir == Dir::Out).map(|p| p.bits.len()).sum::<usize>() as u32;
+        while (sites / 2 + rows * super::detail::TRACKS / 2) < 2 * ins.max(outs) + 10 { sites += 2; rows += 1; }
+        // (wide enough for a strap pair between the IO pins: it joins the rows' power rails)
+        sites = sites.max(32);
+        rows = rows.max(2);
+    }
+    let (w, h) = (sites as f64 * site_w, rows as f64 * row_h);
+    let used_sites: u32 = (0..n).map(|c| widths[c] * heights[c]).sum();
+
+    // IO pins evenly around the die: inputs on the left and top, outputs right and bottom
+    let mut pins = vec![];
+    let ins: Vec<(String, Bit)> = nl.ports.iter().filter(|p| p.dir == Dir::In).flat_map(|p| p.bits.iter().enumerate().map(move |(i, b)| (if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }, *b))).collect();
+    let outs: Vec<(String, Bit)> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.iter().enumerate().map(move |(i, b)| (if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }, *b))).collect();
+    let around = |k: usize, n: usize, first: bool| -> (f64, f64) {
+        // half of the perimeter: left then top (inputs), right then bottom (outputs)
+        let len = w + h;
+        let d = (k as f64 + 0.5) / n as f64 * len;
+        if first { if d < h { (0.0, h - d) } else { (d - h, h) } } else if d < h { (w, d) } else { (w - (d - h), 0.0) }
+    };
+    for (k, (name, b)) in ins.iter().enumerate() { let (x, y) = around(k, ins.len(), true); pins.push(Pin { name: name.clone(), dir: Dir::In, x, y, bit: *b }); }
+    for (k, (name, b)) in outs.iter().enumerate() { let (x, y) = around(k, outs.len(), false); pins.push(Pin { name: name.clone(), dir: Dir::Out, x, y, bit: *b }); }
+    // on the routing grid (columns of a site, rows of a track), every pin on its own node:
+    // a taken node moves the pin along its edge
+    let (px, py) = (site_w, row_h / super::detail::TRACKS as f64);
+    // a library technology's top layer (met4) uses every other column, and pins on a side edge every other track
+    let lib = !crate::pdk::tech().is_vlib();
+    let (gx, gy) = if lib { ((sites - 1) & !1, (rows * super::detail::TRACKS - 1) & !1) } else { (sites, rows * super::detail::TRACKS) };
+    let mut taken = std::collections::HashSet::new();
+    // a library technology keeps the first strap pair's columns free of pins on the top and bottom edges
+    let straps = if lib { super::pdn::strap_columns(sites) } else { 0..0 };
+    // (vlib's grid is square and its pins already far enough apart: they stay where they are)
+    for p in pins.iter_mut().filter(|_| !crate::pdk::tech().is_vlib()) {
+        let (mut x, mut y) = (((p.x / px).round() as i64).min(gx as i64), ((p.y / py).round() as i64).min(gy as i64));
+        let vertical_edge = x == 0 || x >= gx as i64;
+        if lib { x &= !1; y &= !1; }
+        let step = if lib { 2 } else { 1 };
+        for k in 0..(gx + gy) as i64 * 2 {
+            let d = step * if k % 2 == 0 { k / 2 } else { -(k + 1) / 2 };
+            // (a library technology's pins are 0.8 µm deep: keep them off the corners)
+            let (lo_x, hi_x, lo_y, hi_y) = if lib { (4, gx as i64 - 4, 4, gy as i64 - 4) } else { (0, gx as i64, 0, gy as i64) };
+            let (tx, ty) = if vertical_edge { (x, (y + d).clamp(lo_y, hi_y.max(lo_y))) } else { ((x + d).clamp(lo_x, hi_x.max(lo_x)), y) };
+            if !taken.contains(&(tx, ty)) && (vertical_edge || !straps.contains(&(tx as u32))) { x = tx; y = ty; break; }
+        }
+        taken.insert((x, y));
+        p.x = x as f64 * px;
+        p.y = y as f64 * py;
+    }
+
+    let special = special_nets(nl);
+    let pnets: Vec<PNet> = nets(nl, &pins).into_iter().filter(|p| !special.contains(&p.bit)).collect();
+    let mut cell_nets: Vec<Vec<usize>> = vec![vec![]; n];
+    for (k, p) in pnets.iter().enumerate() { for &c in &p.cells { cell_nets[c].push(k); } }
+
+    let mut occ: Vec<Vec<i32>> = vec![vec![-1; sites as usize]; rows as usize];
+    let mut pos = vec![(0u32, 0u32); n];
+    for &(c, y, x) in &mpos {
+        for r in y..y + heights[c] { for s in x..x + widths[c] { occ[r as usize][s as usize] = c as i32; } }
+        pos[c] = (y, x);
+    }
+    // standard cells: netlist order (topological, so connected cells are near),
+    // rows in snake order, each row filled in proportion to its free sites
+    let free_sites: Vec<u32> = occ.iter().map(|row| row.iter().filter(|o| **o < 0).count() as u32).collect();
+    let total_free: f64 = free_sites.iter().map(|f| *f as f64).sum::<f64>().max(1.0);
+    let order: Vec<usize> = (0..n).filter(|c| !fixed[*c]).collect();
+    let mut next = 0usize;
+    let mut placed_w = 0.0f64;
+    let mut quota = 0.0f64;
+    for r in 0..rows {
+        quota += total as f64 * free_sites[r as usize] as f64 / total_free;
+        let mut list = vec![];
+        while next < order.len() && (placed_w < quota || r + 1 == rows) {
+            list.push(order[next]);
+            placed_w += widths[order[next]] as f64;
+            next += 1;
+        }
+        if r % 2 == 1 { list.reverse(); }
+        let used: u32 = list.iter().map(|&c| widths[c]).sum();
+        let gap = if list.is_empty() { 0.0 } else { free_sites[r as usize].saturating_sub(used) as f64 / list.len() as f64 };
+        let row = &mut occ[r as usize];
+        let mut x = 0.0f64;
+        let mut spill = vec![];
+        for &c in &list {
+            let wc = widths[c];
+            let mut xs = (x.round() as u32).min(sites.saturating_sub(wc));
+            while xs + wc <= sites && (xs..xs + wc).any(|t| row[t as usize] >= 0) { xs += 1; }
+            if xs + wc > sites {
+                match (0..=sites - wc).find(|&t| (t..t + wc).all(|u| row[u as usize] < 0)) { Some(t) => xs = t, None => { spill.push(c); continue; } }
+            }
+            for t in xs..xs + wc { row[t as usize] = c as i32; }
+            pos[c] = (r, xs);
+            x = (xs + wc) as f64 + gap;
+        }
+        // a cell that did not fit is placed below, in the first free run anywhere
+        let _ = spill;
+    }
+    // anything left over (rounding): first free run anywhere
+    for &c in &order {
+        let (r, x) = pos[c];
+        if occ[r as usize][x as usize] == c as i32 { continue; }
+        let wc = widths[c];
+        'find: for rr in 0..rows {
+            for t in 0..=sites - wc {
+                if (t..t + wc).all(|u| occ[rr as usize][u as usize] < 0) {
+                    for u in t..t + wc { occ[rr as usize][u as usize] = c as i32; }
+                    pos[c] = (rr, t);
+                    break 'find;
+                }
+            }
+        }
+    }
+
+    // a large design (no macros): global placement first, then the annealing only refines it
+    let global = (start.is_none() && n >= GLOBAL_MIN && mpos.is_empty()).then(|| {
+        let movable: Vec<usize> = (0..n).filter(|c| !fixed[*c]).collect();
+        global_place(&movable, &widths, &pnets, &pins, rows, sites, site_w, row_h, seed)
+    });
+    if let Some(st) = start.or(global.as_deref()) {
+        for row in occ.iter_mut() { for o in row.iter_mut() { if *o >= 0 && !fixed[*o as usize] { *o = -1; } } }
+        for &c in &order {
+            let (r, x) = st[c];
+            pos[c] = (r, x);
+            for t in x..x + widths[c] { occ[r as usize][t as usize] = c as i32; }
+        }
+    }
+
+    // ---- annealing ----
+    let cx = |c: usize, pos: &Vec<(u32, u32)>| ((pos[c].1 as f64 + widths[c] as f64 / 2.0) * site_w, (pos[c].0 as f64 + heights[c] as f64 / 2.0) * row_h);
+    let hpwl = |k: usize, pos: &Vec<(u32, u32)>| -> f64 {
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &c in &pnets[k].cells { let (x, y) = cx(c, pos); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
+        for &p in &pnets[k].pins { let (x, y) = (pins[p].x, pins[p].y); x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); }
+        ((x1 - x0) + (y1 - y0)) * weights.get(&pnets[k].bit).copied().unwrap_or(1.0)
+    };
+    let mut ncost: Vec<f64> = (0..pnets.len()).map(|k| hpwl(k, &pos)).collect();
+    // ---- density bins: (std cell sites in the bin, free sites of the bin) ----
+    let (bw, bh) = (32u32, 4u32);
+    let (nbx, nby) = (sites.div_ceil(bw), rows.div_ceil(bh));
+    let bin_at = |c: usize, (r, x): (u32, u32)| -> usize { ((r / bh) * nbx + ((x + widths[c] / 2) / bw).min(nbx - 1)) as usize };
+    let bin_of = |c: usize, pos: &Vec<(u32, u32)>| -> usize { bin_at(c, pos[c]) };
+    let mut bin_cap = vec![0f64; (nbx * nby) as usize];
+    for r in 0..rows { for x in 0..sites { let o = occ[r as usize][x as usize]; if o < 0 || !fixed[o as usize] { bin_cap[((r / bh) * nbx + x / bw) as usize] += 1.0; } } }
+    let mut bin_used = vec![0f64; bin_cap.len()];
+    for c in 0..n { if !fixed[c] { bin_used[bin_of(c, &pos)] += widths[c] as f64; } }
+    let target = (util + 0.15).min(0.9);
+    let lambda = DENSITY_WEIGHT;
+    let pen = |used: f64, cap: f64| lambda * (used - target * cap).max(0.0);
+    let mut cost: f64 = ncost.iter().sum::<f64>() + (0..bin_cap.len()).map(|b| pen(bin_used[b], bin_cap[b])).sum::<f64>();
+    let mut history = vec![Frame { temp: 0.0, cost, accept: 1.0, pos: pos.clone() }];
+    if n < 2 || pnets.is_empty() {
+        return RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64, max_density: 0.0, target_density: target };
+    }
+    let mut rng = Rng::new(seed);
+    let mut temp = {
+        let mut d = vec![];
+        for _ in 0..200 { let c = rng.below(n); if fixed[c] { continue; } d.push(cell_nets[c].iter().map(|k| ncost[*k]).sum::<f64>()); }
+        if d.is_empty() { d.push(1.0); }
+        let m = d.iter().sum::<f64>() / d.len() as f64;
+        (d.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / d.len() as f64).sqrt().max(1.0)
+    };
+    let mut rlim = (rows.max(sites / 8)) as f64;
+    if start.is_some() { temp *= 0.02; rlim = 2.0; }
+    if global.is_some() { temp *= 0.05; rlim = 4.0; }
+    let moves = (n * 12).max(2000);
+    let free_run = |occ: &Vec<Vec<i32>>, r: u32, x: u32, w: u32, ignore: &[i32]| -> bool {
+        x + w <= sites && (x..x + w).all(|s| { let o = occ[r as usize][s as usize]; o < 0 || ignore.contains(&o) })
+    };
+    let mut touched: Vec<usize> = vec![];
+    let mut stamp = vec![0u32; pnets.len()];
+    let mut gen = 0u32;
+    for _round in 0..400 {
+        let mut accepted = 0usize;
+        for _ in 0..moves {
+            let a = rng.below(n);
+            if fixed[a] { continue; }
+            let (ra, xa) = pos[a];
+            let wa = widths[a];
+            let rr = rlim.max(1.0) as i64;
+            let r2 = (ra as i64 + rng.below((2 * rr + 1) as usize) as i64 - rr).clamp(0, rows as i64 - 1) as u32;
+            let xr = (rr * 8).max(4);
+            let x2 = (xa as i64 + rng.below((2 * xr + 1) as usize) as i64 - xr).clamp(0, (sites - wa) as i64) as u32;
+            if (r2, x2) == (ra, xa) { continue; }
+            // target: free space, or a single cell we can swap with
+            let b = occ[r2 as usize][x2 as usize];
+            let mut plan: Vec<(usize, u32, u32)> = vec![];
+            if free_run(&occ, r2, x2, wa, &[a as i32]) {
+                plan.push((a, r2, x2));
+            } else if b >= 0 && b as usize != a && !fixed[b as usize] {
+                let b = b as usize;
+                let (rb, xb) = pos[b];
+                let wb = widths[b];
+                let ig = [a as i32, b as i32];
+                // in the same row the two new spans must not overlap each other
+                let clash = ra == rb && xb < xa + wb && xa < xb + wa;
+                if free_run(&occ, rb, xb, wa, &ig) && free_run(&occ, ra, xa, wb, &ig) && !clash {
+                    plan.push((a, rb, xb));
+                    plan.push((b, ra, xa));
+                } else { continue; }
+            } else { continue; }
+            // apply
+            let old: Vec<(usize, (u32, u32))> = plan.iter().map(|(c, _, _)| (*c, pos[*c])).collect();
+            for (c, _, _) in &plan { let (r, x) = pos[*c]; for s in x..x + widths[*c] { occ[r as usize][s as usize] = -1; } }
+            for &(c, r, x) in &plan { pos[c] = (r, x); for s in x..x + widths[c] { occ[r as usize][s as usize] = c as i32; } }
+            gen += 1;
+            touched.clear();
+            for (c, _, _) in &plan { for &k in &cell_nets[*c] { if stamp[k] != gen { stamp[k] = gen; touched.push(k); } } }
+            let mut delta = 0.0;
+            let newc: Vec<f64> = touched.iter().map(|&k| { let v = hpwl(k, &pos); delta += v - ncost[k]; v }).collect();
+            // density: bins the moved cells leave and enter
+            let mut bins: Vec<(usize, f64)> = vec![];
+            for (i, &(c, _, _)) in plan.iter().enumerate() {
+                let (from, to) = (bin_at(c, old[i].1), bin_of(c, &pos));
+                if from != to { bins.push((from, -(widths[c] as f64))); bins.push((to, widths[c] as f64)); }
+            }
+            for &(b, dw) in &bins { delta += pen(bin_used[b] + dw, bin_cap[b]) - pen(bin_used[b], bin_cap[b]); bin_used[b] += dw; }
+            if delta <= 0.0 || rng.unit() < (-delta / temp).exp() {
+                for (i, &k) in touched.iter().enumerate() { ncost[k] = newc[i]; }
+                cost += delta;
+                accepted += 1;
+            } else {
+                for &(b, dw) in bins.iter().rev() { bin_used[b] -= dw; }
+                for (c, _, _) in &plan { let (r, x) = pos[*c]; for s in x..x + widths[*c] { occ[r as usize][s as usize] = -1; } }
+                for &(c, p) in &old { pos[c] = p; let (r, x) = p; for s in x..x + widths[c] { occ[r as usize][s as usize] = c as i32; } }
+            }
+        }
+        let rate = accepted as f64 / moves as f64;
+        history.push(Frame { temp, cost, accept: rate, pos: pos.clone() });
+        temp *= if rate > 0.96 { 0.5 } else if rate > 0.8 { 0.9 } else if rate > 0.15 { 0.95 } else { 0.8 };
+        rlim = (rlim * (1.0 - 0.44 + rate)).clamp(1.0, rows.max(sites / 8) as f64);
+        if temp < 0.005 * cost.max(1.0) / pnets.len() as f64 { break; }
+    }
+    let max_density = (0..bin_cap.len()).filter(|&b| bin_cap[b] > 0.0).map(|b| bin_used[b] / bin_cap[b]).fold(0.0, f64::max);
+    if history.len() > 40 {
+        let m = history.len();
+        let keep: std::collections::HashSet<usize> = (0..40).map(|i| i * (m - 1) / 39).collect();
+        history = history.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|x| x.1).collect();
+    }
+    RowPlacement { rows, sites, w, h, pos, pins, history, util: used_sites as f64 / (rows * sites) as f64, max_density, target_density: target }
+}

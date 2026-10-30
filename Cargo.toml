@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "riscv/rvemu",
+    "veryl/sim",
+    "veryl/eda",
+    "veryl/emu",
+    "veryl/wasm",
+    "fluxa/sim",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ccc-eda/rueda"
+
+[workspace.dependencies]
+veryl-parser = "0.22"
+
+[profile.release]
+opt-level = 3
+
+# the web build (veryl/wasm, riscv/rvemu as wasm32): `cargo build --profile web`
+[profile.web]
+inherits = "release"
+debug = false
+lto = true
+codegen-units = 1
+panic = "abort"

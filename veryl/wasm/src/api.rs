@@ -1,0 +1,813 @@
+//! The requests the web front end can make.
+
+use serde_json::{json, Value};
+use std::cell::RefCell;
+use veryl_eda::netlist::{Bit, Dir, Netlist};
+use veryl_eda::pnr::chipdb::{Chip, Kind};
+
+thread_local! {
+    static CHIP: RefCell<Option<Chip>> = const { RefCell::new(None) };
+}
+
+pub fn set_chip(c: Chip) { CHIP.with(|x| *x.borrow_mut() = Some(c)); }
+
+thread_local! {
+    /// the virtual iCEBreaker: the loaded design (kept for power cycles), its pin file and the running board
+    static BOARD: RefCell<Option<(veryl_eda::board::Design, Option<String>, veryl_eda::board::Board, Value)>> = const { RefCell::new(None) };
+}
+
+thread_local! {
+    /// what the board was last loaded from, so a new program can replace the old one
+    /// in place (`board_program`): the mapped netlist, or the placed-and-routed .asc
+    static LOADED: RefCell<Option<Loaded>> = const { RefCell::new(None) };
+}
+
+enum Loaded {
+    Netlist(Netlist),
+    Bitstream { asc: String, map: Vec<veryl_eda::pnr::RamPos> },
+    /// RvSoc with its CPU as an instruction-set simulator: the program and the RAM size
+    Cpu(Vec<u8>, usize),
+}
+
+type R<T> = Result<T, String>;
+
+/// `program` (base64 bytes from address 0) into the design's byte-lane program memory; its size
+fn apply_program(v: &Value, nl: &mut Netlist) -> R<Option<usize>> {
+    let Some(b64) = v.get("program").and_then(|p| p.as_str()) else { return Ok(None) };
+    let bytes = unbase64(b64)?;
+    for (m, words) in veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &bytes)? { veryl_eda::bram::set_mem_init(nl, &m, &words); }
+    Ok(Some(bytes.len()))
+}
+
+/// whether the design has a program memory (byte lanes in block RAM, see `bram::program_lanes`)
+fn has_program_mem(nl: &Netlist) -> bool { veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &[]).is_ok() }
+
+fn bit(b: &Bit) -> Value {
+    match b { Bit::C0 => json!("0"), Bit::C1 => json!("1"), Bit::W(w) => json!(w) }
+}
+
+fn dir(d: Dir) -> &'static str { if d == Dir::In { "in" } else { "out" } }
+
+/// a netlist too big to draw (e.g. an 8 KB memory still as flip-flops before mapping)
+/// goes to the page as its ports and cell count only: { ports, cells: [], nets: [], n, types }
+const DRAW_LIMIT: usize = 60_000;
+fn netlist_json_limited(nl: &Netlist) -> Value {
+    if nl.cells.len() <= DRAW_LIMIT { return netlist_json(nl); }
+    let mut types: std::collections::BTreeMap<&str, usize> = Default::default();
+    for c in &nl.cells { *types.entry(c.typ.as_str()).or_default() += 1; }
+    json!({
+        "ports": nl.ports.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "bits": p.bits.iter().map(bit).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "cells": [], "nets": [], "n": nl.cells.len(), "types": types,
+    })
+}
+
+/// netlist as JSON: cells are {t: type, c: [[pin, bit]..], p: {param: value}}
+pub fn netlist_json(nl: &Netlist) -> Value {
+    json!({
+        "ports": nl.ports.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "bits": p.bits.iter().map(bit).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "cells": nl.cells.iter().map(|c| {
+            let mut o = json!({ "t": c.typ, "c": c.conns.iter().map(|(p, b)| json!([p, bit(b)])).collect::<Vec<_>>() });
+            if !c.params.is_empty() { o["p"] = c.params.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<serde_json::Map<_, _>>().into(); }
+            o
+        }).collect::<Vec<_>>(),
+        "nets": nl.nets.iter().map(|(n, b)| json!({ "name": n, "bits": b.iter().map(bit).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+    })
+}
+
+fn kind_name(k: Kind) -> &'static str {
+    match k {
+        Kind::Local => "local", Kind::LutIn => "in", Kind::LutOut => "out", Kind::Ctrl => "ctrl", Kind::Glb => "glb",
+        Kind::Glb2Local => "g2l", Kind::Sp4H | Kind::Sp4V => "sp4", Kind::Sp12H | Kind::Sp12V => "sp12", Kind::Io => "io",
+        Kind::Carry => "carry", Kind::Fabout => "fabout", Kind::Other => "other",
+    }
+}
+
+/// readable wire names: declared nets first, then ports (the first name wins)
+fn net_names(nls: &[&Netlist]) -> std::collections::HashMap<Bit, String> {
+    let mut m = std::collections::HashMap::new();
+    let idx = |n: &str, i: usize, len: usize| if len > 1 { format!("{}[{}]", n, i) } else { n.to_string() };
+    for nl in nls { for (n, bits) in nl.nets.iter().filter(|(n, _)| !n.starts_with("$mem:")) { for (i, b) in bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(n, i, bits.len())); } } }
+    for nl in nls { for p in &nl.ports { for (i, b) in p.bits.iter().enumerate() { m.entry(*b).or_insert_with(|| idx(&p.name, i, p.bits.len())); } } }
+    m
+}
+
+thread_local! {
+    /// the last ASIC flow's GDS (a library technology), for `asic_gds`
+    static LAST_GDS: std::cell::RefCell<Option<(String, Vec<u8>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// the GDS of the last `asic` run with a PDK, base64
+fn asic_gds(_v: &Value) -> R<Value> {
+    LAST_GDS.with(|g| match &*g.borrow() {
+        Some((top, bytes)) => Ok(json!({ "ok": true, "top": top, "gds": base64(bytes), "bytes": bytes.len() })),
+        None => Err("no GDS: run the ASIC flow with a PDK (sky130) first".into()),
+    })
+}
+
+/// the timing constraints of a request (`sdc`: SDC text), for the length of `f`
+fn with_sdc<T>(v: &Value, f: impl FnOnce() -> R<T>) -> R<T> {
+    let c = match v.get("sdc").and_then(|s| s.as_str()).filter(|s| !s.trim().is_empty()) {
+        Some(t) => Some(veryl_eda::sdc::parse(t).map_err(|e| format!("timing constraints (.sdc): {}", e))?),
+        None => None,
+    };
+    veryl_eda::sdc::set(c);
+    let r = f();
+    veryl_eda::sdc::set(None);
+    r
+}
+
+/// the first clock's period (the FPGA's target), when there are constraints
+fn target_period() -> Option<f64> {
+    veryl_eda::sdc::current().and_then(|c| c.clocks.iter().find(|k| k.port.is_some()).or(c.clocks.first()).map(|k| k.period))
+}
+
+/// the ASIC flow on the vlib standard cells, or a PDK's (`pdk`: "sky130")
+fn asic(v: &Value) -> R<Value> {
+    let pdk = v.get("pdk").and_then(|p| p.as_str()).unwrap_or("vlib").to_string();
+    let tech = veryl_eda::pdk::by_name(&pdk)?;
+    veryl_eda::pdk::with_tech(tech, || with_sdc(v, || asic_in(v)))
+}
+
+fn asic_in(v: &Value) -> R<Value> {
+    use veryl_eda::asic;
+    let tech = veryl_eda::pdk::tech();
+    let (top, (st, _)) = synth_netlists(v)?;
+    let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1);
+    let o = asic::flow(&st.opt, seed)?;
+    let (pl, rt, tm) = (&o.placement, &o.routing, &o.timing);
+    let n = o.mapped.cells.len();
+    let crit: std::collections::HashSet<usize> = tm.crit_cells.iter().copied().collect();
+    let names = net_names(&[&o.mapped, &st.opt]);
+    let crit_nets: std::collections::HashSet<Bit> = tm.crit_nets.iter().copied().collect();
+    // at most 30 annealing frames (big designs: 20)
+    let maxf = if n > 3000 { 20 } else { 30 };
+    let hl = pl.history.len();
+    let frames: Vec<usize> = if hl <= maxf { (0..hl).collect() } else { (0..maxf).map(|i| i * (hl - 1) / (maxf - 1)).collect() };
+    let lib_nl = veryl_eda::pdk::to_library(&o.mapped);
+    let mut verilog = veryl_eda::output::to_verilog(&lib_nl);
+    verilog += &veryl_eda::pdk::verilog_models();
+    // a library technology: design rules and the GDS
+    let drc_json = if tech.is_vlib() { Value::Null } else {
+        let l = asic::layout::build(&o)?;
+        let d = asic::drc::check(&l, &o.mapped);
+        let g = asic::gds::write(&l, &o.mapped.name, veryl_eda::pdk::SKY130_GDS)?;
+        let out = json!({ "shapes": d.shapes, "shorts": d.shorts, "spacing": d.spacing, "area": d.area, "opens": d.opens,
+            "taps": o.pdn.taps.len(), "tap_viol": o.pdn.tap_viol, "gds_bytes": g.len(), "instances": l.insts.len(), "details": d.details });
+        LAST_GDS.with(|x| *x.borrow_mut() = Some((top.clone(), g)));
+        out
+    };
+    // the library's view of a cell: its name, pins, width, area, a nominal delay (50 ps in, 5 fF out) and function
+    let lib_json: Vec<Value> = if tech.is_vlib() {
+        asic::lib::LIB.iter().map(|c| json!({ "name": c.name, "ins": c.ins, "width": c.width, "delay": c.delay, "load": c.load, "setup": c.setup, "area": asic::lib::area(c.name), "verilog": c.verilog })).collect()
+    } else {
+        let mut names: Vec<&String> = tech.cells.keys().collect();
+        names.sort();
+        names.into_iter().filter_map(|n| {
+            let b = &tech.cells[n];
+            let lc = tech.lib_cell(n)?;
+            let ins: Vec<String> = lc.inputs().map(|p| p.name.clone()).collect();
+            let first = asic::lib::cell(n).ins.first().copied().unwrap_or("A");
+            let d = tech.arc(n, first, 0.05, 0.005).map(|x| x.0).unwrap_or(0.0);
+            let f = lc.outputs().filter_map(|p| p.function.as_ref().map(|f| format!("{} = {}", p.name, f))).collect::<Vec<_>>().join(", ");
+            let f = if let Some(ff) = &lc.ff { format!("ff: next {} on {}{}", ff.next_state, ff.clocked_on, ff.clear.as_ref().map(|c| format!(", clear {}", c)).unwrap_or_default()) } else { f };
+            Some(json!({ "name": b.cell, "ins": ins, "width": b.width, "delay": (d * 1000.0).round() / 1000.0, "load": 0.0, "setup": 0.0, "area": b.area, "verilog": f }))
+        }).collect()
+    };
+    let counts: Vec<(String, usize)> = o.counts.iter().map(|(n, k)| (tech.cell_name(n).to_string(), *k)).collect();
+    let power_json = {
+            let p = &o.power;
+            json!({ "freq": p.freq_mhz, "e_nets": p.e_nets, "e_clock": p.e_clock, "e_internal": p.e_internal, "e_sram": p.e_sram,
+                "dynamic": p.dynamic, "leakage": p.leakage, "total": p.total, "ir_worst": p.ir_worst, "cycles": p.cycles,
+                "cell": p.cell.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>(), "ir": p.ir.iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>() })
+        };
+    let detail_json = {
+            let d = &o.detail;
+            // the wires themselves only for designs small enough to draw
+            let segs: usize = d.nets.iter().map(|n| n.segs.len()).sum();
+            json!({
+                "nx": d.nx, "ny": d.ny, "tracks": asic::detail::TRACKS, "wirelength": d.wirelength, "vias": d.vias, "conflicts": d.conflicts, "opens": d.opens,
+                "iters": d.iters, "per_layer": d.per_layer, "segments": segs,
+                "nets": if segs <= 150_000 { d.nets.iter().map(|n| json!({
+                    "name": names.get(&n.bit).cloned().unwrap_or_else(|| match n.bit { Bit::W(w) => format!("n{}", w), _ => "const".into() }),
+                    "len": n.length,
+                    "segs": n.segs.iter().flat_map(|s| [s.0 as u32, s.1, s.2, s.3, s.4]).collect::<Vec<_>>(),
+                    "vias": n.vias.iter().filter(|v| v.0 != 255).flat_map(|v| [v.0 as u32, v.1, v.2]).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>() } else { vec![] },
+            })
+        };
+    Ok(json!({
+        "ok": true,
+        "top": top,
+        "pdk": tech.name,
+        "layers": tech.layers,
+        "drc": drc_json,
+        "map": netlist_json(&lib_nl),
+        "lib": lib_json,
+        "counts": counts,
+        "area": o.area,
+        "die": { "w": pl.w, "h": pl.h, "rows": pl.rows, "sites": pl.sites, "util": pl.util, "max_density": pl.max_density, "target_density": pl.target_density, "row_h": asic::lib::row_h(), "site_w": asic::lib::site_w() },
+        "cells": o.mapped.cells.iter().enumerate().map(|(i, c)| { let (w, h) = asic::lib::dims(c); json!([pl.pos[i].0, pl.pos[i].1, w, (tm.arrival[i] * 1000.0).round() / 1000.0, crit.contains(&i) as u8, h]) }).collect::<Vec<_>>(),
+        "pins": pl.pins.iter().map(|p| json!({ "name": p.name, "dir": dir(p.dir), "x": p.x, "y": p.y })).collect::<Vec<_>>(),
+        "history": frames.iter().map(|&k| { let f = &pl.history[k]; json!({ "temp": f.temp, "cost": f.cost, "accept": f.accept, "pos": f.pos.iter().flat_map(|p| [p.0, p.1]).collect::<Vec<_>>() }) }).collect::<Vec<_>>(),
+        "route": {
+            "gx": rt.gx, "gy": rt.gy, "cap": asic::route::CAP, "iters": rt.iters, "wirelength": rt.wirelength, "vias": rt.vias, "overflow": rt.overflow,
+            "nets": rt.nets.iter().map(|r| json!({
+                "name": names.get(&r.bit).cloned().unwrap_or_else(|| match r.bit { Bit::W(w) => format!("n{}", w), _ => "const".into() }), "clock": r.clock, "len": r.length, "vias": r.vias, "crit": crit_nets.contains(&r.bit),
+                "segs": r.segs.iter().flat_map(|s| [s.0, s.1, s.2, s.3]).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        },
+        "detail": detail_json,
+        "power": power_json,
+        "pdn": {
+            "rails": o.pdn.rails, "strap_w": asic::pdn::STRAP_W, "vias": o.pdn.vias.len(),
+            "straps": o.pdn.straps.iter().map(|(x, v)| json!([x, v])).collect::<Vec<_>>(),
+            "fillers": o.pdn.fillers.iter().flat_map(|f| [f.0, f.1, f.2]).collect::<Vec<_>>(),
+        },
+        "cts": {
+            "buffers": o.cts.buffers, "hold_bufs": o.hold_bufs,
+            "trees": o.cts.trees.iter().map(|(b, sinks, bufs, levels)| json!({ "net": names.get(b).cloned().unwrap_or_else(|| "?".into()), "sinks": sinks, "buffers": bufs, "levels": levels })).collect::<Vec<_>>(),
+        },
+        "timing": { "period": tm.period, "fmax": tm.fmax, "fmax_wl": o.fmax_wl, "fmax_ideal": o.fmax_ideal, "insertion": tm.insertion, "skew": tm.skew, "hold_slack": tm.hold_slack, "endpoints": tm.endpoints, "path": tm.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>(),
+            "slack": tm.slack.as_ref().map(|s| json!({ "wns": s.wns, "tns": s.tns, "failing": s.failing, "checked": s.checked, "worst": s.worst,
+                "clocks": s.clocks.iter().map(|(n, p, e)| json!({ "name": n, "period": p, "endpoints": e })).collect::<Vec<_>>() })) },
+        "antenna": { "diodes": o.diodes },
+        "repair": { "upsized": o.repair.upsized, "buffers": o.repair.buffers, "before": o.repair.before },
+        "extraction": o.extraction.as_ref().map(|e| json!({ "nets": e.nets, "cap": e.cap.values().sum::<f64>(), "worst": e.worst })),
+        "verilog": verilog,
+        "def": asic::def(&o),
+    }))
+}
+
+fn pnr(v: &Value) -> R<Value> { with_sdc(v, || pnr_in(v)) }
+
+fn pnr_in(v: &Value) -> R<Value> {
+    let (top, lib_out) = synth_netlists(v)?;
+    let (st, mapped) = lib_out;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).map(veryl_eda::pnr::parse_pcf).unwrap_or_default();
+    let seed = v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1);
+    CHIP.with(|c| -> R<Value> {
+        let cb = c.borrow();
+        let chip = cb.as_ref().ok_or("chip database not loaded")?;
+        let timing_driven = v.get("timing_driven").and_then(|t| t.as_bool()).unwrap_or(true);
+        let opts = veryl_eda::pnr::Opts { chipdb: None, package: "sg48".into(), pcf, seed, verbose: false, timing_driven };
+        let out = veryl_eda::pnr::place_and_route_on(chip, &mapped, &opts)?;
+        let names = |b: Option<Bit>| -> String {
+            match b {
+                None => String::new(),
+                Some(b) => mapped.nets.iter().chain(st.opt.nets.iter()).filter(|(n, _)| !n.starts_with("$mem:")).find_map(|(n, bits)| bits.iter().position(|x| *x == b).map(|i| if bits.len() > 1 { format!("{}[{}]", n, i) } else { n.clone() }))
+                    .or_else(|| mapped.ports.iter().find_map(|p| p.bits.iter().position(|x| *x == b).map(|i| if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() })))
+                    .unwrap_or_else(|| match b { Bit::W(w) => format!("n{}", w), Bit::C0 => "0".into(), Bit::C1 => "1".into() }),
+            }
+        };
+        let is_extra = |pp: u32| pp >= u32::MAX - out.extra as u32;
+        // device grid
+        let tiles: Vec<Value> = chip.tiles.iter().map(|((x, y), t)| json!([x, y, t])).collect();
+        let lcs: Vec<Value> = out.packed.lcs.iter().enumerate().map(|(i, lc)| {
+            let (x, y, z) = out.placement.lc[i];
+            json!({
+                "x": x, "y": y, "z": z,
+                "init": format!("{:04x}", lc.init),
+                "carry": lc.carry, "in3c": lc.in3_chain,
+                "ff": lc.ff.as_ref().map(|f| json!({ "neg": f.neg, "sr": f.sr.is_some(), "set": f.set, "async": f.asynch })),
+                "out": names(lc.out),
+                "ins": lc.ins.iter().map(|b| names(*b)).collect::<Vec<_>>(),
+                "arr": out.timing.lc_arrival.get(i).copied().unwrap_or(0.0),
+            })
+        }).collect();
+        let ios: Vec<Value> = out.packed.ios.iter().enumerate().map(|(i, io)| {
+            let (x, y, z, pin) = &out.placement.io[i];
+            json!({ "name": io.name, "dir": dir(io.dir), "x": x, "y": y, "z": z, "pin": pin })
+        }).collect();
+        let history: Vec<Value> = out.placement.history.iter().map(|f| json!({
+            "temp": f.temp, "cost": f.cost, "accept": f.accept,
+            "pos": f.lc.iter().flat_map(|(x, y, z)| [*x, *y, *z as i32]).collect::<Vec<_>>(),
+            "ram": f.ram.iter().flat_map(|(x, y)| [*x, *y]).collect::<Vec<_>>(),
+        })).collect();
+        let rams: Vec<Value> = out.packed.rams.iter().enumerate().map(|(i, r)| {
+            let (x, y) = out.placement.ram[i];
+            let mode = |m: u8| ["256×16", "512×8", "1024×4", "2048×2"][m as usize & 3];
+            json!({ "x": x, "y": y, "read": mode(r.read_mode), "write": mode(r.write_mode),
+                "ins": r.ins.iter().map(|(p, b)| json!([p, names(Some(*b))])).collect::<Vec<_>>(),
+                "outs": r.outs.iter().map(|(p, b)| json!([p, names(Some(*b))])).collect::<Vec<_>>() })
+        }).collect();
+        // route trees as tile-to-tile segments: from the tile of the pip that
+        // drove a wire to the tile of the pip it drives
+        let crit: std::collections::HashSet<u32> = out.timing.crit_pips.iter().copied().collect();
+        let nets: Vec<Value> = out.nets.iter().enumerate().map(|(ni, net)| {
+            let mut tile_of_wire: std::collections::HashMap<u32, (i32, i32)> = std::collections::HashMap::new();
+            let (sx, sy, _) = &chip.net_label[net.src as usize];
+            tile_of_wire.insert(net.src, (*sx, *sy));
+            let rt = &out.routes[ni];
+            let mut segs = vec![];
+            // pips are appended sink -> tree; process in reverse so parents come first
+            let mut pend: Vec<u32> = rt.iter().copied().filter(|p| !is_extra(*p)).collect();
+            for _ in 0..4 {
+                let mut rest = vec![];
+                for &pp in pend.iter().rev() {
+                    let p = &chip.pips[pp as usize];
+                    let from = tile_of_wire.get(&p.src).copied();
+                    match from {
+                        Some((fx, fy)) => {
+                            segs.push(json!([fx, fy, p.x, p.y, kind_name(chip.kind[p.dst as usize]), crit.contains(&pp)]));
+                            tile_of_wire.insert(p.dst, (p.x as i32, p.y as i32));
+                        }
+                        None => rest.push(pp),
+                    }
+                }
+                if rest.is_empty() { break; }
+                rest.reverse();
+                pend = rest;
+            }
+            json!({
+                "name": net.name,
+                "global": net.global.is_some(),
+                "sinks": net.sinks.len(),
+                "pips": rt.iter().filter(|p| !is_extra(**p)).count(),
+                "segs": segs,
+            })
+        }).collect();
+        Ok(json!({
+            "ok": true,
+            "top": top,
+            "device": { "name": "iCE40UP5K-SG48", "w": chip.w, "h": chip.h, "tiles": tiles },
+            "lcs": lcs,
+            "chains": out.packed.chains.iter().map(|c| c.lcs.clone()).collect::<Vec<_>>(),
+            "ios": ios,
+            "rams": rams,
+            "history": history,
+            "nets": nets,
+            "route_iters": out.route_iters,
+            "globals": out.globals.iter().map(|(n, g)| json!({ "net": n, "glb": g })).collect::<Vec<_>>(),
+            "timing": {
+                "period": out.timing.period, "fmax": out.timing.fmax, "endpoints": out.timing.endpoints,
+                "target": target_period(),
+                "path": out.timing.path.iter().map(|s| json!({ "what": s.what, "delay": s.delay, "at": s.at })).collect::<Vec<_>>(),
+                "crit_lcs": out.timing.crit_lcs,
+                "fmax_wl": out.fmax_wl,
+                "power": { "freq": out.power.freq_mhz, "e_nets": out.power.e_nets, "e_clock": out.power.e_clock, "e_ram": out.power.e_ram, "dynamic": out.power.dynamic, "static": out.power.static_mw, "total": out.power.total },
+            },
+            "pips": out.wires,
+            "bin": base64(&veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?),
+            "asc": out.asc,
+            "pcf": out.pcf,
+        }))
+    })
+}
+
+type SynthOut = (veryl_eda::elab::Stages, Netlist);
+
+/// parse + synthesize + map; (top, (stages, iCE40 netlist))
+fn synth_netlists(v: &Value) -> R<(String, SynthOut)> {
+    let fs = files(v)?;
+    let mut parsers = vec![];
+    for (name, src) in &fs {
+        parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?);
+    }
+    let mut lib = veryl_eda::elab::Lib::new();
+    for p in &parsers { lib.add(&p.veryl); }
+    let top = match v.get("top").and_then(|t| t.as_str()) {
+        Some(t) => t.to_string(),
+        None => lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()).ok_or("no synthesizable (non-#[test]) module")?,
+    };
+    let st = veryl_eda::elab::synthesize_stages(&lib, &top)?;
+    let mapped = veryl_eda::ice40::map(&st.opt)?;
+    Ok((top, (st, mapped)))
+}
+
+/// the virtual board: synthesize, map to iCE40 and power up an iCEBreaker with the design
+fn board_load(v: &Value) -> R<Value> {
+    use veryl_eda::board::{icebreaker, Design};
+    let (top, (_, mut mapped)) = synth_netlists(v)?;
+    let prog = apply_program(v, &mut mapped)?;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
+    let d = Design::from_netlist(&mapped)?;
+    let b = icebreaker::board(d.clone(), pcf.as_deref())?;
+    let count = |t: &str| mapped.cells.iter().filter(|c| c.typ.starts_with(t)).count();
+    let cells = json!({ "lut": count("SB_LUT4"), "carry": count("SB_CARRY"), "ff": count("SB_DFF"), "ram": count("SB_RAM40_4K") });
+    let mut info = board_info(&top, cells, &b, pcf.is_none(), None);
+    info["mode"] = json!("netlist");
+    info["ports"] = port_bits(&mapped);
+    info["program_mem"] = json!(has_program_mem(&mapped));
+    info["program"] = json!(prog);
+    BOARD.with(|x| *x.borrow_mut() = Some((d, pcf, b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = Some(Loaded::Netlist(mapped)));
+    Ok(info)
+}
+
+/// synthesize, place and route (own P&R, on the loaded chipdb), write the bitstream,
+/// decode it and power up the board with it: the board runs what would be flashed
+fn board_flash(v: &Value) -> R<Value> {
+    use veryl_eda::board::{bitstream, icebreaker};
+    let (top, (_, mut mapped)) = synth_netlists(v)?;
+    let prog = apply_program(v, &mut mapped)?;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).map(|p| p.to_string());
+    let opts = veryl_eda::pnr::Opts {
+        chipdb: None, package: "sg48".into(), pcf: veryl_eda::pnr::parse_pcf(pcf.as_deref().unwrap_or(icebreaker::DEFAULT_PCF)),
+        seed: v.get("seed").and_then(|s| s.as_u64()).unwrap_or(1), verbose: false, timing_driven: true,
+    };
+    let out = CHIP.with(|c| -> R<veryl_eda::pnr::Output> {
+        let c = c.borrow();
+        let chip = c.as_ref().ok_or("chip database not loaded")?;
+        veryl_eda::pnr::place_and_route_on(chip, &mapped, &opts)
+    })?;
+    let bin = veryl_eda::pnr::bitstream::asc_to_bin(&out.asc)?;
+    let (d, rep) = CHIP.with(|c| -> R<(veryl_eda::board::Design, bitstream::Report)> {
+        let c = c.borrow();
+        bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
+    })?;
+    let pins_pcf = icebreaker::pins_pcf(&d);
+    let mut b = icebreaker::board(d.clone(), Some(&pins_pcf))?;
+    b.warnings.extend(rep.warnings.iter().cloned());
+    // the design's port on each pin, from the pin assignment the place and route used
+    let names: std::collections::HashMap<u32, String> = veryl_eda::pnr::parse_pcf(&out.pcf).into_iter().filter_map(|(port, pin)| Some((pin.parse().ok()?, port))).collect();
+    for (name, _) in mapped.ports.iter().flat_map(|p| (0..p.bits.len()).map(move |i| (if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() }, ()))) {
+        if !opts.pcf.contains_key(&name) {
+            let pin = names.iter().find(|(_, n)| **n == name).map(|(p, _)| p.to_string()).unwrap_or_else(|| "?".into());
+            b.warnings.push(format!("{} has no pin in the pin file: placed on pin {}", name, pin));
+        }
+    }
+    let fmax = out.timing.fmax;
+    if fmax < icebreaker::CLOCK_HZ / 1e6 { b.warnings.push(format!("Fmax {:.1} MHz is below the board's 12 MHz: the real board may not work like this simulation", fmax)); }
+    let cells = json!({ "lut": rep.lcs, "carry": 0, "ff": 0, "ram": rep.rams, "lc": rep.lcs });
+    let mut info = board_info(&top, cells, &b, pcf.is_none(), Some(&names));
+    info["mode"] = json!("bitstream");
+    info["ports"] = port_bits(&mapped);
+    info["fmax"] = json!(fmax);
+    info["bin"] = json!(base64(&bin));
+    info["program_mem"] = json!(has_program_mem(&mapped));
+    info["program"] = json!(prog);
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = Some(Loaded::Bitstream { asc: out.asc.clone(), map: out.ram_map() }));
+    Ok(info)
+}
+
+/// any iCE40UP5K bitstream (e.g. from nextpnr + icepack) onto the board
+fn board_load_bin(v: &Value) -> R<Value> {
+    use veryl_eda::board::{bitstream, icebreaker};
+    let b64 = v.get("bin").and_then(|b| b.as_str()).ok_or("missing bin")?;
+    let bin = unbase64(b64)?;
+    let (d, rep) = CHIP.with(|c| -> R<(veryl_eda::board::Design, bitstream::Report)> {
+        let c = c.borrow();
+        bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
+    })?;
+    let pins_pcf = icebreaker::pins_pcf(&d);
+    let mut b = icebreaker::board(d.clone(), Some(&pins_pcf))?;
+    b.warnings.extend(rep.warnings.iter().cloned());
+    let cells = json!({ "lut": rep.lcs, "carry": 0, "ff": 0, "ram": rep.rams, "lc": rep.lcs });
+    let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("bitstream");
+    let mut info = board_info(name, cells, &b, false, None);
+    info["mode"] = json!("bin");
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pins_pcf), b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = None);
+    Ok(info)
+}
+
+/// RvSoc on the board with its CPU as an instruction-set simulator (real time):
+/// { program (base64), pcf, mem? (RAM bytes, 8192) }
+fn board_load_cpu(v: &Value) -> R<Value> {
+    let bytes = unbase64(v.get("program").and_then(|p| p.as_str()).ok_or("missing program")?)?;
+    let mem = v.get("mem").and_then(|m| m.as_u64()).unwrap_or(8192) as usize;
+    let pcf = v.get("pcf").and_then(|p| p.as_str()).filter(|p| !p.trim().is_empty()).ok_or("the CPU board needs the SoC's pin file")?.to_string();
+    let b = cpu_board(&bytes, mem, &pcf)?;
+    let cells = json!({ "lut": 0, "carry": 0, "ff": 0, "ram": 0 });
+    let mut info = board_info(v.get("top").and_then(|t| t.as_str()).unwrap_or("RvSoc"), cells, &b, false, None);
+    info["mode"] = json!("cpu");
+    info["ports"] = json!(b.eng.d.inputs.iter().map(|x| json!({ "name": x.0, "dir": "in" })).chain(b.eng.d.outputs.iter().map(|x| json!({ "name": x.0, "dir": "out" }))).collect::<Vec<_>>());
+    info["program_mem"] = json!(true);
+    info["program"] = json!(bytes.len());
+    let d = b.eng.d.clone();
+    BOARD.with(|x| *x.borrow_mut() = Some((d, Some(pcf), b, Value::Null)));
+    LOADED.with(|x| *x.borrow_mut() = Some(Loaded::Cpu(bytes, mem)));
+    Ok(info)
+}
+
+fn cpu_board(bytes: &[u8], mem: usize, pcf: &str) -> R<veryl_eda::board::Board> {
+    use veryl_eda::board::icebreaker;
+    let mut b = veryl_eda::board::Board::cpu(bytes, mem, pcf, icebreaker::CLOCK_PIN)?;
+    // buttons released (BTN1-3 read 1 when pressed: idle 0)
+    for p in icebreaker::PINS { if let icebreaker::Kind::Button { pressed } = p.kind { b.set_pin(p.pin, !pressed); } }
+    Ok(b)
+}
+
+/// A new program (`program`: base64 bytes from address 0) for the design on the board,
+/// without synthesizing or placing and routing again: the netlist's block RAMs get the
+/// new contents, or the bitstream's (`pnr::patch_ram`); the board powers up with it.
+fn board_program(v: &Value) -> R<Value> {
+    use veryl_eda::board::{bitstream, icebreaker, Design};
+    let bytes = unbase64(v.get("program").and_then(|p| p.as_str()).ok_or("missing program")?)?;
+    let done = LOADED.with(|l| -> R<(Design, Option<String>, Option<Vec<u8>>)> {
+        let mut l = l.borrow_mut();
+        match l.as_mut().ok_or("load a design with a program memory first")? {
+            Loaded::Netlist(nl) => {
+                for (m, words) in veryl_eda::bram::program_lanes(&veryl_eda::bram::mem_names(nl), &bytes)? { veryl_eda::bram::set_mem_init(nl, &m, &words); }
+                let pcf = BOARD.with(|x| x.borrow().as_ref().and_then(|b| b.1.clone()));
+                Ok((Design::from_netlist(nl)?, pcf, None))
+            }
+            Loaded::Cpu(prog, mem) => {
+                *prog = bytes.clone();
+                let mem = *mem;
+                BOARD.with(|x| -> R<()> {
+                    let mut x = x.borrow_mut();
+                    let (_, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+                    *b = cpu_board(&bytes, mem, pcf.as_deref().unwrap_or(""))?;
+                    attach(b, periph);
+                    Ok(())
+                })?;
+                Err("cpu".to_string())
+            }
+            Loaded::Bitstream { asc, map } => {
+                let names: Vec<String> = { let mut v: Vec<String> = map.iter().filter_map(|p| p.slot.rsplit_once(':').map(|x| x.0.to_string())).collect(); v.dedup(); v };
+                for (m, words) in veryl_eda::bram::program_lanes(&names, &bytes)? { *asc = veryl_eda::pnr::patch_ram(asc, map, &m, &words)?.0; }
+                let bin = veryl_eda::pnr::bitstream::asc_to_bin(asc)?;
+                let (d, _) = CHIP.with(|c| -> R<(Design, bitstream::Report)> {
+                    let c = c.borrow();
+                    bitstream::decode(c.as_ref().ok_or("chip database not loaded")?, &bitstream::Config::parse_bin(&bin)?)
+                })?;
+                let pins = icebreaker::pins_pcf(&d);
+                Ok((d, Some(pins), Some(bin)))
+            }
+        }
+    });
+    let (d, pcf, bin) = match done {
+        Err(e) if e == "cpu" => return Ok(json!({ "ok": true, "bytes": bytes.len(), "bin": null })),
+        r => r?,
+    };
+    BOARD.with(|x| -> R<()> {
+        let mut x = x.borrow_mut();
+        let (od, opcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+        let warnings = b.warnings.clone();
+        *b = icebreaker::board(d.clone(), pcf.as_deref())?;
+        b.warnings = warnings;
+        attach(b, periph);
+        *od = d;
+        *opcf = pcf;
+        Ok(())
+    })?;
+    Ok(json!({ "ok": true, "bytes": bytes.len(), "bin": bin.map(|b| base64(&b)) }))
+}
+
+/// Compile C for RvSoc: { src, name?, mem? (RAM bytes), run? (max instructions on the
+/// instruction-set simulator), input? (serial bytes for it), linux? (an executable for the
+/// RV64 board's Linux instead: `elf`, no run) } ->
+/// { ok, compiled, asm, listing, bin (base64), size, end, symbols, errors: [{file, line, msg}], run?, elf? }
+/// (compile errors are a normal answer: ok with compiled = false)
+fn cc(v: &Value) -> R<Value> {
+    use veryl_eda::rv;
+    let src = v.get("src").and_then(|s| s.as_str()).ok_or("missing src")?;
+    let name = v.get("name").and_then(|s| s.as_str()).unwrap_or("main.c");
+    let mem = v.get("mem").and_then(|m| m.as_u64()).unwrap_or(8192) as u32;
+    let linux = v.get("linux").and_then(|l| l.as_bool()).unwrap_or(false);
+    let o = match rv::cc::compile(name, src, &rv::cc::Options { mem_size: mem, linux }) {
+        Ok(o) => o,
+        Err(es) => return Ok(json!({ "ok": true, "compiled": false, "errors": es.iter().map(|e| json!({ "file": e.file, "line": e.line, "msg": e.msg })).collect::<Vec<_>>() })),
+    };
+    let mut out = json!({
+        "ok": true, "compiled": true, "asm": o.asm, "listing": rv::asm::listing_text(&o.program), "bin": base64(&o.program.bytes),
+        "size": o.program.bytes.len(), "end": o.program.end, "mem": mem,
+        "symbols": o.program.symbols.iter().filter(|s| !s.0.starts_with('.')).map(|s| json!([s.0, s.1])).collect::<Vec<_>>(), "errors": [],
+    });
+    if let Some(elf) = &o.elf { out["elf"] = json!(base64(elf)); return Ok(out); }
+    if let Some(n) = v.get("run").and_then(|r| r.as_u64()) {
+        let mut s = rv::iss::Iss::new(&o.program.bytes, mem as usize);
+        if let Some(i) = v.get("input").and_then(|i| i.as_str()) { s.rx.extend(i.bytes()); }
+        let r = s.run(n);
+        out["run"] = json!({ "tx": String::from_utf8_lossy(&s.tx), "halted": r.as_ref().ok() == Some(&true), "error": r.err(),
+            "instret": s.instret, "cycles": s.cycles, "led": s.led });
+    }
+    Ok(out)
+}
+
+/// attach peripherals to the board (kept for power cycles):
+/// { uart: {tx, rx, cpb}, seg: [{segs: [pin|null ×8], sels: [[pin, level]], on}], vga: {hs, vs, r, g, b} }
+fn board_periph(v: &Value) -> R<Value> {
+    BOARD.with(|x| {
+        let mut x = x.borrow_mut();
+        let (_, _, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+        *periph = v.clone();
+        b.uart = None;
+        b.segs.clear();
+        b.vga = None;
+        attach(b, periph);
+        Ok(json!({ "ok": true }))
+    })
+}
+
+fn attach(b: &mut veryl_eda::board::Board, p: &Value) {
+    let pin = |v: &Value| v.as_u64().map(|p| p as u32);
+    let pins = |v: Option<&Value>| -> Vec<u32> { v.and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|p| p as u32)).collect()).unwrap_or_default() };
+    if let Some(u) = p.get("uart").filter(|u| !u.is_null()) {
+        b.attach_uart(u.get("tx").and_then(pin).unwrap_or(9), u.get("rx").and_then(pin).unwrap_or(6), u.get("cpb").and_then(|c| c.as_f64()).unwrap_or(12e6 / 115200.0));
+    }
+    for s in p.get("seg").and_then(|s| s.as_array()).into_iter().flatten() {
+        let mut segs = [None; 8];
+        for (k, x) in s.get("segs").and_then(|a| a.as_array()).into_iter().flatten().take(8).enumerate() { segs[k] = pin(x); }
+        let sels: Vec<(u32, bool)> = s.get("sels").and_then(|a| a.as_array()).into_iter().flatten()
+            .filter_map(|x| Some((pin(x.get(0)?)?, x.get(1).and_then(|l| l.as_u64()).unwrap_or(1) != 0))).collect();
+        b.attach_seg(segs, &sels, s.get("on").and_then(|l| l.as_u64()).unwrap_or(1) != 0);
+    }
+    if let Some(g) = p.get("vga").filter(|g| !g.is_null()) {
+        b.attach_vga(g.get("hs").and_then(pin).unwrap_or(0), g.get("vs").and_then(pin).unwrap_or(0), &pins(g.get("r")), &pins(g.get("g")), &pins(g.get("b")));
+    }
+}
+
+/// the design's port bits as the pin file names them: [{name, dir}]
+fn port_bits(nl: &Netlist) -> Value {
+    json!(nl.ports.iter().flat_map(|p| (0..p.bits.len()).map(move |i| json!({
+        "name": if p.bits.len() > 1 { format!("{}[{}]", p.name, i) } else { p.name.clone() },
+        "dir": dir(p.dir),
+    }))).collect::<Vec<_>>())
+}
+
+fn unbase64(s: &str) -> R<Vec<u8>> {
+    let val = |c: u8| -> R<u32> {
+        Ok(match c { b'A'..=b'Z' => c - b'A', b'a'..=b'z' => c - b'a' + 26, b'0'..=b'9' => c - b'0' + 52, b'+' | b'-' => 62, b'/' | b'_' => 63, _ => return Err("bad base64".into()) } as u32)
+    };
+    let bytes: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for ch in bytes.chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in ch.iter().enumerate() { n |= val(*c)? << (18 - 6 * i); }
+        out.push((n >> 16) as u8);
+        if ch.len() > 2 { out.push((n >> 8) as u8); }
+        if ch.len() > 3 { out.push(n as u8); }
+    }
+    Ok(out)
+}
+
+fn board_info(top: &str, cells: Value, b: &veryl_eda::board::Board, default_pcf: bool, names: Option<&std::collections::HashMap<u32, String>>) -> Value {
+    use veryl_eda::board::icebreaker::{Kind, PINS};
+    let pins: Vec<Value> = PINS.iter().map(|p| {
+        let (kind, level) = match p.kind {
+            Kind::Clock => ("clock", true), Kind::Button { pressed } => ("button", pressed), Kind::Led { on } => ("led", on),
+            Kind::Uart { rx } => (if rx { "uart_rx" } else { "uart_tx" }, true), Kind::Pmod => ("pmod", true),
+        };
+        let port = names.and_then(|n| n.get(&p.pin).cloned()).or_else(|| b.port_of.get(&p.pin).cloned());
+        let input = if b.pin_in.contains_key(&p.pin) { port.clone() } else { None };
+        let output = if b.pin_out.iter().any(|x| x.0 == p.pin) { port } else { None };
+        json!({ "pin": p.pin, "name": p.name, "kind": kind, "level": level, "input": input, "output": output })
+    }).collect();
+    json!({
+        "ok": true, "top": top, "pins": pins, "warnings": b.warnings, "default_pcf": default_pcf,
+        "clock_hz": veryl_eda::board::icebreaker::CLOCK_HZ, "cells": cells,
+    })
+}
+
+/// run the board: `inputs` [[pin, level], ...] first, then `cycles` clock cycles;
+/// returns each output pin's duty (fraction of cycles at 1) and the cycle count
+fn board_run(v: &Value) -> R<Value> {
+    BOARD.with(|x| {
+        let mut x = x.borrow_mut();
+        let (_, _, b, _) = x.as_mut().ok_or("no design on the virtual board")?;
+        if let (Some(u), Some(text)) = (b.uart.as_mut(), v.get("uart_send").and_then(|t| t.as_str())) { u.queue.extend(text.bytes()); }
+        if let Some(ins) = v.get("inputs").and_then(|i| i.as_array()) {
+            for i in ins {
+                let (pin, level) = (i.get(0).and_then(|p| p.as_u64()).unwrap_or(0) as u32, i.get(1).and_then(|l| l.as_u64()).unwrap_or(0) != 0);
+                b.set_pin(pin, level);
+            }
+        }
+        let cycles = v.get("cycles").and_then(|c| c.as_u64()).unwrap_or(0);
+        let evals0 = b.eng.evals;
+        b.run(cycles);
+        let window = b.window;
+        let segs = b.take_segs(window);
+        let edges: Vec<Value> = b.take_edges().into_iter().filter(|e| e.1 > 0).map(|(p, n)| json!([p, n])).collect();
+        let duty: Vec<Value> = if cycles > 0 { b.take_duty().into_iter().map(|(p, d)| json!([p, d])).collect() } else {
+            b.pin_out.iter().map(|p| json!([p.0, if b.eng.get(p.1) { 1.0 } else { 0.0 }])).collect()
+        };
+        let uart = b.uart.as_mut().map(|u| json!({ "rx": std::mem::take(&mut u.received), "errors": u.framing_errors, "pending": u.queue.len() }));
+        // a VGA frame newer than the one the page has (`vga_seen`), run-length encoded
+        let seen = v.get("vga_seen").and_then(|s| s.as_u64());
+        let vga = match (b.vga.as_ref(), seen) {
+            (Some(g), Some(seen)) if g.frames > seen => g.frame.as_ref().map(|(w, h, px)| json!({ "w": w, "h": h, "n": g.frames, "rle": base64(&veryl_eda::board::periph::rle(px)) })),
+            (Some(g), _) => Some(json!({ "n": g.frames })),
+            _ => None,
+        };
+        Ok(json!({ "ok": true, "cycle": b.cycle, "window": window, "duty": duty, "evals": b.eng.evals - evals0, "segs": segs, "edges": edges, "uart": uart, "vga": vga }))
+    })
+}
+
+/// power cycle: the same design and pins from the power-up state
+fn board_reset() -> R<Value> {
+    BOARD.with(|x| {
+        let mut x = x.borrow_mut();
+        let (d, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
+        let cpu = LOADED.with(|l| match l.borrow().as_ref() { Some(Loaded::Cpu(p, m)) => Some((p.clone(), *m)), _ => None });
+        *b = match cpu { Some((p, m)) => cpu_board(&p, m, pcf.as_deref().unwrap_or(""))?, None => veryl_eda::board::icebreaker::board(d.clone(), pcf.as_deref())? };
+        attach(b, periph);
+        Ok(json!({ "ok": true, "cycle": 0 }))
+    })
+}
+
+fn synth(v: &Value) -> R<Value> {
+    let fs = files(v)?;
+    let mut parsers = vec![];
+    for (name, src) in &fs {
+        parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?);
+    }
+    let mut lib = veryl_eda::elab::Lib::new();
+    for p in &parsers { lib.add(&p.veryl); }
+    let top = match v.get("top").and_then(|t| t.as_str()) {
+        Some(t) => t.to_string(),
+        None => lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()).ok_or("no synthesizable (non-#[test]) module")?,
+    };
+    let st = veryl_eda::elab::synthesize_stages(&lib, &top)?;
+    let mapped = veryl_eda::ice40::map(&st.opt)?;
+    Ok(json!({
+        "ok": true,
+        "top": top,
+        "modules": lib.order.iter().map(|(n, t)| json!({ "name": n, "test": t })).collect::<Vec<_>>(),
+        "warnings": st.warnings,
+        "hier": st.insts.iter().map(|(p, m)| json!({ "path": p, "module": m })).collect::<Vec<_>>(),
+        "ports": st.ports.iter().map(|(n, d, w)| json!({ "name": n, "dir": dir(*d), "width": w })).collect::<Vec<_>>(),
+        "signals": st.signals.iter().map(|(n, w)| json!({ "name": n, "width": w })).collect::<Vec<_>>(),
+        "raw": netlist_json_limited(&st.raw),
+        "opt": netlist_json_limited(&st.opt),
+        "map": netlist_json(&mapped),
+    }))
+}
+
+fn files(v: &Value) -> R<Vec<(String, String)>> {
+    let a = v.get("files").and_then(|f| f.as_array()).ok_or("missing files")?;
+    a.iter().map(|f| {
+        let name = f.get("name").and_then(|x| x.as_str()).ok_or("file without name")?;
+        let src = f.get("src").and_then(|x| x.as_str()).ok_or("file without src")?;
+        Ok((name.to_string(), src.to_string()))
+    }).collect()
+}
+
+pub fn dispatch(v: &Value) -> R<Value> {
+    let cmd = v.get("cmd").and_then(|c| c.as_str()).ok_or("missing cmd")?;
+    match cmd {
+        "version" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
+        // veryl-emu: the design compiled to a WebAssembly module (the IDE's emulator)
+        "emu_compile" => {
+            let top = v.get("top").and_then(|t| t.as_str());
+            let stops: Vec<String> = v.get("stops").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            let o = veryl_emu::compile(&files(v)?, top, &stops)?;
+            let meta: Value = serde_json::from_str(&o.json).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true, "wasm": base64(&o.wasm), "meta": meta, "stats": o.stats }))
+        }
+        "list" => {
+            let m = veryl_sim::list(&files(v)?)?;
+            Ok(json!({ "ok": true, "modules": m.iter().map(|(n, t)| json!({ "name": n, "test": t })).collect::<Vec<_>>() }))
+        }
+        "simulate" => {
+            let top = v.get("top").and_then(|t| t.as_str());
+            let max_time = v.get("max_time").and_then(|t| t.as_u64()).unwrap_or(1_000_000);
+            let vcd = v.get("vcd").and_then(|t| t.as_bool()).unwrap_or(false);
+            let mut gate_info = Value::Null;
+            // post-synthesis simulation: every instance of `synth` replaced by its netlist
+            let fs = files(v)?;
+            let r = if let (Some(kind), Some(synth_top)) = (v.get("gate").and_then(|g| g.as_str()), v.get("synth").and_then(|t| t.as_str())) {
+                let mut parsers = vec![];
+                for (name, src) in &fs { parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?); }
+                let mut lib = veryl_eda::elab::Lib::new();
+                for p in &parsers { lib.add(&p.veryl); }
+                let prov = veryl_eda::gatesim::Provider::new(&lib, synth_top, kind);
+                let f = |m: &str, ov: &std::collections::HashMap<String, veryl_sim::value::Val>| prov.get(m, ov);
+                let r = veryl_sim::run_gates(&fs, top, max_time, vcd, false, Some(&f))?;
+                let built = prov.built.borrow();
+                gate_info = json!({ "top": synth_top, "kind": kind, "cells": built.first().map(|b| b.1).unwrap_or(0),
+                    "netlists": built.iter().map(|(p, n)| json!({ "params": p, "cells": n })).collect::<Vec<_>>() });
+                r
+            } else {
+                veryl_sim::run_gates(&fs, top, max_time, vcd, false, None)?
+            };
+            Ok(json!({
+                "ok": true,
+                "gate": gate_info,
+                "log": r.log,
+                "tops": r.tops.iter().map(|t| json!({ "name": t.name, "fails": t.fails, "finished": t.finished })).collect::<Vec<_>>(),
+                "vcd": r.vcd.iter().map(|(t, s)| json!({ "top": t, "text": s })).collect::<Vec<_>>(),
+            }))
+        }
+        "synth" => synth(v),
+        "pnr" => pnr(v),
+        "asic" => asic(v),
+        "asic_gds" => asic_gds(v),
+        "board_load" => board_load(v),
+        "board_flash" => board_flash(v),
+        "board_load_bin" => board_load_bin(v),
+        "board_program" => board_program(v),
+        "board_load_cpu" => board_load_cpu(v),
+        "cc" => cc(v),
+        "board_run" => board_run(v),
+        "board_reset" => board_reset(),
+        "board_periph" => board_periph(v),
+        "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),
+        c => Err(format!("unknown command '{}'", c)),
+    }
+}
+
+fn base64(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        s.push(T[(n >> 18) as usize & 63] as char);
+        s.push(T[(n >> 12) as usize & 63] as char);
+        s.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        s.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    s
+}

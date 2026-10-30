@@ -1,0 +1,543 @@
+// ==========================================
+// Rv64Soc：Rv64Core + RAM + CLINT + PLIC + UART（QEMU virt 機器的記憶體映射）
+// ==========================================
+//   0x0010_0000  關機 ：寫 0x5555 = 結束（通過）、0x3333 = 結束（失敗，高 16 位元是代碼）（QEMU 的 sifive,test0）
+//   0x0200_0000  CLINT：msip（+0）、mtimecmp（+0x4000）、mtime（+0xBFF8，每拍加一）
+//   0x0C00_0000  PLIC ：來源 1..31 的優先權（+4 × id）、pending（+0x1000）、
+//                       致能（context 0 = M：+0x2000，context 1 = S：+0x2080）、
+//                       門檻 / claim（context 0：+0x200000 / +0x200004，context 1：+0x201000 / +0x201004）
+//   0x1000_0000  UART ：16550 的暫存器（位元組），中斷是 PLIC 的來源 10
+//   0x1006_0000  GPIO ：16 支腳（SiFive GPIO 相容，Rv64Gpio），腳 k 的中斷是 PLIC 的來源 16 + k
+//   0x8000_0000  RAM  ：2^MEM_BITS 位元組（256 MB）
+// 其他位址：access fault。
+//
+// 匯流排：RAM 在請求的同一拍回應（組合讀取，模擬用；上 FPGA 時換成有延遲的記憶體，核心照樣等 ack），
+// 周邊在下一拍回應；資料都在低位元（RAM 依位址的低 3 位元移位）。
+// 測試平台：i_ld_* 在重設時把程式寫進 RAM；o_tx_* 是 UART 送出的位元組、i_rx_* 是收到的；
+// o_dbg_* 是每次匯流排寫入（riscv-tests 的 tohost）；o_ret_* 是完成的指令。
+
+module Rv64Soc #(
+    param MEM_BITS: u32 = 28, // RAM 大小：2^28 = 256 MB（xv6 用前 128 MB，後面放檔案系統映像）
+) (
+    i_clk     : input  clock    ,
+    i_rst     : input  reset    ,
+    // 載入程式（核心在重設時）：RAM 的第 i_ld_addr 個 64 位元字
+    i_ld_we   : input  logic    ,
+    i_ld_addr : input  logic<32>,
+    i_ld_data : input  logic<64>,
+    // 程式要求結束（寫 0x0010_0000）
+    o_finish     : output logic    ,
+    o_finish_code: output logic<32>,
+    // UART 的另一端
+    o_tx_valid: output logic    ,
+    o_tx_data : output logic<8> ,
+    i_rx_valid: input  logic    ,
+    i_rx_data : input  logic<8> ,
+    o_rx_ready: output logic    ,
+    // GPIO 的腳：輸出值、輸出致能（1 = 這支腳由 SoC 驅動）、外面送進來的值
+    o_gpio    : output logic<16>,
+    o_gpio_oe : output logic<16>,
+    i_gpio    : input  logic<16>,
+    // 除錯
+    o_dbg_wr   : output logic    ,
+    o_dbg_addr : output logic<64>,
+    o_dbg_wdata: output logic<64>,
+    o_ret      : output logic    ,
+    o_ret_pc   : output logic<64>,
+    o_ret_insn : output logic<32>,
+    o_ret_we   : output logic    ,
+    o_ret_rd   : output logic<5> ,
+    o_ret_wdata: output logic<64>,
+    o_ret_prv  : output logic<2> ,
+    o_trap      : output logic    ,
+    o_trap_cause: output logic<64>,
+) {
+    const WORDS: u32 = 1 << (MEM_BITS - 3);
+
+    var req  : logic    ;
+    var we   : logic    ;
+    var addr : logic<64>;
+    var size : logic<2> ;
+    var wdata: logic<64>;
+    var ack  : logic    ;
+    var err  : logic    ;
+    var rdata: logic<64>;
+
+    var mtip : logic    ;
+    var msip : logic    ;
+    var meip : logic    ;
+    var seip : logic    ;
+    var mtime: logic<64>;
+
+    inst u_core: Rv64Core (
+        i_clk                     ,
+        i_rst                     ,
+        o_req       : req         ,
+        o_we        : we          ,
+        o_addr      : addr        ,
+        o_size      : size        ,
+        o_wdata     : wdata       ,
+        i_ack       : ack         ,
+        i_err       : err         ,
+        i_rdata     : rdata       ,
+        i_mtip      : mtip        ,
+        i_msip      : msip        ,
+        i_meip      : meip        ,
+        i_seip      : seip        ,
+        i_mtime     : mtime       ,
+        o_ret                     ,
+        o_ret_pc                  ,
+        o_ret_insn                ,
+        o_ret_we                  ,
+        o_ret_rd                  ,
+        o_ret_wdata               ,
+        o_ret_prv                 ,
+        o_trap                    ,
+        o_trap_cause              ,
+    );
+
+
+    // 位址解碼
+    let sel_ram  : logic = addr[63:31] == 33'd1 && addr[30:0] <: (31'd1 << MEM_BITS);
+    let sel_clint: logic = addr[63:16] == 48'h0000_0000_0200;
+    let sel_plic : logic = addr[63:26] == 38'h00_0000_0003; // 0x0C00_0000 .. 0x0FFF_FFFF
+    let sel_uart : logic = addr[63:8] == 56'h00_0000_0010_0000;
+    let sel_test : logic = addr[63:12] == 52'h0_0000_0000_0100;
+    let sel_gpio : logic = addr[63:12] == 52'h0_0000_0001_0060;
+
+    // RAM 在請求的同一拍回應（組合讀取）；周邊與錯誤在下一拍回應：
+    // go = 周邊存取的那一拍（還沒 ack）
+    var ack_r : logic;
+    let ram_go: logic = req && sel_ram;
+    let go    : logic = req && !sel_ram && !ack_r;
+
+    // 存取寬度的遮罩，與 RAM 字裡的位元組位置
+    var bmask: logic<64>;
+    always_comb {
+        case size {
+            2'd0   : bmask = 64'h0000_0000_0000_00ff;
+            2'd1   : bmask = 64'h0000_0000_0000_ffff;
+            2'd2   : bmask = 64'h0000_0000_ffff_ffff;
+            default: bmask = 64'hffff_ffff_ffff_ffff;
+        }
+    }
+    let lane     : logic<6>  = {addr[2:0], 3'b000};
+    let lane_mask: logic<64> = bmask << lane;
+    let lane_data: logic<64> = wdata << lane;
+    // 8 位元組的暫存器被 4 位元組存取：addr[2] 選高半或低半
+    let hi       : logic     = addr[2];
+
+    // ---------------------------------------------------------------- RAM
+    var mem     : logic<64> [WORDS];
+    let widx    : logic<MEM_BITS - 3> = addr[MEM_BITS - 1:3];
+    let merged  : logic<64>           = (mem[widx] & ~lane_mask) | (lane_data & lane_mask);
+
+    #[allow(missing_reset_statement)]
+    always_ff (i_clk) {
+        if i_ld_we {
+            mem[i_ld_addr[MEM_BITS - 4:0]] = i_ld_data;
+        } else if ram_go && we {
+            mem[widx] = merged;
+        }
+    }
+
+    // ---------------------------------------------------------------- CLINT
+    var mtimecmp : logic<64>;
+    var msip_r   : logic    ;
+    let clint_off: logic<16> = addr[15:0];
+    var clint_rd : logic<64>;
+    always_comb {
+        if clint_off[15:3] == 13'h17ff {
+            clint_rd = if size == 2'd3 ? mtime : if hi ? {32'd0, mtime[63:32]} : {32'd0, mtime[31:0]};
+        } else if clint_off[15:3] == 13'h0800 {
+            clint_rd = if size == 2'd3 ? mtimecmp : if hi ? {32'd0, mtimecmp[63:32]} : {32'd0, mtimecmp[31:0]};
+        } else if clint_off == 16'h0000 {
+            clint_rd = {63'd0, msip_r};
+        } else {
+            clint_rd = 64'd0;
+        }
+    }
+    assign mtip = mtime >= mtimecmp;
+    assign msip = msip_r;
+
+    always_ff {
+        if_reset {
+            mtime    = 64'd0;
+            mtimecmp = 64'hffff_ffff_ffff_ffff;
+            msip_r   = 1'b0;
+        } else {
+            mtime = mtime + 64'd1;
+            if go && sel_clint && we {
+                if clint_off[15:3] == 13'h0800 {
+                    if size == 2'd3 {
+                        mtimecmp = wdata;
+                    } else if hi {
+                        mtimecmp[63:32] = wdata[31:0];
+                    } else {
+                        mtimecmp[31:0] = wdata[31:0];
+                    }
+                } else if clint_off[15:3] == 13'h17ff {
+                    if size == 2'd3 {
+                        mtime = wdata;
+                    } else if hi {
+                        mtime[63:32] = wdata[31:0];
+                    } else {
+                        mtime[31:0] = wdata[31:0];
+                    }
+                } else if clint_off == 16'h0000 {
+                    msip_r = wdata[0];
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- UART（16550 的子集）
+    // 送出：寫 THR 立刻送給測試平台（THR 永遠是空的）；收到：一個位元組的緩衝
+    var uart_ier : logic<4>;
+    var uart_lcr : logic<8>;
+    var uart_mcr : logic<8>;
+    var uart_scr : logic<8>;
+    var uart_fcr : logic   ; // FIFO 致能（只影響 IIR 的讀值）
+    var uart_dll : logic<8>;
+    var uart_dlm : logic<8>;
+    var rx_full  : logic   ;
+    var rx_byte  : logic<8>;
+    var thre_pend: logic   ; // THR 空了的中斷（讀到 IIR = THRE 或寫 THR 時清掉）
+    let dlab     : logic    = uart_lcr[7];
+    let u_off    : logic<3> = addr[2:0];
+    let u_rx_int : logic    = uart_ier[0] && rx_full;
+    let u_tx_int : logic    = uart_ier[1] && thre_pend;
+    let u_iir    : logic<8> = {if uart_fcr ? 2'b11 : 2'b00, 2'b00, if u_rx_int ? 4'h4 : if u_tx_int ? 4'h2 : 4'h1};
+    let uart_irq : logic    = u_rx_int || u_tx_int;
+    var uart_rd  : logic<8>;
+    always_comb {
+        case u_off {
+            3'd0   : uart_rd = if dlab ? uart_dll : rx_byte;
+            3'd1   : uart_rd = if dlab ? uart_dlm : {4'd0, uart_ier};
+            3'd2   : uart_rd = u_iir;
+            3'd3   : uart_rd = uart_lcr;
+            3'd4   : uart_rd = uart_mcr;
+            3'd5   : uart_rd = {1'b0, 1'b1, 1'b1, 4'd0, rx_full}; // TEMT、THRE、DR
+            3'd6   : uart_rd = 8'h00;
+            default: uart_rd = uart_scr;
+        }
+    }
+    let u_wr: logic = go && sel_uart && we;
+    let u_rd: logic = go && sel_uart && !we;
+    assign o_tx_valid = u_wr && u_off == 3'd0 && !dlab;
+    assign o_tx_data  = wdata[7:0];
+    assign o_rx_ready = !rx_full;
+
+    always_ff {
+        if_reset {
+            uart_ier  = 4'd0;
+            uart_lcr  = 8'd0;
+            uart_mcr  = 8'd0;
+            uart_scr  = 8'd0;
+            uart_fcr  = 1'b0;
+            uart_dll  = 8'd0;
+            uart_dlm  = 8'd0;
+            rx_full   = 1'b0;
+            rx_byte   = 8'd0;
+            thre_pend = 1'b0;
+        } else {
+            if i_rx_valid && !rx_full {
+                rx_full = 1'b1;
+                rx_byte = i_rx_data;
+            }
+            if u_rd && u_off == 3'd0 && !dlab {
+                rx_full = 1'b0;
+            }
+            if u_rd && u_off == 3'd2 && !u_rx_int && u_tx_int {
+                thre_pend = 1'b0;
+            }
+            if u_wr {
+                case u_off {
+                    3'd0: if dlab {
+                        uart_dll = wdata[7:0];
+                    } else {
+                        thre_pend = 1'b1; // 立刻送出，THR 又空了
+                    }
+                    3'd1: if dlab {
+                        uart_dlm = wdata[7:0];
+                    } else {
+                        // 打開 THRE 中斷時 THR 是空的：立刻有中斷
+                        if wdata[1] && !uart_ier[1] {
+                            thre_pend = 1'b1;
+                        }
+                        uart_ier = wdata[3:0];
+                    }
+                    3'd2   : uart_fcr = wdata[0];
+                    3'd3   : uart_lcr = wdata[7:0];
+                    3'd4   : uart_mcr = wdata[7:0];
+                    3'd7   : uart_scr = wdata[7:0];
+                    default: {}
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- GPIO
+    var gpio_rd : logic<32>;
+    var gpio_irq: logic<16>;
+    inst u_gpio: Rv64Gpio (
+        i_clk                         ,
+        i_rst                         ,
+        i_wr   : go && sel_gpio && we ,
+        i_addr : addr[7:0]            ,
+        i_wdata: wdata[31:0]          ,
+        o_rdata: gpio_rd              ,
+        i_pins : i_gpio               ,
+        o_out  : o_gpio               ,
+        o_oe   : o_gpio_oe            ,
+        o_irq  : gpio_irq             ,
+    );
+
+    // ---------------------------------------------------------------- PLIC（來源 1..31，兩個 context）
+    // 準位觸發：來源是 1 且沒有被 claim 就是 pending；claim 讀出優先權最高的
+    // （同樣優先權取編號小的），complete 寫回編號之後才能再 pending
+    var prio    : logic<3> [32];
+    var en0     : logic<32>;
+    var en1     : logic<32>;
+    var thr0    : logic<3> ;
+    var thr1    : logic<3> ;
+    var claimed : logic<32>;
+    let src     : logic<32> = {gpio_irq, 5'd0, uart_irq, 10'd0};
+    let pending : logic<32> = src & ~claimed;
+    let p_off   : logic<26> = addr[25:0];
+
+    // 各 context 優先權最高的來源
+    var best0   : logic<5>;
+    var best1   : logic<5>;
+    var bprio0  : logic<3>;
+    var bprio1  : logic<3>;
+    always_comb {
+        best0  = 5'd0;
+        best1  = 5'd0;
+        bprio0 = 3'd0;
+        bprio1 = 3'd0;
+        for i in 1..32 {
+            if pending[i] && en0[i] && prio[i] >: bprio0 {
+                best0  = i[4:0];
+                bprio0 = prio[i];
+            }
+            if pending[i] && en1[i] && prio[i] >: bprio1 {
+                best1  = i[4:0];
+                bprio1 = prio[i];
+            }
+        }
+    }
+    assign meip = bprio0 >: thr0;
+    assign seip = bprio1 >: thr1;
+
+    var plic_rd: logic<64>;
+    always_comb {
+        plic_rd = 64'd0;
+        if p_off[25:7] == 19'd0 {
+            plic_rd = {61'd0, prio[p_off[6:2]]};
+        } else if p_off == 26'h000_1000 {
+            plic_rd = {32'd0, pending};
+        } else if p_off == 26'h000_2000 {
+            plic_rd = {32'd0, en0};
+        } else if p_off == 26'h000_2080 {
+            plic_rd = {32'd0, en1};
+        } else if p_off == 26'h20_0000 {
+            plic_rd = {61'd0, thr0};
+        } else if p_off == 26'h20_0004 {
+            plic_rd = {59'd0, best0};
+        } else if p_off == 26'h20_1000 {
+            plic_rd = {61'd0, thr1};
+        } else if p_off == 26'h20_1004 {
+            plic_rd = {59'd0, best1};
+        }
+    }
+    let p_wr: logic = go && sel_plic && we;
+    let p_rd: logic = go && sel_plic && !we;
+
+    always_ff {
+        if_reset {
+            for i in 0..32 {
+                prio[i] = 3'd0;
+            }
+            en0     = 32'd0;
+            en1     = 32'd0;
+            thr0    = 3'd0;
+            thr1    = 3'd0;
+            claimed = 32'd0;
+        } else {
+            if p_rd && p_off == 26'h20_0004 && best0 != 5'd0 {
+                claimed[best0] = 1'b1;
+            }
+            if p_rd && p_off == 26'h20_1004 && best1 != 5'd0 {
+                claimed[best1] = 1'b1;
+            }
+            if p_wr {
+                if p_off[25:7] == 19'd0 {
+                    prio[p_off[6:2]] = wdata[2:0];
+                } else if p_off == 26'h000_2000 {
+                    en0 = wdata[31:0];
+                } else if p_off == 26'h000_2080 {
+                    en1 = wdata[31:0];
+                } else if p_off == 26'h20_0000 {
+                    thr0 = wdata[2:0];
+                } else if p_off == 26'h20_1000 {
+                    thr1 = wdata[2:0];
+                } else if p_off == 26'h20_0004 || p_off == 26'h20_1004 {
+                    claimed[wdata[4:0]] = 1'b0; // complete
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 回應
+    var err_r  : logic    ;
+    var dev_r  : logic<64>;
+    always_ff {
+        if_reset {
+            ack_r = 1'b0;
+            err_r = 1'b0;
+            dev_r = 64'd0;
+        } else {
+            ack_r = go;
+            err_r = go && !(sel_clint || sel_plic || sel_uart || sel_test || sel_gpio);
+            dev_r = if sel_clint ? clint_rd : if sel_plic ? plic_rd : if sel_uart ? {56'd0, uart_rd} : if sel_gpio ? {32'd0, gpio_rd} : 64'd0;
+        }
+    }
+    assign ack   = ram_go || ack_r;
+    assign err   = err_r;
+    assign rdata = if ram_go ? (mem[widx] >> lane) & bmask : dev_r;
+
+    assign o_dbg_wr    = (ram_go || go) && we;
+
+    // 關機裝置：0x5555 通過、0x3333 失敗；其他值（例如 0x7777 重新開機）也結束模擬
+    assign o_finish      = go && sel_test && we && addr[11:0] == 12'h000 && wdata[15:0] != 16'h0000;
+    assign o_finish_code = wdata[31:0];
+    assign o_dbg_addr  = addr;
+    assign o_dbg_wdata = wdata;
+}
+
+// ==========================================
+// Rv64Gpio：16 支腳的 GPIO，暫存器和 SiFive 的 GPIO 相容（Linux 的 gpio-sifive 驅動）
+// ==========================================
+//   0x00 input_val（唯讀）  0x04 input_en  0x08 output_en  0x0C output_val
+//   0x10 pue  0x14 ds（只存起來）
+//   0x18 rise_ie  0x1C rise_ip  0x20 fall_ie  0x24 fall_ip  0x28 high_ie  0x2C high_ip  0x30 low_ie  0x34 low_ip
+//   0x38 iof_en  0x3C iof_sel（只存起來）  0x40 out_xor
+// 腳的值：輸出致能時是自己的輸出，否則是外面送進來的；input_val = 腳的值 & input_en（先過一級暫存器）。
+// *_ip 是黏住的待處理位元：上升緣、下降緣、高準位、低準位時設成 1，寫 1 清掉（同一拍又發生時保留）。
+// 腳 k 的中斷 = 四種 (ip & ie) 的 OR，接到 PLIC。
+
+module Rv64Gpio #(
+    param N: u32 = 16, // 腳數（暫存器讀出時補 0 到 32 位元，所以這裡固定 16）
+) (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    i_wr   : input  logic    ,
+    i_addr : input  logic<8> ,
+    i_wdata: input  logic<32>,
+    o_rdata: output logic<32>,
+    i_pins : input  logic<N> ,
+    o_out  : output logic<N> ,
+    o_oe   : output logic<N> ,
+    o_irq  : output logic<N> ,
+) {
+    var input_en : logic<N>;
+    var output_en: logic<N>;
+    var out_val  : logic<N>;
+    var pue      : logic<N>;
+    var ds       : logic<N>;
+    var rise_ie  : logic<N>;
+    var rise_ip  : logic<N>;
+    var fall_ie  : logic<N>;
+    var fall_ip  : logic<N>;
+    var high_ie  : logic<N>;
+    var high_ip  : logic<N>;
+    var low_ie   : logic<N>;
+    var low_ip   : logic<N>;
+    var iof_en   : logic<N>;
+    var iof_sel  : logic<N>;
+    var out_xor  : logic<N>;
+    var in_val   : logic<N>; // 腳的值經過一級暫存器（同步）
+    var in_prev  : logic<N>; // 上一拍的 in_val（抓邊緣）
+
+    let out : logic<N> = out_val ^ out_xor;
+    let pins: logic<N> = (output_en & out) | (~output_en & i_pins);
+    let iv  : logic<N> = in_val & input_en;
+    let ivp : logic<N> = in_prev & input_en;
+
+    assign o_out = out;
+    assign o_oe  = output_en;
+    assign o_irq = (rise_ip & rise_ie) | (fall_ip & fall_ie) | (high_ip & high_ie) | (low_ip & low_ie);
+
+    always_comb {
+        case i_addr[7:2] {
+            6'h00  : o_rdata = {16'd0, iv};
+            6'h01  : o_rdata = {16'd0, input_en};
+            6'h02  : o_rdata = {16'd0, output_en};
+            6'h03  : o_rdata = {16'd0, out_val};
+            6'h04  : o_rdata = {16'd0, pue};
+            6'h05  : o_rdata = {16'd0, ds};
+            6'h06  : o_rdata = {16'd0, rise_ie};
+            6'h07  : o_rdata = {16'd0, rise_ip};
+            6'h08  : o_rdata = {16'd0, fall_ie};
+            6'h09  : o_rdata = {16'd0, fall_ip};
+            6'h0a  : o_rdata = {16'd0, high_ie};
+            6'h0b  : o_rdata = {16'd0, high_ip};
+            6'h0c  : o_rdata = {16'd0, low_ie};
+            6'h0d  : o_rdata = {16'd0, low_ip};
+            6'h0e  : o_rdata = {16'd0, iof_en};
+            6'h0f  : o_rdata = {16'd0, iof_sel};
+            6'h10  : o_rdata = {16'd0, out_xor};
+            default: o_rdata = 32'd0;
+        }
+    }
+
+    let wv: logic<N> = i_wdata[N - 1:0];
+    always_ff {
+        if_reset {
+            input_en  = 0;
+            output_en = 0;
+            out_val   = 0;
+            pue       = 0;
+            ds        = 0;
+            rise_ie   = 0;
+            rise_ip   = 0;
+            fall_ie   = 0;
+            fall_ip   = 0;
+            high_ie   = 0;
+            high_ip   = 0;
+            low_ie    = 0;
+            low_ip    = 0;
+            iof_en    = 0;
+            iof_sel   = 0;
+            out_xor   = 0;
+            in_val    = 0;
+            in_prev   = 0;
+        } else {
+            in_val  = pins;
+            in_prev = in_val;
+            // 待處理位元：寫 1 清掉，同一拍發生的事件保留
+            rise_ip = (rise_ip & ~(if i_wr && i_addr[7:2] == 6'h07 ? wv : 0)) | (iv & ~ivp);
+            fall_ip = (fall_ip & ~(if i_wr && i_addr[7:2] == 6'h09 ? wv : 0)) | (~iv & ivp);
+            high_ip = (high_ip & ~(if i_wr && i_addr[7:2] == 6'h0b ? wv : 0)) | iv;
+            low_ip  = (low_ip  & ~(if i_wr && i_addr[7:2] == 6'h0d ? wv : 0)) | (~iv & input_en);
+            if i_wr {
+                case i_addr[7:2] {
+                    6'h01  : input_en  = wv;
+                    6'h02  : output_en = wv;
+                    6'h03  : out_val   = wv;
+                    6'h04  : pue       = wv;
+                    6'h05  : ds        = wv;
+                    6'h06  : rise_ie   = wv;
+                    6'h08  : fall_ie   = wv;
+                    6'h0a  : high_ie   = wv;
+                    6'h0c  : low_ie    = wv;
+                    6'h0e  : iof_en    = wv;
+                    6'h0f  : iof_sel   = wv;
+                    6'h10  : out_xor   = wv;
+                    default: {}
+                }
+            }
+        }
+    }
+}

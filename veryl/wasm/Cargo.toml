@@ -1,0 +1,17 @@
+[package]
+name = "rueda-veryl-wasm"
+description = "WebAssembly build of the Veryl simulator, synthesis and emulator for the browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+veryl-parser.workspace = true
+veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }
+veryl-eda = { package = "rueda-veryl-eda", path = "../eda" }
+veryl-emu = { package = "rueda-veryl-emu", path = "../emu" }
+serde_json = "1"

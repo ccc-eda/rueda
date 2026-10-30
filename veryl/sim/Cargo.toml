@@ -1,0 +1,17 @@
+[package]
+name = "rueda-veryl-sim"
+description = "Event-driven simulator for Veryl HDL testbenches ($tb::clock_gen, $assert, VCD)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "veryl_sim"
+
+[[bin]]
+name = "veryl-sim"
+path = "src/main.rs"
+
+[dependencies]
+veryl-parser.workspace = true
