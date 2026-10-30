@@ -1,7 +1,7 @@
-# 7. FPGA: `v2c fpga`
+# 7. FPGA: `reda fpga`
 
 ```
-v2c fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
+reda fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
          [--pnr veryl|nextpnr] [--seed N] [--no-timing-driven] [--program PROG.bin]
          [-o OUT.json] [--verilog OUT.v] [-v] FILE.veryl...
 ```
@@ -28,7 +28,7 @@ The `.bin` produced by our own place & route is byte-for-byte identical to icepa
 and comparing it cycle by cycle against the netlist (chapter 13).
 
 ```sh
-$ v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+$ reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
   veryl pnr: 6 LCs, 52 routing pips, 0.2s
   power: 0.199 mW at 122.1 MHz = ...
   timing: critical path 8.19 ns, Fmax 122.10 MHz (wirelength-only pass 122.10 MHz)
@@ -40,7 +40,7 @@ wrote counter.bin
 ## Pin file (`.pcf`)
 
 Each line is `set_io port pin`, vector ports written as `o_led[0]`. `-nowarn` means it is fine if the design does not use that pin.
-Commonly used iCEBreaker pins (`tutorial/icebreaker.pcf` has the full list):
+Commonly used iCEBreaker pins (`veryl/tutorial/icebreaker.pcf` has the full list):
 
 | Pin | Purpose |
 |---|---|
@@ -77,9 +77,9 @@ No board? The web IDE's ⚡ virtual board runs exactly the circuit decoded back 
 For CPUs whose program lives in block RAM (such as this project's `RvBoard`, chapter 10), `--program PROG.bin` fills memory from address 0 with a binary file:
 
 ```sh
-v2c cc -o hello.bin examples/c/hello.c
-v2c fpga --top RvBoard --pnr veryl --pcf examples/rvsoc.pcf --program hello.bin --bin soc.bin \
-    examples/src/rv32i.veryl examples/src/sync_ram.veryl examples/src/uart.veryl examples/src/rvsoc.veryl
+reda cc -o hello.bin veryl/examples/c/hello.c
+reda fpga --top RvBoard --pnr veryl --pcf veryl/examples/rvsoc.pcf --program hello.bin --bin soc.bin \
+    veryl/examples/src/rv32i.veryl veryl/examples/src/sync_ram.veryl veryl/examples/src/uart.veryl veryl/examples/src/rvsoc.veryl
 iceprog soc.bin
 ```
 
@@ -90,15 +90,15 @@ Changing only the program does not require re-running synthesis and place & rout
 ## Lattice ECP5 (`--arch ecp5`)
 
 ```
-v2c fpga --arch ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf]
+reda fpga --arch ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf]
          [--config OUT.config] [--bit OUT.bit] [--seed N] [-o OUT.json] [-v] FILE.veryl...
 ```
 
 ECP5 is a much larger FPGA than the iCE40 (25F about 24k, 85F about 84k LUTs; there are dev boards with SDRAM interfaces, such as the open-source **ULX3S**).
-Mapping is done by `v2c` (`LUT4`, carry chain `CCU2C`, flip-flops `TRELLIS_FF`); place & route and bitstream are handed to OSS CAD Suite's **nextpnr-ecp5** and **ecppack**:
+Mapping is done by `reda` (`LUT4`, carry chain `CCU2C`, flip-flops `TRELLIS_FF`); place & route and bitstream are handed to OSS CAD Suite's **nextpnr-ecp5** and **ecppack**:
 
 ```sh
-$ v2c fpga --arch ecp5 --bit counter.bit counter.veryl
+$ reda fpga --arch ecp5 --bit counter.bit counter.veryl
 === Counter ===
   ...
   cells: 9
@@ -118,7 +118,7 @@ wrote counter.bit
 - The pin file is Lattice's `.lpf`: `LOCATE COMP "o_led[0]" SITE "B2";`, `IOBUF PORT "o_led[0]" IO_TYPE=LVCMOS33;`.
   Without `--lpf`, nextpnr places the IO itself.
 - `--config` is the routed text configuration (Project Trellis format), `--bit` is the bitstream, programmed with `openFPGALoader -b ulx3s counter.bit`.
-- `v2c gatesim ecp5` runs the ECP5 netlist with the original testbench (chapter 8).
+- `reda gatesim ecp5` runs the ECP5 netlist with the original testbench (chapter 8).
 - Unlike the iCE40: a flip-flop with a reset value of 1 powers up as 1 (on the iCE40 everything powers up as 0).
 - Memories with synchronous reads (such as `SyncRam`) become block RAM `DP16KD` (v2.9; each one is 2048 × 9 bits, the 85F has 208 of them).
 - Not yet: multipliers, our own ECP5 place & route, the virtual board.

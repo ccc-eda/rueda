@@ -1,18 +1,18 @@
-# 10. RISC-V 与 C：`v2c cc`
+# 10. RISC-V 与 C：`reda cc`
 
 这个项目用 Veryl 写了一颗 RISC-V CPU，也附了一个能把 C 编成它的机器码的编译器。
 所以可以「自己设计 CPU，再在上面跑自己写的 C 程序」——在虚拟开发板上，或烧进真的 iCEBreaker。
 
-## 硬件：`examples/src/rvsoc.veryl`
+## 硬件：`veryl/examples/src/rvsoc.veryl`
 
 | 模块 | 内容 |
 |---|---|
 | `RvCore` | 多周期 **RV32IMA + Zicsr**：一般指令 2 拍、load 3 拍、乘除法 35 拍；machine mode 的中断与例外（计时器、软件、外部 = 串口收到字节；ecall、ebreak、非法指令、地址没对齐）、`mret`、`wfi`；寄存器堆放在 block RAM |
 | `RvSoc` | CPU + 8 KB 存储器（block RAM）+ 存储器映射的周边 + 给 testbench 用的加载端口 |
-| `RvBoard` | iCEBreaker 的顶层（引脚 `examples/rvsoc.pcf`）：BTN1–3、PMOD1A 的 8 个输出（LED 模块…）、PMOD1B 的 8 个开关、USB 串口 |
-| `RvVgaBoard`（`examples/src/rvvga.veryl`） | 再加上 40 × 30 字符的 VGA 文本画面 |
+| `RvBoard` | iCEBreaker 的顶层（引脚 `veryl/examples/rvsoc.pcf`）：BTN1–3、PMOD1A 的 8 个输出（LED 模块…）、PMOD1B 的 8 个开关、USB 串口 |
+| `RvVgaBoard`（`veryl/examples/src/rvvga.veryl`） | 再加上 40 × 30 字符的 VGA 文本画面 |
 
-另外 `examples/src/rv32i.veryl` 是单周期的 RV32I（`RiscvCore`），比较好读，适合教学。
+另外 `veryl/examples/src/rv32i.veryl` 是单周期的 RV32I（`RiscvCore`），比较好读，适合教学。
 
 ### 存储器映射
 
@@ -31,11 +31,11 @@
 ## 编译与运行
 
 ```
-v2c cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
+reda cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
 ```
 
 ```sh
-$ v2c cc --run examples/c/hello.c
+$ reda cc --run veryl/examples/c/hello.c
 hello.c: 2488 bytes of code and data, 2492 with bss (RAM 8192 bytes)
 Hello from C on a RISC-V you built in Veryl!
 ...
@@ -43,7 +43,7 @@ Hello from C on a RISC-V you built in Veryl!
 
 | 选项 | 内容 |
 |---|---|
-| `-o PROG.bin` | 从地址 0 开始的二进位映像档（给 `v2c fpga --program`、虚拟板） |
+| `-o PROG.bin` | 从地址 0 开始的二进位映像档（给 `reda fpga --program`、虚拟板） |
 | `-S PROG.s` | 产生的汇编语言：每个语句前面有一行 C 源代码当注解 |
 | `-L PROG.lst` | 列表：地址、机器码、汇编语言与 C 源代码对照 |
 | `--run [N]` | 在指令集仿真器上运行最多 N 个指令（默认 1000 万）。串口的输出印到屏幕；结束时打印指令数、时钟数与 LED |
@@ -80,7 +80,7 @@ Hello from C on a RISC-V you built in Veryl!
 
 只有程序真正用到的函数会放进映像档。
 
-## 示例（`examples/c/`）
+## 示例（`veryl/examples/c/`）
 
 | 文件 | 示范 |
 |---|---|
@@ -95,7 +95,7 @@ Hello from C on a RISC-V you built in Veryl!
 
 ## 在开发板的 Linux 上（v2.20）
 
-`v2c cc PROG.c --linux -o PROG` 把同样的 C 编成 RV64 开发板（`examples/rv64`，第 11 章的仿真机）上 Linux 的静态 ELF 运行档：
+`reda cc PROG.c --linux -o PROG` 把同样的 C 编成 RV64 开发板（`veryl/examples/rv64`，第 11 章的仿真机）上 Linux 的静态 ELF 运行档：
 
 - 数据模型不变：`int`、`long`、指针都是 4 个字节（像 x32）。程序是 RV64 指令，算 32 位整数用 `addw`、`mulw` 等 *W 指令，
   所以寄存器里永远是「32 位、符号延伸」的值；程序加载在 0x10000，自己的堆栈（256 KB）放在 bss，堆积用 `brk` 往上长，
@@ -106,8 +106,8 @@ Hello from C on a RISC-V you built in Veryl!
   2 是按钮，其余经 `/sys/class/gpio`）；屏幕（v2.21，320 × 240 RGB565）：`fb_init`、`fb_clear`、`fb_pixel`、`fb_rect`、`fb_line`、
   `fb_circle`、`fb_text`、`RGB(r, g, b)` 与几个颜色名（`/dev/fb0` 用 `mmap` 固定映射在 0x40000000，因为指针只有 32 位）。
   `#include <gpio.h>` 之类的 `#include` 一样会被忽略（函数库一直都在）。
-- 测试：`cargo test cc_linux` 把 `src/rv/tests/*.c` 与 `tests/linux/*.c` 编成 Linux 运行档，用 spike + pk（proxy kernel，
-  系统调用号码与 Linux 相同）运行，输出要和主机的编译结果（`.out`）相同；`linux/test.sh` 在 Verilator / veryl-emu 上的 Linux 跑一个。
+- 测试：`cargo test cc_linux` 把 `riscv/rvtools/tests/*.c` 与 `tests/linux/*.c` 编成 Linux 运行档，用 spike + pk（proxy kernel，
+  系统调用号码与 Linux 相同）运行，输出要和主机的编译结果（`.out`）相同；`linux/test.sh` 在 Verilator / veryl/emu 上的 Linux 跑一个。
 - IDE：开发板项目里打开 `.c` 档按「▶ 运行」，在浏览器里编译，运行档（文件名去掉 `.c`）和项目文件一起送进 `/root` 运行。
 
 ## 放到 FPGA 上
@@ -118,9 +118,9 @@ Hello from C on a RISC-V you built in Veryl!
 实体板子：
 
 ```sh
-v2c cc -o hello.bin examples/c/hello.c
-v2c fpga --top RvBoard --pnr veryl --pcf examples/rvsoc.pcf --program hello.bin --bin soc.bin \
-    examples/src/rv32i.veryl examples/src/sync_ram.veryl examples/src/uart.veryl examples/src/rvsoc.veryl
+reda cc -o hello.bin veryl/examples/c/hello.c
+reda fpga --top RvBoard --pnr veryl --pcf veryl/examples/rvsoc.pcf --program hello.bin --bin soc.bin \
+    veryl/examples/src/rv32i.veryl veryl/examples/src/sync_ram.veryl veryl/examples/src/uart.veryl veryl/examples/src/rvsoc.veryl
 iceprog soc.bin
 ```
 

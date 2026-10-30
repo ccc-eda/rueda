@@ -67,18 +67,18 @@ set_io o_count[3] 23
 ## 1. 仿真
 
 ```sh
-$ v2c sim counter.veryl
+$ reda sim counter.veryl
 === simulating TestCounter ===
 $finish called at time 95
 TestCounter: PASS
 ```
 
-`v2c sim --vcd wave.vcd counter.veryl` 另外写出波形，可用 GTKWave 开。
+`reda sim --vcd wave.vcd counter.veryl` 另外写出波形，可用 GTKWave 开。
 
 ## 2. 综合
 
 ```sh
-$ v2c synth -o counter.json --verilog counter.v counter.veryl
+$ reda synth -o counter.json --verilog counter.v counter.veryl
 === Counter ===
   port input    1 i_clk
   port input    1 i_rst
@@ -97,7 +97,7 @@ $ v2c synth -o counter.json --verilog counter.v counter.veryl
 ## 3. FPGA 比特流
 
 ```sh
-$ v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+$ reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
   cells: 10
     SB_DFFR        4
     SB_LUT4        6
@@ -112,7 +112,7 @@ Fmax 122 MHz 远高于板子的 12 MHz，可以放心烧。没有板子的话，
 ## 4. 综合后再仿真一次
 
 ```sh
-$ v2c gatesim ice40 counter.veryl
+$ reda gatesim ice40 counter.veryl
 TestCounter: PASS
 gate-level simulation: Counter as 10 cells (ice40)
 ```
@@ -122,8 +122,8 @@ gate-level simulation: Counter as 10 cells (ice40)
 ## 5. ASIC
 
 ```sh
-$ v2c asic counter.veryl                         # 教学用的 vlib 单元库
-$ v2c asic --pdk sky130 --def counter.def --gds counter.gds counter.veryl
+$ reda asic counter.veryl                         # 教学用的 vlib 单元库
+$ reda asic --pdk sky130 --def counter.def --gds counter.gds counter.veryl
 ...
 asic: DRC 1999 shapes: 0 shorts, 0 spacing, 0 min-area, 0 opens; 11 taps (0 sites too far)
 timing: critical path 1.339 ns, Fmax 747.0 MHz

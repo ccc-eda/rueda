@@ -1,7 +1,7 @@
 # Rv64：用 Veryl 寫的 RV64 處理器
 
 跑得起 **xv6-riscv** 與 **Linux** 的 RISC-V 處理器。這個目錄是獨立的 Veryl 專案；驗證用官方工具鏈，
-不靠 veryl2chip 自己的模擬器：`veryl build`（Veryl 0.22 → SystemVerilog）＋ **Verilator**（→ C++）。
+不靠 rueda 自己的模擬器：`veryl build`（Veryl 0.22 → SystemVerilog）＋ **Verilator**（→ C++）。
 
 | 檔案 | 內容 |
 |---|---|
@@ -11,10 +11,10 @@
 | `sim/build.sh` | `veryl build` + `verilator` → `sim/obj/rv64sim` |
 | `sim/riscv_tests.sh` | 跑官方 riscv-tests |
 | `sim/spike_diff.sh` | 逐指令和 spike 比對 |
-| `sim/build_gates.sh` | veryl-eda 合成 `Rv64Core`，網表（通用閘、ECP5、vlib、SKY130，以及 vlib 佈局繞線之後）放回同一個測試平台 |
+| `sim/build_gates.sh` | veryl/synth 合成 `Rv64Core`，網表（通用閘、ECP5、vlib、SKY130，以及 vlib 佈局繞線之後）放回同一個測試平台 |
 | `src/rv64fpga.veryl`、`sim/fpga.cpp`、`sim/build_fpga.sh` | `Rv64Fpga`：放得進 ECP5 的系統（block RAM、序列 UART），只用腳位的測試平台 |
 | `fpga/ecp5.sh`、`fpga/ulx3s.lpf` | `Rv64Fpga` → nextpnr-ecp5 佈局繞線 → 位元流（ULX3S 85F） |
-| `emu/build.sh`、`emu/rv64emu.mjs`、`emu/rv64emu` | Rv64Soc 用 veryl-emu 編成 WebAssembly，在 Node 上跑（和 `sim/obj/rv64sim` 同樣的選項） |
+| `emu/build.sh`、`emu/rv64emu.mjs`、`emu/rv64emu` | Rv64Soc 用 veryl/emu 編成 WebAssembly，在 Node 上跑（和 `sim/obj/rv64sim` 同樣的選項） |
 | `xv6/build.sh`、`xv6/ramdisk.c` | 編譯官方 xv6-riscv（三處修改，見下） |
 | `xv6/test.sh` | 開 xv6、用腳本打指令、檢查輸出 |
 | `linux/build.sh`、`rv64soc.dts`、`rv64soc.config`、`init.sh`、`musl.mak`、`musl-cc` | OpenSBI + Linux 6.12 + busybox（musl）的 initramfs |
@@ -120,15 +120,15 @@ MSI 與 MTI 同時等待時先處理 MSI。spike 也跑得過第 2–7 項（它
 
 ## 合成與 ASIC 佈局繞線：網表放回 Verilator
 
-`sim/build_gates.sh KIND` 用 veryl-eda（`v2c`）合成 `Rv64Core`，把網表換掉 SoC 裡的 RTL 處理器，
+`sim/build_gates.sh KIND` 用 veryl/synth（`reda`）合成 `Rv64Core`，把網表換掉 SoC 裡的 RTL 處理器，
 其他（周邊、記憶體、`sim/main.cpp`）不變，所以所有測試都能拿網表來跑：
 
 | KIND | 網表 | 元件數 |
 |---|---|---|
-| `gate` | `v2c synth`：通用閘（AND / OR / XOR / MUX / DFF…） | 60,912 |
-| `ecp5` | `v2c fpga --arch ecp5`：LUT4、CCU2C、TRELLIS_FF，用 yosys 的 ECP5 元件模型模擬 | 29,123 LUT4 + 455 CCU2C + 6,251 FF |
-| `vlib` | `v2c asic --map-only`：vlib 標準元件（網表裡附元件模型） | 64,988 |
-| `sky130` | `v2c asic --pdk sky130 --map-only`：sky130_fd_sc_hd | 59,243 |
+| `gate` | `reda synth`：通用閘（AND / OR / XOR / MUX / DFF…） | 60,912 |
+| `ecp5` | `reda fpga --arch ecp5`：LUT4、CCU2C、TRELLIS_FF，用 yosys 的 ECP5 元件模型模擬 | 29,123 LUT4 + 455 CCU2C + 6,251 FF |
+| `vlib` | `reda asic --map-only`：vlib 標準元件（網表裡附元件模型） | 64,988 |
+| `sky130` | `reda asic --pdk sky130 --map-only`：sky130_fd_sc_hd | 59,243 |
 
 ```sh
 sim/build_gates.sh ecp5                       # → sim/obj_ecp5/rv64sim
@@ -136,53 +136,53 @@ OBJ=sim/obj_ecp5 sim/riscv_tests.sh           # riscv-tests 跑在網表上
 OBJ=sim/obj_ecp5 verify/random.sh 1 100       # 隨機測試（和 spike 比）
 ```
 
-繞線之後（veryl-eda 自己的 ASIC 流程：佈局、時脈樹、全域與細部繞線）：
+繞線之後（veryl/synth 自己的 ASIC 流程：佈局、時脈樹、全域與細部繞線）：
 
 | KIND | 網表 | 結果 |
 |---|---|---|
-| `vlib_routed` | `v2c asic`：66,522 個 vlib 元件（含時脈樹 1534 個緩衝器），1433 × 1436 µm，約 5 分鐘 | 0 衝突、0 斷線，Fmax 25.6 MHz；196 支 riscv-tests 通過 |
-| `sky130_routed` | `v2c asic --pdk sky130` | 細部繞線還留下衝突與斷線（暫緩） |
+| `vlib_routed` | `reda asic`：66,522 個 vlib 元件（含時脈樹 1534 個緩衝器），1433 × 1436 µm，約 5 分鐘 | 0 衝突、0 斷線，Fmax 25.6 MHz；196 支 riscv-tests 通過 |
+| `sky130_routed` | `reda asic --pdk sky130` | 細部繞線還留下衝突與斷線（暫緩） |
 
 `DEF=out.def sim/build_gates.sh vlib_routed` 另外寫出版圖（DEF）。很久的測試（Linux、xv6）只在 RTL 上跑，網表只跑 riscv-tests。
 
 四種對應後的網表都通過 196 支 riscv-tests；`gate` 另外跑過 300 支隨機程式、中斷測試與 Linux 開機。
 乘除法原本是組合邏輯（64 位元的乘法器與除法器，網表 13 萬個元件），改成 64 拍的反覆式後剩 6 萬個。
 
-## riscv-emu：指令集模擬（v2.22）
+## riscv/rvemu：指令集模擬（v2.22）
 
-[riscv-emu](../../riscv-emu/README.tw.md) 像 QEMU 一樣只模擬指令集，不模擬電路：同樣的 Rv64Soc 周邊、同樣的 `fw_payload.bin`，
+[riscv/rvemu](../../../riscv/rvemu/README.tw.md) 像 QEMU 一樣只模擬指令集，不模擬電路：同樣的 Rv64Soc 周邊、同樣的 `fw_payload.bin`，
 `linux/test.sh` 1.6 秒（Verilator 50 秒）。`rvemu` 的選項和 `rv64sim`、`rv64emu` 相同：
 
 ```sh
 (cd ../../riscv-emu && cargo build --release)
-SIM=../../riscv-emu/target/release/rvemu sim/riscv_tests.sh       # 196 支
-SIM=../../riscv-emu/target/release/rvemu verify/random.sh 1 30    # 隨機程式，和 spike 逐指令比對
-SIM=../../riscv-emu/target/release/rvemu linux/test.sh
-SIM=../../riscv-emu/target/release/rvemu xv6/test.sh usertests     # 285 億個指令，約 6 分鐘
-../../riscv-emu/target/release/rvemu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開 Linux，直接打字
+SIM=emu/rvemu sim/riscv_tests.sh       # 196 支
+SIM=emu/rvemu verify/random.sh 1 30    # 隨機程式，和 spike 逐指令比對
+SIM=emu/rvemu linux/test.sh
+SIM=emu/rvemu xv6/test.sh usertests     # 285 億個指令，約 6 分鐘
+../../../target/release/reda rvemu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開 Linux，直接打字
 ```
 
-和 RTL 的 commit log（`rv64sim -t` 對 `rvemu -t`）比：開 Linux 時前 589,593 個指令相同，第一個差別是讀 `cycle`（硬體數時脈，
-riscv-emu 數指令，`mtime` 也是每個指令加一）。riscv-tests 和 spike 逐指令比對，只有 RTL 也有的四個已知差別（觸發器、marchid、
+和 RTL 的 commit log（`rv64sim -t` 對 `reda rvemu -t`）比：開 Linux 時前 589,593 個指令相同，第一個差別是讀 `cycle`（硬體數時脈，
+riscv/rvemu 數指令，`mtime` 也是每個指令加一）。riscv-tests 和 spike 逐指令比對，只有 RTL 也有的四個已知差別（觸發器、marchid、
 spike 的 misa.C 可寫、spike 的 SC 隨機失敗）。
 
-瀏覽器（v2.23）：riscv-emu 也編成 59 KB 的 wasm（`web/dist/rvemu.js`，C ABI、沒有 import，`riscv-emu/src/wasm.rs`），
-IDE 的模擬機可以選它當引擎（`web/src/rv_machine.ts`，和 veryl-emu 的 `Machine` 同樣的介面），Node 上約 50 MIPS，1.6 秒開到 shell。
+瀏覽器（v2.23）：riscv/rvemu 也編成 59 KB 的 wasm（`web/dist/rvemu.js`，C ABI、沒有 import，`riscv/rvemu/src/wasm.rs`），
+IDE 的模擬機可以選它當引擎（`web/src/rv_machine.ts`，和 veryl/emu 的 `Machine` 同樣的介面），Node 上約 50 MIPS，1.6 秒開到 shell。
 
-## veryl-emu：編譯成 WebAssembly
+## veryl/emu：編譯成 WebAssembly
 
-[veryl-emu](../../veryl-emu/README.tw.md) 是我們自己的編譯式模擬器（像 Verilator，但產生 WebAssembly）：
+[veryl/emu](../../emu/README.tw.md) 是我們自己的編譯式模擬器（像 Verilator，但產生 WebAssembly）：
 `emu/build.sh` 把 Rv64Soc 編成 `build/emu/rv64soc.wasm`（86 KB，編譯不到 0.1 秒），`emu/rv64emu` 是和 `sim/main.cpp`
 同樣的測試平台（JavaScript），選項也一樣，所以現有的腳本都能直接用：
 
 ```sh
-emu/build.sh                                            # cargo build veryl-emu + 編譯 Rv64Soc
+emu/build.sh                                            # cargo build veryl/emu + 編譯 Rv64Soc
 SIM=emu/rv64emu sim/riscv_tests.sh                      # 196 支 riscv-tests
 SIM=emu/rv64emu verify/random.sh 1 30                   # 隨機程式，和 spike 逐指令比對（-t 印每個指令）
 emu/rv64emu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開 Linux，直接打字
 ```
 
-| | Verilator | veryl-emu（Node 24） |
+| | Verilator | veryl/emu（Node 24） |
 |---|---|---|
 | riscv-tests | 196 / 196 | 196 / 196 |
 | 隨機程式（和 spike 相同） | 900 | 120 |
@@ -201,8 +201,8 @@ emu/rv64emu linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開
 
 ```sh
 sim/build_fpga.sh rtl                                   # RTL
-sim/build_fpga.sh ecp5                                  # veryl-eda 的 ECP5 網表（LUT4、CCU2C、TRELLIS_FF、DP16KD）
-fpga/ecp5.sh                                            # v2c → nextpnr-ecp5（LFE5U-85F、ULX3S 腳位）→ ecppack
+sim/build_fpga.sh ecp5                                  # veryl/synth 的 ECP5 網表（LUT4、CCU2C、TRELLIS_FF、DP16KD）
+fpga/ecp5.sh                                            # reda → nextpnr-ecp5（LFE5U-85F、ULX3S 腳位）→ ecppack
 sim/build_fpga.sh routed                                # nextpnr 繞線後的網表（TRELLIS_COMB、TRELLIS_FF、DP16KD）
 SIM=sim/obj_fpga_routed/rv64fpga sim/riscv_tests.sh 'rv64*-p-*'
 ```
@@ -214,9 +214,9 @@ SIM=sim/obj_fpga_routed/rv64fpga sim/riscv_tests.sh 'rv64*-p-*'
 | 繞線後 | 32,469 TRELLIS_COMB（85F 的 38 %）、6,653 FF、64 DP16KD（30 %） | 110 / 110 |
 
 - `-v` 的測試要 512 KB 的記憶體（測試環境的頁面散在前 512 KB），比 85F 全部的 block RAM 還多，所以只跑 `-p`。
-- 繞線後的網表：nextpnr 的 `--write` 輸出經過 `veryl-eda/fpga/ecp5_unio.py`（IO 與時脈緩衝器變成導線、沒接的 LUT 輸入讀 1、
+- 繞線後的網表：nextpnr 的 `--write` 輸出經過 `veryl/synth/fpga/ecp5_unio.py`（IO 與時脈緩衝器變成導線、沒接的 LUT 輸入讀 1、
   DP16KD 被 nextpnr 改成參數的常數腳位接回來），yosys 寫成 Verilog，用 yosys 的 ECP5 元件模型模擬
-  （DP16KD 在 yosys 裡只有宣告，模型是 `veryl-eda/fpga/ecp5_dp16kd.v`）。
+  （DP16KD 在 yosys 裡只有宣告，模型是 `veryl/synth/fpga/ecp5_dp16kd.v`）。
 - 時序：nextpnr 的 Fmax 約 12.7 MHz（ULX3S 的 25 MHz 不夠；關鍵路徑是 64 位元加法器的進位鏈加上繞線），
   上板要用 PLL 降到 12.5 MHz，或改善時序；載入埠在板子上也還沒有接（之後換成 UART 載入器）。
 
@@ -290,7 +290,7 @@ git clone --depth 1 --branch v1.2.5 https://git.musl-libc.org/git/musl /Users/Sh
 git clone --depth 1 --branch 1_36_1 https://git.busybox.net/busybox /Users/Shared/ccc/busybox
 linux/build.sh            # → linux/build/opensbi/platform/generic/firmware/fw_payload.bin（第一次約 2 分鐘）
 sim/obj/rv64sim -m 0 linux/build/opensbi/platform/generic/firmware/fw_payload.bin    # 互動：直接打字，exit 或 poweroff -f 結束
-linux/test.sh             # 自動：開機、打幾個指令（含 GPIO）、poweroff -f，檢查輸出（SIM=emu/rv64emu：在 veryl-emu 上）
+linux/test.sh             # 自動：開機、打幾個指令（含 GPIO）、poweroff -f，檢查輸出（SIM=emu/rv64emu：在 veryl/emu 上）
 ```
 
 - sparse checkout 只取每個 Kconfig / Makefile 和用得到的驅動，kernel 原始碼約 300 MB。
@@ -304,7 +304,7 @@ linux/test.sh             # 自動：開機、打幾個指令（含 GPIO）、po
 
 `board/` 是範例「RV64 開發板」的程式；`apps/` 是其他開發板範例（跑馬燈 `chaser`、反應時間 `reaction`、呼吸燈 `breathe`、貪食蛇 `snake`、俄羅斯方塊 `tetris`、
 系統監視器 `sysmon`、Linux 指令入門 `linux`），IDE 裡各自是一個專案。命令列：`python3 linux/mkarea.py -o area.img apps/chaser/chaser.py`，
-再用 `rvemu -l 0x8F000000:area.img …fw_payload.bin` 開機。
+再用 `reda rvemu -l 0x8F000000:area.img …fw_payload.bin` 開機。
 
 ### GPIO（v2.15）
 
@@ -331,9 +331,9 @@ frozen 進 asyncio 與板子的 `pi` 模組（`linux/micropython/pi.py`、`manif
 `gchelper_generic.c` 的 register-asm 讀法，會漏掃根）。`pi` 用 `/sys/class/leds`（GPIO 0、1）與 `/sys/class/gpio`（其餘）：
 `LED`、`Button`、`Pin`。範例在 `board/`：`main.py`、`button.py`、`traffic.py`；`linux/test.sh` 用 `micropython -c` 點亮 GPIO 13、讀按鈕。
 
-C（v2.20）：`v2c cc PROG.c --linux` 把 C 編成這塊板子 Linux 的靜態執行檔（32 位元資料模型、RV64 的 *W 指令、系統呼叫；見
-`manual/10-riscv-c.md`），函式庫有 `gpio_write` / `gpio_read` / `pin_mode`。範例 `board/blink.c`、`count.c`、`lights.c`；
-`linux/test.sh` 編一個小程式放進交換區，在板子上 `./ctest` 點亮 GPIO 12、讀按鈕（需要 `veryl-eda/target/release/veryl-eda`）。
+C（v2.20）：`reda cc PROG.c --linux` 把 C 編成這塊板子 Linux 的靜態執行檔（32 位元資料模型、RV64 的 *W 指令、系統呼叫；見
+`docs/manual/10-riscv-c.md`），函式庫有 `gpio_write` / `gpio_read` / `pin_mode`。範例 `board/blink.c`、`count.c`、`lights.c`；
+`linux/test.sh` 編一個小程式放進交換區，在板子上 `./ctest` 點亮 GPIO 12、讀按鈕（需要 `target/release/reda synth`）。
 
 螢幕（v2.21）：裝置樹的 `simple-framebuffer`（320 × 240、RGB565，在 0x8EF0_0000，reserved-memory 的 `no-map` 區）、kernel 開
 fbdev + fbcon（tty1，8 × 8 字型；核心訊息仍然只到序列埠，`vt.global_cursor_default=0` 不畫游標），`/init` 在 tty1 印問候語。

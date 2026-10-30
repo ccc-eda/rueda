@@ -1,12 +1,12 @@
 # 14. Reference
 
-## `v2c` command summary
+## `reda` command summary
 
 ```
-v2c <subcommand> [options] FILE.veryl...
+reda <subcommand> [options] FILE.veryl...
 ```
 
-`v2c help <subcommand>` or `v2c <subcommand> -h` shows help. The exit code is 0 on success, 1 on failure (assertions, syntax, synthesis errors), 2 on bad options.
+`reda help <subcommand>` or `reda <subcommand> -h` shows help. The exit code is 0 on success, 1 on failure (assertions, syntax, synthesis errors), 2 on bad options.
 
 | Subcommand | What it does | Ch. |
 |---|---|---|
@@ -28,7 +28,7 @@ v2c <subcommand> [options] FILE.veryl...
 | `--top M`, `-s M` | sim, synth, fpga, gatesim, asic | top module. sim defaults to all `#[test]`; the others default to the last module that is not a testbench |
 | `FILE.veryl...` | all | multiple files may be given, order doesn't matter |
 
-### `v2c sim`
+### `reda sim`
 
 | Option | Meaning |
 |---|---|
@@ -37,14 +37,14 @@ v2c <subcommand> [options] FILE.veryl...
 
 Exit codes: 0 pass; 1 a `$assert` failed, or a source error; 2 bad options.
 
-### `v2c synth`
+### `reda synth`
 
 | Option | Meaning |
 |---|---|
 | `-o F.json`, `--json F.json` | yosys JSON |
 | `--verilog F.v` | structural Verilog |
 
-### `v2c fpga`
+### `reda fpga`
 
 | Option | Meaning |
 |---|---|
@@ -62,11 +62,11 @@ Exit codes: 0 pass; 1 a `$assert` failed, or a source error; 2 bad options.
 | `--lpf F.lpf`, `--config F.config`, `--bit F.bit` | ECP5 pin file, routed configuration, bitstream (nextpnr-ecp5 + ecppack) |
 | `--device 12k\|25k\|45k\|85k --package CABGA381` | the ECP5 device (default 85k, CABGA381) |
 
-### `v2c gatesim opt|ice40|ecp5|asic|sky130`
+### `reda gatesim opt|ice40|ecp5|asic|sky130`
 
 Only `--top`.
 
-### `v2c asic`
+### `reda asic`
 
 | Option | Meaning |
 |---|---|
@@ -75,13 +75,13 @@ Only `--top`.
 | `--verilog F.v` | standard-cell netlist (with cell models) |
 | `--def F.def` | DEF |
 | `--gds F.gds` | GDSII (SKY130) |
-| `--spice F.sp` | SPICE netlist (SKY130): for KLayout's LVS (`tools/lvs_check.py`), ngspice |
+| `--spice F.sp` | SPICE netlist (SKY130): for KLayout's LVS (`eda/tools/lvs_check.py`), ngspice |
 | `--sdc F.sdc` | timing constraints (SDC subset): reports slack WNS / TNS (chapter 9) |
 | `--clock MHZ` | one target clock applied to everything (shorthand for `--sdc`); also passed to nextpnr for FPGA |
 | `--map-only` | cell mapping only |
 | `-v` | critical path, examples of DRC violations |
 
-### `v2c cc PROG.c|PROG.s`
+### `reda cc PROG.c|PROG.s`
 
 | Option | Meaning |
 |---|---|
@@ -92,33 +92,29 @@ Only `--top`.
 | `--mem BYTES` | RAM size (default 8192) |
 | `--linux` | a static executable for the RV64 board's Linux (`-o` defaults to the filename without `.c`) |
 
-### `v2c pdk [check] [DIR]`
+### `reda pdk [check] [DIR]`
 
 DIR defaults to looking for `$VERYL_EDA_SKY130`, then `~/sky130hd`.
 
-## The old commands
+## The synthesis flags
 
-The two commands `veryl-sim` and `veryl-eda` still exist; the `v2c` subcommands just add the corresponding flags for them:
+`reda fpga`, `asic` and `gatesim` are `reda synth` with a flag added, so `reda synth` also takes those flags directly:
 
-| `v2c` | old command |
+| subcommand | the same as |
 |---|---|
-| `v2c sim ...` | `veryl-sim ...` |
-| `v2c synth ...` | `veryl-eda ...` |
-| `v2c fpga ...` | `veryl-eda --ice40 ...` |
-| `v2c fpga --arch ecp5 ...` | `veryl-eda --ecp5 ...` |
-| `v2c asic ...` | `veryl-eda --asic ...` |
-| `v2c gatesim K ...` | `veryl-eda --gatesim K ...` |
-| `v2c cc P.c ...` | `veryl-eda --cc P.c ...` |
-| `v2c pdk` | `veryl-eda --pdk-check` |
+| `reda fpga ...` | `reda synth --ice40 ...` |
+| `reda fpga --arch ecp5 ...` | `reda synth --ecp5 ...` |
+| `reda asic ...` | `reda synth --asic ...` |
+| `reda gatesim K ...` | `reda synth --gatesim K ...` |
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
 | `VERYL_EDA_CHIPDB` | IceStorm `chipdb-5k.txt` (for `--pnr veryl`); if unset, OSS CAD Suite's `share/icebox/` is searched |
-| `VERYL_EDA_SKY130` | directory of the full SKY130 hd files (`v2c pdk`) |
+| `VERYL_EDA_SKY130` | directory of the full SKY130 hd files (`reda pdk`) |
 | `VERYL_EDA_PROFILE` | print the time of each ASIC step and the conflict counts of each detailed-routing round |
-| `YOSYS_SLANG`, `YOSYS`, `GDS_PY`, `OUT` | used by `veryl-eda/test.sh` (chapter 13) |
+| `YOSYS_SLANG`, `YOSYS`, `GDS_PY`, `OUT` | used by `veryl/synth/test.sh` (chapter 13) |
 
 ## File formats
 
@@ -159,7 +155,7 @@ The two commands `veryl-sim` and `veryl-eda` still exist; the `v2c` subcommands 
 |---|---|
 | `not supported` | syntax this project doesn't support (chapter 4), not necessarily a syntax error; confirm with the official `veryl check` |
 | parse errors like `expected …` around `<` / `>` in a function | a known Veryl 0.22 issue: use `<=`, `>=`, `<:`, `>:` inside functions |
-| the test doesn't run | the module has no `#[test(name)]` in front of it; `v2c list` shows which ones are testbenches |
+| the test doesn't run | the module has no `#[test(name)]` in front of it; `reda list` shows which ones are testbenches |
 | simulation never ends | the testbench has no end point; control it with `clk.next(n)`, or use `--max-time` |
 | `combinational loop` | some signal in an `always_comb` is not assigned on every path, or there really is a loop |
 | a lot of circuitry is missing after synthesis | the optimizer removed logic that cannot affect the outputs, or registers that are always 0; check the output ports actually use them |
@@ -167,5 +163,5 @@ The two commands `veryl-sim` and `veryl-eda` still exist; the `v2c` subcommands 
 | `no chipdb` / cannot find `chipdb-5k.txt` | set `VERYL_EDA_CHIPDB`, or install OSS CAD Suite; or switch to `--pnr nextpnr` |
 | nextpnr fails on timing | the design is too slow (chapter 7); `--pnr veryl` also produces and prints Fmax |
 | ASIC is very slow | large memories become flip-flops in SKY130; use `--map-only` to get just the netlist, or switch to vlib |
-| `v2c` not found | `cargo install veryl2chip-eda`, or add `veryl-eda/target/release` to `PATH` |
+| `reda` not found | `cargo install --git https://github.com/ccc-eda/rueda rueda`, or add `target/release` to `PATH` |
 | the design works better on the virtual board than on a real one | the virtual board doesn't simulate timing violations or button bounce (chapter 12) |

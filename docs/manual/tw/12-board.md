@@ -14,13 +14,13 @@
 
 - 燒錄後狀態列顯示虛擬時間與「真實的幾倍」；速度選單可選「不超過即時」或「最快」，也可以暫停。
 - ⟲ 重新上電：從頭開始（所有暫存器回到 0，和真晶片一樣）。
-- 📂 `.bin`（或直接拖放到板子上）：載入**任何** iCE40UP5K 的位元流，例如 `v2c fpga --bin` 或 nextpnr + icepack 做的。
+- 📂 `.bin`（或直接拖放到板子上）：載入**任何** iCE40UP5K 的位元流，例如 `reda fpga --bin` 或 nextpnr + icepack 做的。
 - ⬇ .bin 下載目前的位元流，`iceprog` 就能燒進真的板子。
 
 從命令列做出來、拿到虛擬板上跑：
 
 ```sh
-v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
 ```
 
 然後把 `counter.bin` 拖到虛擬板上。
@@ -92,11 +92,11 @@ PMOD1A 的腳：1–4 = 4、2、47、45，7–10 = 3、48、46、44；PMOD1B：1
 - **🔗 分享實驗（產生連結）**：整個實驗壓縮進網址（`index.html#lab=…`），對方打開就匯入成新專案，不需要任何伺服器。
 - **匯出實驗檔 `.lab.json`**：用 ⇪ 匯入打開。
 
-`tutorial/labs.tw.md` 是用虛擬板上課的 8 個實驗講義，每個實驗都是一個 `#ex=…&board=1` 連結。
+`veryl/tutorial/labs.tw.md` 是用虛擬板上課的 8 個實驗講義，每個實驗都是一個 `#ex=…&board=1` 連結。
 
 ## 和真的板子差在哪
 
 - 位元流模式模擬的是位元流裡的邏輯與繞線，**沒有**類比效應：沒有延遲造成的毛刺，沒有亞穩態。
-- 不模擬時序違規：Fmax 低於 12 MHz 的設計在這裡照樣正常，在真晶片上不會。請看 `v2c fpga` 印出的 Fmax。
+- 不模擬時序違規：Fmax 低於 12 MHz 的設計在這裡照樣正常，在真晶片上不會。請看 `reda fpga` 印出的 Fmax。
 - 按鈕沒有彈跳。
 - 板子的圖是示意圖。

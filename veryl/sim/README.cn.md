@@ -1,12 +1,12 @@
-# veryl-sim（crate：`veryl2chip-sim`）
-[English](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-sim/README.md) | [繁體中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-sim/README.tw.md) | **简体中文**
+# veryl/sim（crate：`rueda`）
+[English](https://github.com/ccc-eda/rueda/blob/main/veryl/sim/README.md) | [繁體中文](https://github.com/ccc-eda/rueda/blob/main/veryl/sim/README.tw.md) | **简体中文**
 
 以 [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) 为前端、类似 Icarus Verilog (`iverilog` + `vvp`) 的 Veryl 事件驱动仿真器。
 
-[veryl2chip](https://github.com/ccc-eda/veryl2chip) 的一部分（在线 IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>）。
+[rueda](https://github.com/ccc-eda/rueda) 的一部分（在线 IDE：<https://ccc-eda.github.io/rueda/web/dist/index.html>）。
 
-    cargo install veryl2chip-sim        # 安装 `veryl-sim` 命令
-    veryl-sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
+    cargo install --git https://github.com/ccc-eda/rueda rueda   # reda: every tool, one command
+    reda sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
 
 在源代码目录里也可以用 `cargo run --release -- ...`。
 
@@ -17,9 +17,9 @@
 | 文件 | 内容 |
 |---|---|
 | `value.rs` | 4 态 (0/1/x) 位矢量，最多 256 bit（`LIMBS` × 64，可调） |
-| `iface.rs` | interface：收集声明、展开内容、解析 modport（与 veryl-eda 共用） |
+| `iface.rs` | interface：收集声明、展开内容、解析 modport（与 veryl/synth 共用） |
 | `gates.rs` | 门级模型：仿真时把某个 module 换成综合后的网表（通用门、iCE40、vlib 标准单元、RAM），testbench 不用改 |
-| `gen.rs`   | generate-for 的索引序列（`rev`、`step +=` 等；与 veryl-eda 共用） |
+| `gen.rs`   | generate-for 的索引序列（`rev`、`step +=` 等；与 veryl/synth 共用） |
 | `expr.rs`  | 表达式 IR + 优先级解析器（吃 veryl-parser 的 token 串） |
 | `elab.rs`  | 遍历 veryl-parser 语法树、展开层次、转成仿真 IR |
 | `sim.rs`   | 求值、delta-cycle 调度、非阻塞赋值 (NBA)、clock 产生器、VCD |
@@ -37,5 +37,5 @@ interface（`inst b: Bus;`、`port: modport Bus::master`、modport 的 `..input`
 ## 尚未支持
 泛型 interface 端口（`port: interface`，需指名 modport）、递归、`inout`（三态需要 z 平面与多驱动解析）、宽度 > 256 bit。
 
-注意：Veryl 0.22 内置仿真器（`veryl test`）在 interface 设计上会算错（例如 `veryl-eda/examples/lang.veryl` 的 TestHs 它得 0），
-iverilog 与 veryl-sim 都是 145。
+注意：Veryl 0.22 内置仿真器（`veryl test`）在 interface 设计上会算错（例如 `veryl/synth/examples/lang.veryl` 的 TestHs 它得 0），
+iverilog 与 veryl/sim 都是 145。

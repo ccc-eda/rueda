@@ -4169,7 +4169,7 @@ ${lines.join("\n")}
       }
       s += `<text x="76" y="56" class="pi-t" text-anchor="end">1</text><text x="490" y="34" class="pi-t">40</text>`;
       s += `<rect x="190" y="100" width="92" height="92" rx="6" class="pi-chip"/><text x="236" y="140" class="pi-chip-t" text-anchor="middle">Rv64Core</text><text x="236" y="156" class="pi-t" text-anchor="middle">RV64IMAC</text><text x="236" y="170" class="pi-t" text-anchor="middle">256 MB</text>`;
-      s += `<text x="236" y="210" class="pi-t" text-anchor="middle">veryl2chip RV64 ${tr("\u958B\u767C\u677F", "board")}</text>`;
+      s += `<text x="236" y="210" class="pi-t" text-anchor="middle">rueda RV64 ${tr("\u958B\u767C\u677F", "board")}</text>`;
       s += `<rect x="16" y="110" width="44" height="40" rx="4" class="pi-usb"/><text x="38" y="166" class="pi-t" text-anchor="middle">UART</text>`;
       const leds = [["pwr", "PWR", "#ff3b30", 92], ["act", "ACT", "#34c759", 122], ["user", "USER", "#ffcc00", 152]];
       for (const [id, label, color, y] of leds) {
@@ -5210,7 +5210,7 @@ test ${task.toLowerCase()}_doubles {
   var WELCOME = "\u2605welcome";
   var BOARD_TAB = "\u26A1board";
   var EMU_TAB = "\u{1F5A5}emu";
-  var TUTORIAL = "https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md";
+  var TUTORIAL = "https://github.com/ccc-eda/rueda/blob/main/veryl/tutorial/README.tw.md";
   var ASM_TAB = "\u2699asm";
   var tabName = (n) => n === FLOW_TAB ? tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow") : n === WELCOME ? tr("\u6B61\u8FCE", "Welcome") : n === BOARD_TAB ? tr("\u26A1 \u865B\u64EC iCEBreaker", "\u26A1 Virtual iCEBreaker") : n === EMU_TAB ? tr("\u{1F5A5} \u6A21\u64EC\u6A5F", "\u{1F5A5} Emulator") : n === ASM_TAB ? tr("\u7D44\u5408\u8A9E\u8A00", "Assembly") : n;
   var special = (n) => n === FLOW_TAB || n === WELCOME || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB;
@@ -5711,7 +5711,7 @@ test ${task.toLowerCase()}_doubles {
   }
   function welcome() {
     const recent = projects.slice(-8).reverse();
-    $2("welcome").innerHTML = `<h2>veryl2chip IDE</h2><p>${tr("Veryl \u2192 \u6A21\u64EC \u2192 \u5408\u6210 \u2192 FPGA / ASIC\uFF0C\u5168\u90E8\u5728\u700F\u89BD\u5668\u88E1\u3002", "Veryl \u2192 simulation \u2192 synthesis \u2192 FPGA / ASIC, all in the browser.")}</p>
+    $2("welcome").innerHTML = `<h2>rueda IDE</h2><p>${tr("Veryl \u2192 \u6A21\u64EC \u2192 \u5408\u6210 \u2192 FPGA / ASIC\uFF0C\u5168\u90E8\u5728\u700F\u89BD\u5668\u88E1\uFF1BFluxa\uFF08\u4EFB\u52D9\u8207\u901A\u9053\uFF09\u7684\u7A0B\u5F0F\u4E5F\u80FD\u5728\u9019\u88E1\u5BEB\u3001\u8DD1 test\u3002", "Veryl \u2192 simulation \u2192 synthesis \u2192 FPGA / ASIC, all in the browser; Fluxa programs (tasks and channels) can be written and tested here too.")}</p>
     <h3 class="goal-h">${tr("\u4F60\u60F3\u505A\u4EC0\u9EBC\uFF1F", "What do you want to do?")}</h3>
     <div class="goals">${goals().map((g) => {
       const ex = examples().find((e) => e.id === g.ex);

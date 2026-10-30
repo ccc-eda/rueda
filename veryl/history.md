@@ -1,5 +1,8 @@
 # veryl2chip 版本歷史
 
+> 這是 veryl2chip（rueda 的前身之一，現在是 `veryl/`）的版本歷史，原樣保留：裡面的路徑與指令是當時的（`v2c`、`veryl-eda/`…）。
+> 現在的指令是 `reda`，結構見 [根目錄的 README](../README.tw.md)。
+
 veryl2chip 是一套以 Rust 寫成、給 Veryl HDL 用的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一路做到位元流）、
 ASIC 流程（標準元件、佈局、繞線、時序；從 v2.0 起可接 SkyWater SKY130 開源 PDK，做到通過 DRC 的 GDSII），
 以及一個純前端、在瀏覽器裡就能用的 IDE 與虛擬 iCEBreaker 開發板。

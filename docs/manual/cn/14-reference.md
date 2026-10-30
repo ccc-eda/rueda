@@ -1,12 +1,12 @@
 # 14. 参考
 
-## `v2c` 指令总表
+## `reda` 指令总表
 
 ```
-v2c <子指令> [选项] FILE.veryl...
+reda <子指令> [选项] FILE.veryl...
 ```
 
-`v2c help <子指令>` 或 `v2c <子指令> -h` 显示说明。成功的结束码是 0，失败（断言、语法、综合错误）是 1，选项错误是 2。
+`reda help <子指令>` 或 `reda <子指令> -h` 显示说明。成功的结束码是 0，失败（断言、语法、综合错误）是 1，选项错误是 2。
 
 | 子指令 | 作用 | 章 |
 |---|---|---|
@@ -28,7 +28,7 @@ v2c <子指令> [选项] FILE.veryl...
 | `--top M`、`-s M` | sim、synth、fpga、gatesim、asic | 顶层模块。sim 默认全部 `#[test]`；其他默认最后一个不是 testbench 的 module |
 | `FILE.veryl...` | 全部 | 可以给多个文件，顺序不重要 |
 
-### `v2c sim`
+### `reda sim`
 
 | 选项 | 内容 |
 |---|---|
@@ -37,14 +37,14 @@ v2c <子指令> [选项] FILE.veryl...
 
 结束码：0 通过；1 有 `$assert` 失败，或源代码错误；2 选项错误。
 
-### `v2c synth`
+### `reda synth`
 
 | 选项 | 内容 |
 |---|---|
 | `-o F.json`、`--json F.json` | yosys JSON |
 | `--verilog F.v` | 结构化 Verilog |
 
-### `v2c fpga`
+### `reda fpga`
 
 | 选项 | 内容 |
 |---|---|
@@ -62,11 +62,11 @@ v2c <子指令> [选项] FILE.veryl...
 | `--lpf F.lpf`、`--config F.config`、`--bit F.bit` | ECP5 的引脚档、布好的设置、比特流（nextpnr-ecp5 + ecppack） |
 | `--device 12k\|25k\|45k\|85k --package CABGA381` | ECP5 的型号（默认 85k、CABGA381） |
 
-### `v2c gatesim opt|ice40|ecp5|asic|sky130`
+### `reda gatesim opt|ice40|ecp5|asic|sky130`
 
 只有 `--top`。
 
-### `v2c asic`
+### `reda asic`
 
 | 选项 | 内容 |
 |---|---|
@@ -75,13 +75,13 @@ v2c <子指令> [选项] FILE.veryl...
 | `--verilog F.v` | 标准单元网表（含单元模型） |
 | `--def F.def` | DEF |
 | `--gds F.gds` | GDSII（SKY130） |
-| `--spice F.sp` | SPICE 网表（SKY130）：给 KLayout 的 LVS（`tools/lvs_check.py`）、ngspice |
+| `--spice F.sp` | SPICE 网表（SKY130）：给 KLayout 的 LVS（`eda/tools/lvs_check.py`）、ngspice |
 | `--sdc F.sdc` | 时序约束（SDC 子集）：报告余裕 WNS / TNS（第 9 章） |
 | `--clock MHZ` | 一个目标时钟套用到全部（`--sdc` 的简写）；FPGA 也交给 nextpnr |
 | `--map-only` | 只做单元对应 |
 | `-v` | 关键路径、DRC 违规例子 |
 
-### `v2c cc PROG.c|PROG.s`
+### `reda cc PROG.c|PROG.s`
 
 | 选项 | 内容 |
 |---|---|
@@ -92,33 +92,29 @@ v2c <子指令> [选项] FILE.veryl...
 | `--mem BYTES` | RAM 大小（默认 8192） |
 | `--linux` | RV64 开发板 Linux 的静态运行档（`-o` 默认是去掉 `.c` 的文件名） |
 
-### `v2c pdk [check] [DIR]`
+### `reda pdk [check] [DIR]`
 
 DIR 默认依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。
 
-## 旧指令
+## 综合的旗标
 
-`veryl-sim` 与 `veryl-eda` 两个指令仍然存在，`v2c` 的子指令只是帮它们加上对应的旗标：
+`reda fpga`、`asic`、`gatesim` 就是 `reda synth` 加上一个旗标，所以 `reda synth` 也直接接受这些旗标：
 
-| `v2c` | 旧指令 |
+| 子指令 | 等同于 |
 |---|---|
-| `v2c sim ...` | `veryl-sim ...` |
-| `v2c synth ...` | `veryl-eda ...` |
-| `v2c fpga ...` | `veryl-eda --ice40 ...` |
-| `v2c fpga --arch ecp5 ...` | `veryl-eda --ecp5 ...` |
-| `v2c asic ...` | `veryl-eda --asic ...` |
-| `v2c gatesim K ...` | `veryl-eda --gatesim K ...` |
-| `v2c cc P.c ...` | `veryl-eda --cc P.c ...` |
-| `v2c pdk` | `veryl-eda --pdk-check` |
+| `reda fpga ...` | `reda synth --ice40 ...` |
+| `reda fpga --arch ecp5 ...` | `reda synth --ecp5 ...` |
+| `reda asic ...` | `reda synth --asic ...` |
+| `reda gatesim K ...` | `reda synth --gatesim K ...` |
 
 ## 环境变量
 
 | 变量 | 用途 |
 |---|---|
 | `VERYL_EDA_CHIPDB` | IceStorm `chipdb-5k.txt`（`--pnr veryl`）；没设置时找 OSS CAD Suite 的 `share/icebox/` |
-| `VERYL_EDA_SKY130` | 完整 SKY130 hd 文件的目录（`v2c pdk`） |
+| `VERYL_EDA_SKY130` | 完整 SKY130 hd 文件的目录（`reda pdk`） |
 | `VERYL_EDA_PROFILE` | 打印 ASIC 各步骤耗时与详细布线每轮的冲突数 |
-| `YOSYS_SLANG`、`YOSYS`、`GDS_PY`、`OUT` | `veryl-eda/test.sh` 用（第 13 章） |
+| `YOSYS_SLANG`、`YOSYS`、`GDS_PY`、`OUT` | `veryl/synth/test.sh` 用（第 13 章） |
 
 ## 文件格式
 
@@ -159,7 +155,7 @@ DIR 默认依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。
 |---|---|
 | `not supported` | 本项目没支持的语法（第 4 章），不一定是语法错误；用官方 `veryl check` 确认 |
 | `expected …` 之类的解析错误出现在 function 里的 `<` / `>` | Veryl 0.22 的已知问题：function 内用 `<=`、`>=`、`<:`、`>:` |
-| 测试没有跑 | module 前面没有 `#[test(名稱)]`；`v2c list` 看哪些是 testbench |
+| 测试没有跑 | module 前面没有 `#[test(名稱)]`；`reda list` 看哪些是 testbench |
 | 仿真永远不结束 | testbench 没有结束点；用 `clk.next(n)` 控制，或 `--max-time` |
 | `combinational loop` | `always_comb` 里某个信号没有在每条路径都赋值，或真的有回路 |
 | 综合后少了一大堆电路 | 优化器移除了不影响输出的逻辑，或永远是 0 的寄存器；确认输出端口真的用到它们 |
@@ -167,5 +163,5 @@ DIR 默认依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。
 | `no chipdb` / 找不到 `chipdb-5k.txt` | 设置 `VERYL_EDA_CHIPDB`，或装 OSS CAD Suite；或改用 `--pnr nextpnr` |
 | nextpnr 因时序失败 | 设计太慢（第 7 章）；`--pnr veryl` 一样会产生并打印 Fmax |
 | ASIC 很慢 | 大存储器在 SKY130 变成触发器；用 `--map-only` 只拿网表，或改用 vlib |
-| `v2c` 找不到 | `cargo install veryl2chip-eda`，或把 `veryl-eda/target/release` 加进 `PATH` |
+| `reda` 找不到 | `cargo install --git https://github.com/ccc-eda/rueda rueda`，或把 `target/release` 加进 `PATH` |
 | 虚拟板的设计跑得比真板子好 | 虚拟板不仿真时序违规与按钮弹跳（第 12 章） |

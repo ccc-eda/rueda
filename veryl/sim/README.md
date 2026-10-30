@@ -1,13 +1,13 @@
-# veryl-sim (crate: `veryl2chip-sim`)
-**English** | [繁體中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-sim/README.tw.md) | [简体中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-sim/README.cn.md)
+# veryl/sim (crate: `rueda-veryl-sim`)
+**English** | [繁體中文](https://github.com/ccc-eda/rueda/blob/main/veryl/sim/README.tw.md) | [简体中文](https://github.com/ccc-eda/rueda/blob/main/veryl/sim/README.cn.md)
 
 An event-driven simulator for [Veryl](https://veryl-lang.org/) testbenches, in the spirit of Icarus Verilog
 (`iverilog` + `vvp`), using [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) as its front end.
 
-Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/index.html>).
+Part of [rueda](https://github.com/ccc-eda/rueda) (online IDE: <https://ccc-eda.github.io/rueda/web/dist/index.html>).
 
-    cargo install veryl2chip-sim        # installs the `veryl-sim` command
-    veryl-sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
+    cargo install --git https://github.com/ccc-eda/rueda rueda   # reda: every tool, one command
+    reda sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
 
 In the source tree, `cargo run --release -- ...` works too.
 
@@ -18,9 +18,9 @@ In the source tree, `cargo run --release -- ...` works too.
 | File | Contents |
 |---|---|
 | `value.rs` | 4-state (0/1/x) bit vectors, up to 256 bits (`LIMBS` × 64, adjustable) |
-| `iface.rs` | interfaces: collecting declarations, expanding their contents, resolving modports (shared with veryl-eda) |
+| `iface.rs` | interfaces: collecting declarations, expanding their contents, resolving modports (shared with veryl/synth) |
 | `gates.rs` | gate-level models: a module is simulated from its synthesized netlist (generic gates, iCE40, vlib standard cells, RAMs) under an unchanged testbench |
-| `gen.rs`   | index sequences of generate-for (`rev`, `step +=`, ...; shared with veryl-eda) |
+| `gen.rs`   | index sequences of generate-for (`rev`, `step +=`, ...; shared with veryl/synth) |
 | `expr.rs`  | expression IR + precedence parser (over veryl-parser's tokens) |
 | `elab.rs`  | walks the veryl-parser syntax tree, expands the hierarchy, builds the simulation IR |
 | `sim.rs`   | evaluation, delta-cycle scheduling, non-blocking assignments (NBA), clock generator, VCD |
@@ -38,5 +38,5 @@ widths up to 256 bits / clock domain annotations (`'a clock`) /
 ## Not supported yet
 generic interface ports (`port: interface`; name the modport), recursion, `inout` (tri-state needs a z plane and multi-driver resolution), widths > 256 bits.
 
-Note: Veryl 0.22's own simulator (`veryl test`) gets interface designs wrong (e.g. it gives 0 for TestHs in `veryl-eda/examples/lang.veryl`);
-iverilog and veryl-sim both give 145.
+Note: Veryl 0.22's own simulator (`veryl test`) gets interface designs wrong (e.g. it gives 0 for TestHs in `veryl/synth/examples/lang.veryl`);
+iverilog and veryl/sim both give 145.

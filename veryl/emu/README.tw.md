@@ -1,12 +1,12 @@
 [English](README.md) | [繁體中文](README.tw.md)
 
-# veryl-emu
+# veryl/emu
 
 把 Veryl 設計編譯成 **WebAssembly** 模組，做快速、以週期為單位、2 態的模擬，概念上像 Verilator。
 WebAssembly 能跑的地方它都能跑：命令列用 Node，或在瀏覽器裡（瀏覽器的引擎再把它編成機器碼）。
 用一小段 JavaScript 測試平台驅動它的腳位。
 
-veryl-emu 是獨立的 crate，[veryl-sim](../veryl-sim/) 完全不動：veryl-emu 把 veryl-sim 的 IR（運算式、敘述、數值）
+veryl/emu 是獨立的 crate，[veryl/sim](../sim/) 完全不動：veryl/emu 把 veryl/sim 的 IR（運算式、敘述、數值）
 和輔助函式當函式庫用，展開（`src/elab.rs`）是自己的一份，唯一的差別是陣列做成一個訊號（一塊記憶體），
 不拆成每個元素一個訊號，所以 256 MB 的 RAM 也沒問題。
 
@@ -14,7 +14,7 @@ veryl-emu 是獨立的 crate，[veryl-sim](../veryl-sim/) 完全不動：veryl-e
 cargo build --release
 target/release/veryl-emu --top Rv64Soc --stop o_tx_valid,o_finish -o soc.wasm core.veryl soc.veryl
 # → soc.wasm 與 soc.json（每個訊號的位元組位置、寬度、大小）
-tests/check.sh            # 和 veryl-sim 的差分測試（需要 Node）
+tests/check.sh            # 和 veryl/sim 的差分測試（需要 Node）
 ```
 
 ```js
@@ -29,8 +29,8 @@ const n = emu.run(1_000_000);   // 跑到某個 --stop 訊號不是 0 為止（�
 
 | 步驟 | |
 |---|---|
-| 展開 | `src/elab.rs`：把模組階層攤平成 veryl-sim 的 IR（`Proc::Comb`、`Proc::Ff`、訊號） |
-| 定型 | `src/ir.rs`：每個運算式的寬度與正負號在編譯時決定，規則和 veryl-sim 的 `Sim::eval` 在執行時用的一樣（算術依前後文決定寬度、比較用較寬的運算元、移位用左運算元的寬度、有號數符號延伸）；`case` / `switch` 變成 `if` 鏈；2 態（x / z 當 0，除以 0 這類 x 的結果也是 0） |
+| 展開 | `src/elab.rs`：把模組階層攤平成 veryl/sim 的 IR（`Proc::Comb`、`Proc::Ff`、訊號） |
+| 定型 | `src/ir.rs`：每個運算式的寬度與正負號在編譯時決定，規則和 veryl/sim 的 `Sim::eval` 在執行時用的一樣（算術依前後文決定寬度、比較用較寬的運算元、移位用左運算元的寬度、有號數符號延伸）；`case` / `switch` 變成 `if` 鏈；2 態（x / z 當 0，除以 0 這類 x 的結果也是 0） |
 | 排程 | `src/gen.rs`：組合邏輯依相依關係排序（Tarjan），自己依賴自己的一群反覆算到輸出不再變；經由埠連接傳進子模組的時脈追到同一個時脈 |
 | 活動偵測 | 每個組合程序有一個「髒」旗標；寫入讓訊號的值改變時（組合邏輯、`always_ff`，或 `settle` 看到輸入變了），讀它的程序變髒，`settle` 依順序只跑髒的程序，所以一趟就夠 |
 | 展開 | 常數範圍的 `for` 迴圈（最多 128 次）展開，迴圈變數變成常數，用它當索引的陣列與位元選取變成固定位址與位移；`{x repeat n}` 只算一次；條件直接產生 i32 |
@@ -43,15 +43,15 @@ const n = emu.run(1_000_000);   // 跑到某個 --stop 訊號不是 0 為止（�
 ## 驗證與速度
 
 - `tests/check.sh`：`tests/check.veryl`（128 位元運算、變數移位與部分選取、有號除法與 `>>>`、函式、case 範圍、迴圈、
-  `always_ff` 會讀的暫存器與陣列）在 veryl-sim 與 veryl-emu 上各跑 300 拍，21 個輸出每一拍都要相同。
-- `examples/rv64/emu/`：RV64 SoC（Rv64Core + Rv64Soc，256 MB RAM）通過 196 支 riscv-tests、和 spike 逐指令比對的隨機程式、
+  `always_ff` 會讀的暫存器與陣列）在 veryl/sim 與 veryl/emu 上各跑 300 拍，21 個輸出每一拍都要相同。
+- `veryl/examples/rv64/emu/`：RV64 SoC（Rv64Core + Rv64Soc，256 MB RAM）通過 196 支 riscv-tests、和 spike 逐指令比對的隨機程式、
   中斷測試，並開 Linux 到 busybox 的 shell。
 
 | Linux 開機到 shell（2.3 億拍） | 每秒拍數 |
 |---|---|
 | Verilator（C++、`-O3`） | 720 萬 |
-| veryl-emu（WebAssembly，Node 24） | 420 萬（v2.14 之前 220 萬） |
-| veryl-sim（解譯、4 態） | 幾千 |
+| veryl/emu（WebAssembly，Node 24） | 420 萬（v2.14 之前 220 萬） |
+| veryl/sim（解譯、4 態） | 幾千 |
 
 ## 限制
 

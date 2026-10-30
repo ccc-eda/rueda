@@ -1,7 +1,7 @@
-# 6. 合成：`v2c synth`
+# 6. 合成：`reda synth`
 
 ```
-v2c synth [--top MODULE] [-o OUT.json] [--verilog OUT.v] FILE.veryl...
+reda synth [--top MODULE] [-o OUT.json] [--verilog OUT.v] FILE.veryl...
 ```
 
 把 Veryl 設計展開成一張**扁平的閘級網表**：所有子模組攤平（訊號名稱如 `u_alu.sum`），if / case 變成多工器，
@@ -10,7 +10,7 @@ for 迴圈展開，function 內聯，`always_ff` 變成正反器。
 ## 輸出
 
 ```sh
-$ v2c synth -o counter.json --verilog counter.v counter.veryl
+$ reda synth -o counter.json --verilog counter.v counter.veryl
 === Counter ===
   port input    1 i_clk
   ...
@@ -45,5 +45,5 @@ $ v2c synth -o counter.json --verilog counter.v counter.veryl
 
 ## 確認合成是對的
 
-- `v2c gatesim opt FILE...`：用原本的 testbench 跑合成後的網表（第 8 章）。
-- 有 yosys（含 slang 前端）的話，可以對官方 `veryl build` 產生的 SystemVerilog 做形式等價證明（專案的 `veryl-eda/test.sh` 就是這樣做，第 13 章）。
+- `reda gatesim opt FILE...`：用原本的 testbench 跑合成後的網表（第 8 章）。
+- 有 yosys（含 slang 前端）的話，可以對官方 `veryl build` 產生的 SystemVerilog 做形式等價證明（專案的 `veryl/synth/test.sh` 就是這樣做，第 13 章）。

@@ -1,5 +1,5 @@
-# veryl-eda (crate: `veryl2chip-eda`)
-**English** | [繁體中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-eda/README.tw.md) | [简体中文](https://github.com/ccc-eda/veryl2chip/blob/main/veryl-eda/README.cn.md)
+# veryl/synth (crate: `rueda-veryl-synth`)
+**English** | [繁體中文](https://github.com/ccc-eda/rueda/blob/main/veryl/synth/README.tw.md) | [简体中文](https://github.com/ccc-eda/rueda/blob/main/veryl/synth/README.cn.md)
 
 Logic synthesis, an FPGA flow and an ASIC flow for [Veryl](https://veryl-lang.org/) (think yosys `synth` / `synth_ice40` plus nextpnr,
 and an OpenROAD-style standard-cell back end). With [`veryl-parser`](https://docs.rs/veryl-parser/latest/veryl_parser/) as the front end it
@@ -7,17 +7,17 @@ elaborates a Veryl design into a **flat gate-level netlist**, which can be mappe
 routed into an `.asc` by **its own place & route** (`--pnr veryl`) or nextpnr-ice40, then packed into a bitstream; or, with `--asic`, mapped to the
 home-made **vlib standard-cell library**, placed in rows, routed and timed.
 
-Part of [veryl2chip](https://github.com/ccc-eda/veryl2chip) (online IDE: <https://ccc-eda.github.io/veryl2chip/web/dist/index.html>).
+Part of [rueda](https://github.com/ccc-eda/rueda) (online IDE: <https://ccc-eda.github.io/rueda/web/dist/index.html>).
 
-    cargo install veryl2chip-eda        # installs the `veryl-eda` command
-    veryl-eda [--top MODULE] [-o out.json] [--verilog out.v] [--list]
+    cargo install --git https://github.com/ccc-eda/rueda rueda   # reda: every tool, one command
+    reda synth [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]
               [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf pins.lpf] [--config out.config] [--bit out.bit]]
               [--asic [--seed N] [-v]] [--gatesim opt|ice40|ecp5|asic|sky130] [--program PROG.bin]
               a.veryl b.veryl ...
-    veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
-    veryl-eda --cc PROG.c --linux [-o PROG]      (a static executable for Linux on the RV64 board)
+    reda cc PROG.c [-o PROG.bin] [-S PROG.s] [--run [N]] [--mem BYTES]
+    reda cc PROG.c --linux [-o PROG]      (a static executable for Linux on the RV64 board)
 
 In the source tree, `cargo run --release -- ...` works too. The own place & route needs IceStorm's `chipdb-5k.txt` (included in OSS CAD Suite, or point to it with `VERYL_EDA_CHIPDB`).
 
@@ -25,27 +25,27 @@ In the source tree, `cargo run --release -- ...` works too. The own place & rout
 - `-o` writes yosys JSON (readable by `read_json`); `--verilog` writes gate-level Verilog (simulates in iverilog).
 - `--ice40` maps to iCE40 cells; with `--asc` / `--bin` it also places, routes (`nextpnr-ice40` by default, failing if timing does not close; `--pnr veryl` for the own one) and packs (`icepack`).
 - `--ecp5` maps to Lattice ECP5 cells (below); with `--config` / `--bit` it also runs `nextpnr-ecp5` and `ecppack`.
-- `--gatesim opt|ice40|ecp5|asic|sky130`: **post-synthesis simulation**. The `--top` module is replaced by its generic-gate / iCE40 / ECP5 / standard-cell netlist (`src/gatesim.rs` → veryl-sim's gate models)
+- `--gatesim opt|ice40|ecp5|asic|sky130`: **post-synthesis simulation**. The `--top` module is replaced by its generic-gate / iCE40 / ECP5 / standard-cell netlist (`src/gatesim.rs` → veryl/sim's gate models)
   and the original `#[test]` testbenches run on it (`test.sh` runs 15 designs × 3 netlists; the results must equal the RTL's).
 - `--asic` runs the ASIC back end (below); `--verilog` then writes the standard-cell netlist (with the vlib cells' Verilog models), `-v` prints the critical path.
 - `./test.sh`: unit tests + synthesis of every example + yosys `read_json; check -assert` + the FPGA flow +
   **formal equivalence checking** against the SystemVerilog from `veryl build` (needs a yosys with the slang front end, e.g. oss-cad-suite, given by `YOSYS_SLANG`).
 
 ## RV32I CPU
-`RiscvCore` in `examples/src/rv32i.veryl` is a single-cycle RV32I (without fence/ecall/ebreak/CSR):
+`RiscvCore` in `veryl/examples/src/rv32i.veryl` is a single-cycle RV32I (without fence/ecall/ebreak/CSR):
 `lui auipc jal jalr`, the six branches, `lb lh lw lbu lhu sb sh sw`, and every R/I-type operation (shifts, `xor`, `sltu`, ...).
 The data memory interface marks the bytes to write with `o_dmem_wstrb`; on reads the CPU extracts the byte / halfword from the whole word and sign-extends it.
 
-The test program `examples/sw/rv32i_test.S` is assembled into a ROM by a real assembler (`examples/sw/build.sh` → `examples/src/rv32i_rom.veryl`)
+The test program `veryl/examples/sw/rv32i_test.S` is assembled into a ROM by a real assembler (`veryl/examples/sw/build.sh` → `veryl/examples/src/rv32i_rom.veryl`)
 and writes 41 results to memory, which `TestRiscvCore` checks word by word with `$assert`. The expected values are cross-checked with the official
-RISC-V reference simulator **spike** (done by `build.sh`). It passes on spike, the official `veryl test`, veryl-sim, veryl-eda's synthesized
+RISC-V reference simulator **spike** (done by `build.sh`). It passes on spike, the official `veryl test`, veryl/sim, veryl/synth's synthesized
 gate-level netlist, and the iCE40-mapped netlist (`cargo test`).
 
 The complete RiscvCore (not trimmed by a constant ROM) needs 5401 LUTs after mapping, more than the UP5K's 5280 LCs, mostly because of the
 32×32 register file in flip-flops; the multi-cycle `RvSoc` below keeps its registers and memory in block RAM and fits with room to spare.
 
 ## A RISC-V CPU on the FPGA
-`RiscvSoc` in `examples/soc.veryl` = `RiscvCore` from `examples/src/rv32i.veryl` + a program ROM + a 16-word data RAM + an LED register (address 0x100).
+`RiscvSoc` in `veryl/examples/soc.veryl` = `RiscvCore` from `veryl/examples/src/rv32i.veryl` + a program ROM + a 16-word data RAM + an LED register (address 0x100).
 The program computes Fibonacci(10) with a `beq`/`jal` loop and writes 55 to RAM[0] and the LEDs. The top only has a clock, a reset and 8 LEDs.
 The program ROM is constant, so synthesis removes all hardware this program does not use (unused registers, the shifter, byte loads, ...);
 the bitstream therefore only proves the instructions this program uses.
@@ -53,7 +53,7 @@ the bitstream therefore only proves the instructions this program uses.
     ./fpga/flow.sh          # synthesis → mapping → nextpnr → icepack → two gate-level simulations
     iceprog fpga/build/soc.bin
 
-| Item | Result (iCE40UP5K-SG48, iCEBreaker pins `examples/icebreaker.pcf`) |
+| Item | Result (iCE40UP5K-SG48, iCEBreaker pins `veryl/examples/icebreaker.pcf`) |
 |---|---|
 | cells | 1168 SB_LUT4, 85 SB_CARRY, 232 DFF |
 | placement | 1279 / 5280 LCs (24%) |
@@ -61,12 +61,12 @@ the bitstream therefore only proves the instructions this program uses.
 | simulation of the mapped netlist (yosys iCE40 cell models) | LED = 55 at cycle 70 |
 | simulation of the **routed bitstream** (converted back to Verilog by `icebox_vlog`) | LED = 55 at cycle 70 |
 
-## ECP5 (`--ecp5`, `src/ecp5.rs`)
+## ECP5 (`--ecp5`, `eda/src/fpga/ecp5.rs`)
 Since v2.2 the same netlist can be mapped to Lattice **ECP5** (LFE5U-12F / 25F / 45F / 85F, the chip of the open ULX3S board).
 The output is yosys JSON for nextpnr-ecp5; placement, routing and the bitstream are done by **nextpnr-ecp5 + ecppack** (Project Trellis, part of OSS CAD Suite):
 
-    v2c fpga --arch ecp5 --lpf pins.lpf --bit top.bit top.veryl       # = veryl-eda --ecp5 ...
-    v2c gatesim ecp5 top.veryl                                        # the testbenches on the ECP5 netlist
+    reda fpga --arch ecp5 --lpf pins.lpf --bit top.bit top.veryl       # = reda synth --ecp5 ...
+    reda gatesim ecp5 top.veryl                                        # the testbenches on the ECP5 netlist
 
 | Cell | Where it comes from |
 |---|---|
@@ -86,21 +86,21 @@ Verification: `cargo test` runs every example's testbench scenarios on the ECP5 
 `fpga/ecp5_routed.sh` also proves nextpnr's routed netlist (`--write`, packed into `TRELLIS_COMB` / `TRELLIS_FF`) equivalent to the mapped one (15 designs;
 yosys's `TRELLIS_COMB` model leaves `FCO` undriven, fixed in `fpga/ecp5_comb.v`, and unconnected LUT inputs read 1).
 
-## A RISC-V SoC with C programs (`examples/src/rvsoc.veryl`, `src/rv/`)
+## A RISC-V SoC with C programs (`veryl/examples/src/rvsoc.veryl`, `riscv/rvtools/src/`)
 `RvCore` is a **multi-cycle** RV32IMA + Zicsr (Decode → Exec, plus Mem for loads / LR / AMOs; 2 cycles per instruction, 3 per load, 35 per
 multiply / divide (iterative), machine-mode traps: timer / software / external interrupts, ecall, ebreak, illegal instructions, misaligned
 addresses, `mret`, `wfi`; enough for a preemptive multithreaded kernel) whose register file
 (two `SyncRam` copies for two read ports) and memory are synchronous-read RAMs, so they become `SB_RAM40_4K`. `RvSoc` adds an 8 KB
 memory of four byte lanes (`RvMem`), memory-mapped peripherals (LEDs 0x1000_0000, buttons + switches 0x…04, UART data / status 0x…08 / 0x…0C, a CLINT: `mtime` 0x…10, `mtimecmp` 0x…18, `msip` 0x…20)
-and a loader port for testbenches; `RvBoard` is the iCEBreaker top (`examples/rvsoc.pcf`): 3960 LUTs + 20 block RAMs, Fmax about 12.8 MHz (nextpnr; the clock is 12 MHz).
-`VgaText` (`examples/src/rvvga.veryl`) adds a 40 × 30 character VGA screen on the SoC's external write bus (characters and font in block RAM, a two-cycle pipeline);
+and a loader port for testbenches; `RvBoard` is the iCEBreaker top (`veryl/examples/rvsoc.pcf`): 3960 LUTs + 20 block RAMs, Fmax about 12.8 MHz (nextpnr; the clock is 12 MHz).
+`VgaText` (`veryl/examples/src/rvvga.veryl`) adds a 40 × 30 character VGA screen on the SoC's external write bus (characters and font in block RAM, a two-cycle pipeline);
 `RvVgaBoard` = 4072 LUTs + 26 block RAMs, about 13 MHz. Block RAM inference accepts memories whose unused data bits were already removed.
-`TestRvSoc` loads `rv32i_test.S` (data at 0x300, `examples/src/rvsoc_rom.veryl` from `examples/sw/build.sh`), runs it and checks its 41 results;
-`TestRvSocIma` (`examples/src/rvsoc_ima_test.veryl`, also from `build.sh`) runs `rv32ima_test.S` (M, A, Zicsr, traps) and checks it against spike;
-`veryl-eda/examples/rvsoc_small.veryl` (a 64-byte memory) is proven equivalent to `veryl build` by `test.sh`.
+`TestRvSoc` loads `rv32i_test.S` (data at 0x300, `veryl/examples/src/rvsoc_rom.veryl` from `veryl/examples/sw/build.sh`), runs it and checks its 41 results;
+`TestRvSocIma` (`veryl/examples/src/rvsoc_ima_test.veryl`, also from `build.sh`) runs `rv32ima_test.S` (M, A, Zicsr, traps) and checks it against spike;
+`veryl/synth/examples/rvsoc_small.veryl` (a 64-byte memory) is proven equivalent to `veryl build` by `test.sh`.
 The C compiler emits `mul` / `div` / `rem`, takes `asm("...")` statements and top-level `asm(...)` (a function whose body is only `asm` is emitted
 without prologue: a naked function), and a function's name is its address; the runtime has `interrupts_on/off`, `irq_save/restore`, `set_mtvec`,
-`set_mie`, CSR reads, `wfi`, `atomic_swap/add/and/or/xor/cas` (AMOs, LR/SC) and spinlocks. `examples/c/threads.c` is a small preemptive kernel:
+`set_mie`, CSR reads, `wfi`, `atomic_swap/add/and/or/xor/cas` (AMOs, LR/SC) and spinlocks. `veryl/examples/c/threads.c` is a small preemptive kernel:
 a 10 ms timer interrupt saves the registers on the thread's stack and switches threads round robin, `ecall` gives yield / sleep / exit, a mutex
 uses `amoswap`; `cargo test threads_on_rvsoc` runs it (with a shorter time slice) on the gate-level RvBoard and on the ISS: the same output and LEDs.
 
@@ -110,21 +110,21 @@ and `pnr::patch_ram` rewrites just those blocks' `.ram_data` in a placed-and-rou
 (`cargo test rvsoc_program_on_board`: the patched bitstream equals placing and routing with the program, and runs the ISA test on the virtual board).
 The optimizer keeps a memory that is never written (a ROM to be filled) instead of treating it as constant 0.
 
-**C compiler** (`src/rv/`): `cc.rs` compiles a subset of C — `char` (unsigned) / `short` / `int` / `unsigned`, pointers, arrays of any dimension,
+**C compiler** (`riscv/rvtools/src/`): `cc.rs` compiles a subset of C — `char` (unsigned) / `short` / `int` / `unsigned`, pointers, arrays of any dimension,
 every C operator, `if` / `while` / `do` / `for` / `switch`, globals with initializers, `...` arguments, a small preprocessor (`#define` with parameters, `#ifdef`) —
 to RV32I assembly: plain stack-based code with immediate forms, compare-and-branch and C source lines as comments. `prelude.c` is the runtime library
 (software multiply / divide, `putchar` / `getchar` / `printf` / `puts` / `read_line`, `delay_ms` / `millis`, `rand`, `strlen` / `strcmp` / `memcpy` …, the
 peripheral registers `LED`, `BUTTONS`, `SWITCHES`, `TIMER`, `UART_DATA`, `UART_STATUS`); only what `main` reaches is kept. `asm.rs` is a two-pass assembler
 (pseudo-instructions, `%hi` / `%lo`, `.data` / `.rodata` / `.bss`, a listing), `iss.rs` an instruction-set simulator with RvSoc's memory map and cycle counts.
 
-    veryl-eda --cc hello.c -o hello.bin -S hello.s --run       # compile, write the image and the assembly, run on the ISS
-    veryl-eda --top RvBoard --ice40 --pnr veryl --pcf ../examples/rvsoc.pcf --program hello.bin --bin soc.bin ../examples/src/{rv32i,sync_ram,uart,rvsoc}.veryl
+    reda cc hello.c -o hello.bin -S hello.s --run       # compile, write the image and the assembly, run on the ISS
+    reda synth --top RvBoard --ice40 --pnr veryl --pcf ../examples/rvsoc.pcf --program hello.bin --bin soc.bin ../examples/src/{rv32i,sync_ram,uart,rvsoc}.veryl
 
-Tests: `src/rv/tests/*.c` print exactly what the host C compiler's build prints (`cc -funsigned-char -fwrapv`); `cc_on_rvsoc` runs a compiled program
+Tests: `riscv/rvtools/tests/*.c` print exactly what the host C compiler's build prints (`cc -funsigned-char -fwrapv`); `cc_on_rvsoc` runs a compiled program
 on the gate-level `RvBoard` (program in its block RAMs) on the virtual board: the same serial output as the ISS. The virtual board's **CPU mode**
 (`Board::cpu`) runs a program on the ISS with RvSoc's pins and peripherals, about 5× faster than real time; the gate-level SoC runs at about 1% of real time.
 
-## Own place & route (`--pnr veryl`, `src/pnr/`)
+## Own place & route (`--pnr veryl`, `eda/src/fpga/pnr/`)
 iCE40UP5K only; the architecture comes from IceStorm's `chipdb-5k.txt` (set `VERYL_EDA_CHIPDB` if it is not found).
 | File | Contents |
 |---|---|
@@ -145,7 +145,7 @@ Verification:
 | RiscvSoc (own P&R) | 1252 / 5280 | 17.0 MHz (wirelength-only 15.6 MHz; the board runs at 12 MHz: passes) |
 | RiscvSoc (nextpnr) | 1279 / 5280 | 17.3 MHz |
 
-The own place & route also prints a rough power estimate (`src/pnr/power.rs`: net capacitance ≈ 5 fF × loads + 8 fF × routing segments, the global clock network every cycle, ≈ 24 pJ per block RAM access, static ≈ 75 µA).
+The own place & route also prints a rough power estimate (`eda/src/fpga/pnr/power.rs`: net capacitance ≈ 5 fF × loads + 8 fF × routing segments, the global clock network every cycle, ≈ 24 pJ per block RAM access, static ≈ 75 µA).
 
 ### Timing driven (on by default, `--no-timing-driven` turns it off)
 The first pass only looks at wirelength. Besides the forward arrival times, STA makes a backward pass for "the longest time still to go after each point",
@@ -162,7 +162,7 @@ refinement from the first placement, plus, for small designs (< 4000 cells), a f
 | RiscvSoc | 15.6 → 17.0 MHz | 107 → 115 MHz |
 | RiscvCore | (does not fit the UP5K) | 71.1 → 75.6 MHz |
 
-## ASIC back end (`--asic`, `src/asic/`)
+## ASIC back end (`--asic`, `eda/src/asic/`)
 **vlib** is a standard-cell library for teaching (row height 4.0 µm, site 0.5 µm, delays like a ~130 nm slow corner):
 `INV BUF NAND2 NOR2 AND2 OR2 XOR2 XNOR2 AOI21 OAI21 MUX2 TIEL TIEH DFF DFFN DFFR DFFS DFFNR DFFNS` (R/S pins active low).
 | File | Contents |
@@ -192,23 +192,23 @@ detail routing is rechecked from its segments and vias alone: no grid point shar
 and cells plus fillers covering every site exactly once;
 `./test.sh` proves the standard-cell netlist equivalent to the output of `veryl build` with yosys.
 
-## SKY130 (`--pdk sky130`, `src/pdk/`)
+## SKY130 (`--pdk sky130`, `eda/src/pdk/`)
 Since v2.0 the ASIC back end works on SkyWater's open SKY130 PDK (`sky130_fd_sc_hd`, the typical corner `tt_025C_1v80`) from
-the netlist to a DRC-clean GDSII layout: `veryl-eda --asic --pdk sky130 --verilog a.v --def a.def --gds a.gds DESIGN.veryl`.
+the netlist to a DRC-clean GDSII layout: `reda synth --asic --pdk sky130 --verilog a.v --def a.def --gds a.gds DESIGN.veryl`.
 Built up from v1.5 to v2.0 (`web/PLAN.md`, M23–M28).
-The flow keeps working on logical cells (INV, NAND2, AOI21, DFFR, ...); a `Tech` (`src/pdk/mod.rs`) binds each to a library
+The flow keeps working on logical cells (INV, NAND2, AOI21, DFFR, ...); a `Tech` (`eda/src/pdk/mod.rs`) binds each to a library
 cell: its name and pins, its width in placement sites, its pin access points on the routing grid, its timing, and the row /
 site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its files:
 
-- `src/pdk/liberty.rs` reads Liberty (groups and attributes, units, NLDM lookup tables with interpolation, pin `function`s and
-  `ff` groups); `src/pdk/lef.rs` reads LEF (sites, layers with pitch / width / spacing / RC, vias, cell sizes and pin shapes);
-  `src/pdk/def.rs` reads DEF back (to check what the flow wrote).
+- `eda/src/pdk/liberty.rs` reads Liberty (groups and attributes, units, NLDM lookup tables with interpolation, pin `function`s and
+  `ff` groups); `eda/src/pdk/lef.rs` reads LEF (sites, layers with pitch / width / spacing / RC, vias, cell sizes and pin shapes);
+  `eda/src/pdk/def.rs` reads DEF back (to check what the flow wrote).
 - Each binding is checked against the library: the Liberty function of the bound cell must have the logical cell's truth table
-  (flip-flops: clock edge, next state, clear / preset). `veryl-eda --pdk-check [DIR]` reads a full SKY130 directory
+  (flip-flops: clock edge, next state, clear / preset). `reda pdk [DIR]` reads a full SKY130 directory
   (`sky130_fd_sc_hd__tt_025C_1v80.lib`, `sky130_fd_sc_hd.tlef`, `sky130_fd_sc_hd_merged.lef` as in OpenROAD-flow-scripts'
-  `platforms/sky130hd`; `tools/sky130.sh` downloads them, `VERYL_EDA_SKY130` points to them): 428 cells, 441 macros in 0.1 s.
-- `--asic --pdk sky130` runs the whole flow on SKY130. The cells it needs come with veryl-eda (`pdk/sky130hd/`: Liberty, tech LEF,
-  cell LEF and GDS of 43 cells, cut by `tools/sky130_subset.py`; Apache-2.0); `--pdk sky130:DIR` reads the full files instead.
+  `platforms/sky130hd`; `eda/tools/sky130.sh` downloads them, `VERYL_EDA_SKY130` points to them): 428 cells, 441 macros in 0.1 s.
+- `--asic --pdk sky130` runs the whole flow on SKY130. The cells it needs come with veryl/synth (`pdk/sky130hd/`: Liberty, tech LEF,
+  cell LEF and GDS of 43 cells, cut by `eda/tools/sky130_subset.py`; Apache-2.0); `--pdk sky130:DIR` reads the full files instead.
   - mapping: memories stay flip-flops (no SRAM macro here); the negative-edge flip-flop without reset gets a clock inverter.
   - placement on `unithd` rows (0.46 × 2.72 µm sites, alternating N / FS), IO pins on their own grid nodes, a well tap
     (`tapvpwrvgnd_1`) every 20 µm of each row (cells shifted to make room, none farther than 14 µm from a tap), fillers `fill_8 … fill_1`.
@@ -219,8 +219,8 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
     Elmore RC on the wires.
   - `--verilog` / `--def` write the library's cell, pin, site, layer (met1–met4, li1 pins) and via names; the Verilog ends with
     behavioural models made from the Liberty functions. `--map-only` stops after the mapping.
-- design rules (v1.6): `src/asic/layout.rs` turns the result into rectangles (wires, the tech LEF's via definitions, pin
-  stubs, IO pins, rails, straps, via stacks) and `src/asic/drc.rs` checks them together with every cell's own pin and
+- design rules (v1.6): `eda/src/asic/layout.rs` turns the result into rectangles (wires, the tech LEF's via definitions, pin
+  stubs, IO pins, rails, straps, via stacks) and `eda/src/asic/drc.rs` checks them together with every cell's own pin and
   obstruction shapes: shorts, spacing (cut layers: between any two cuts), minimum area of lone via pads, and opens.
   The detailed router keeps SKY130's rules: met3 / met4 on every other track (their pitch is twice the grid's), no met1 on
   the tracks under the rails, met1-met2 vias on a checkerboard and never beside another net's pin via, the line ends and
@@ -229,37 +229,37 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   Vias are only where a path changes layer. Should a dense design not route clean, the flow tries again on a bigger die.
   `--asic --pdk sky130` prints the DRC summary (`-v`: examples); `cargo test` requires 0 for Ram and RiscvSoc
   (RiscvSoc: 0 shorts / spacing / area / opens at 32 % utilization).
-- LVS (v2.33, `src/asic/lvs.rs`): the router's net labels on the shapes are ignored; conductors are rebuilt from the geometry
+- LVS (v2.33, `eda/src/asic/lvs.rs`): the router's net labels on the shapes are ignored; conductors are rebuilt from the geometry
   alone (touching on a layer, cuts joining the layers, the cells' LEF pin shapes) and compared with the netlist for opens, shorts
   and cell types, power included (VPWR and VGND one piece each); IO and power labels are terminals. `cargo test` requires a clean
   result and breaks good layouts (a net removed, two nets joined, labels swapped, a cell replaced) to see each caught.
-  `--spice OUT.sp` (`src/asic/spice.rs`) writes a CDL-style netlist (the PDK cells' pin order checked against `sky130hd.cdl` by
-  the tests); `tools/lvs_check.py` extracts the connectivity from the GDS independently with KLayout (cells as black boxes).
+  `--spice OUT.sp` (`eda/src/asic/spice.rs`) writes a CDL-style netlist (the PDK cells' pin order checked against `sky130hd.cdl` by
+  the tests); `eda/tools/lvs_check.py` extracts the connectivity from the GDS independently with KLayout (cells as black boxes).
   Small dies used to get no power straps (IO pins blocked every column), leaving the rows' rails apart: SKY130 IO pins now keep
   off the first strap pair's columns.
-- Antenna rules (v2.34, `src/asic/antenna.rs`): the layout built up in process order (metal joining what it touches, cuts the layers
+- Antenna rules (v2.34, `eda/src/asic/antenna.rs`): the layout built up in process order (metal joining what it touches, cuts the layers
   below / above); on every layer each piece reaching gates keeps its side area (cut layers: area) per gate area under the tech
   LEF's `ANTENNADIFF(SIDE)AREARATIO` (interpolated at the diffusion area it reaches), gate / diffusion areas from the cells' LEF.
   A violating gate gets a `DIODE` beside it (`sky130_fd_sc_hd__diode_2`, a logical cell with no output or function; `Cell::out`
   gives it the unread net `NO_OUT`), the routing is redone and checked again, up to twelve rounds, a worse routing retried with the diodes elsewhere
-  (`VERYL_EDA_ANTENNA_FIX=0` turns it off). `tools/antenna_check.py` recomputes it independently from the GDS in KLayout (the
+  (`VERYL_EDA_ANTENNA_FIX=0` turns it off). `eda/tools/antenna_check.py` recomputes it independently from the GDS in KLayout (the
   real poly over diffusion, merged metal).
 - Timing constraints (v2.35, `src/sdc.rs`): an SDC subset (`create_clock`, `set_input_delay` / `set_output_delay`, `set_false_path` /
   `set_multicycle_path`, on ports, `all_inputs` / `all_outputs`, wildcards), `--sdc FILE` or `--clock MHZ`. The ASIC STA reports WNS / TNS /
   failing endpoints (input delays and `-from` exceptions move an input's launch, so propagating one arrival per net stays exact;
   flip-flops find their clock through the clock pin back to the clock port); the FPGA flows report the slack to the target and give
   nextpnr `--freq`. The wasm `asic` / `pnr` take `sdc`; the IDE has a target MHz box or the project's `.sdc`.
-- Timing closure (v2.36): `src/asic/extract.rs` extracts every net's RC tree from the detailed routing (the LEF's per-layer R per
+- Timing closure (v2.36): `eda/src/asic/extract.rs` extracts every net's RC tree from the detailed routing (the LEF's per-layer R per
   square, area / edge capacitance, the vias' cut resistance); the final STA uses its Elmore delays and wire capacitance
   (`sta::analyze_with`). With constraints and WNS < 0 (a library technology) the critical path's cells get stronger versions
   (`NAND2@2` / `@4`; the built-in subset gained SKY130's _2 / _4 cells, `netlist::base` lets the simulators treat them as the
   original) and heavily loaded critical nets move their other loads behind a buffer (`cts::upsize` / `isolate`); each change is
   tried on its own (small designs on the detailed routing and extraction, large ones on the estimate) and kept if it helps, and
   every round checks that the routing is no worse.
-- GDSII (v1.7): `--gds OUT.gds` (`src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
+- GDSII (v1.7): `--gds OUT.gds` (`eda/src/asic/gds.rs`) writes the PDK's own cell layouts (copied from its GDS) and a top cell that
   places them (mirrored on the FS rows) and draws the routing, vias, power grid and labelled IO pins on SKY130's layer numbers
   (met1 68/20, via 68/44, ...). Same-net via pads closer than the spacing are joined by small fills, so the metal has no notches.
-  `tools/gds_check.py` reads it back with KLayout's Python module (`pip install klayout`): one top cell, the instance / shape /
+  `eda/tools/gds_check.py` reads it back with KLayout's Python module (`pip install klayout`): one top cell, the instance / shape /
   label counts, no overlapping instances, and KLayout's own width and spacing checks of li1, met1-met4 and the cut layers on the
   flattened layout; `test.sh` runs it on every SKY130 design (`GDS_PY`: a Python with the module). RiscvSoc: 11,879 cell
   instances, 115,318 shapes, 8 MB, clean.
@@ -274,7 +274,7 @@ site / track dimensions. vlib is the built-in `Tech`; SKY130's comes from its fi
   `veryl build`'s output with the cell models yosys builds from the PDK's own Liberty file (`read_liberty`). The `cargo test`
   checks read the DEF back against the LEF (cells on the rows and sites, no overlaps, every site covered, tap distances).
 
-## Virtual board (`src/board/`)
+## Virtual board (`eda/src/fpga/board/`)
 The web IDE's virtual iCEBreaker: a fast cycle-based simulator of the iCE40-mapped netlist wired to the board's pins
 (`board/icebreaker.rs`: 12 MHz clock on pin 35, BTN_N, the red / green LEDs, the break-off section's LED1–5 and BTN1–3, PMOD1A/1B, the FTDI UART; pins from the design's pcf, or the tutorial's).
 The engine works on a generic `Design` (4-input truth tables — carries are 3-input majorities — flip-flops, block RAMs, named IO) and is **activity driven**:
@@ -297,7 +297,7 @@ Tests: `bin → asc → bin` is identity; the decoded bitstreams of 11 designs (
 
 Every declared signal gets placeholder wires up front, and drivers are recorded as aliases (placeholder bit → driving bit) resolved at the end in `optimize`;
 so the order of items in a module does not matter, and connecting a submodule's ports is just aliasing.
-Its needs are fundamentally different from veryl-sim's elaboration (symbolic execution vs. a simulation IR), so the two share no elaboration code.
+Its needs are fundamentally different from veryl/sim's elaboration (symbolic execution vs. a simulation IR), so the two share no elaboration code.
 
 Registers start at 0 (iCE40 flip-flops power up at 0): for example, with a constant program ROM, the CPU registers that are never written (x6..x31) and their read multiplexers disappear.
 
@@ -316,7 +316,7 @@ one copy per read port. Asynchronous reads (e.g. the RV32I register file, `Ram`)
 
 | Design | Without BRAM | With BRAM |
 |---|---|---|
-| SyncRam 512×8 (`examples/src/sync_ram.veryl`) | 12832 cells | 1 `SB_RAM40_4K` |
+| SyncRam 512×8 (`veryl/examples/src/sync_ram.veryl`) | 12832 cells | 1 `SB_RAM40_4K` |
 | BramMix (256×32, two read ports + logic) | 29059 cells, does not fit the UP5K | 4 BRAMs + 86 LCs, own P&R 49 MHz (icetime 46 MHz) |
 
 The own place & route supports BRAMs: the 30 RAM sites are annealed together, RAM pins routed (clocks on global networks), `RamConfig` bits and `.ram_data` written, STA covers RCLK→RDATA and the input setups.
@@ -339,7 +339,7 @@ constants wider than 256 bits, asynchronous-read memories in BRAM, SPRAM (`SB_SP
 (netsim simulates several clock domains and negative-edge flip-flops with `tick(clk)`; `step()` clocks every flip-flop at once)
 own place & route: UP5K only, no LUT input pin swapping;
 SKY130: no SRAM macros (memories are flip-flops), one corner (typical), no wide-metal spacing tables, antenna rules or LVS,
-the GDS check (`tools/gds_check.py`) uses KLayout's width / spacing rules, not the full SKY130 rule deck.
+the GDS check (`eda/tools/gds_check.py`) uses KLayout's width / spacing rules, not the full SKY130 rule deck.
 
 ## Verification results (`./test.sh`)
 | Design | Equivalence with `veryl build` |
@@ -349,8 +349,8 @@ the GDS check (`tools/gds_check.py`) uses KLayout's width / spacing rules, not t
 | Ram / RegFile / RiscvCore | bounded model checking, 8 / 2 / 2 cycles |
 | RiscvSoc | bounded model checking, 80 cycles (the whole program) |
 | RiscvTestRom (the rv32i test program ROM) | complete SAT proof |
-| `examples/features.veryl`: Shifter / Funcs / Ranges / Counter / Top | SAT / SAT / SAT / k-induction / BMC 20 |
-| Div / Wide (`examples/lang.veryl`) | complete SAT proof |
+| `veryl/examples/features.veryl`: Shifter / Funcs / Ranges / Counter / Top | SAT / SAT / SAT / k-induction / BMC 20 |
+| Div / Wide (`veryl/examples/lang.veryl`) | complete SAT proof |
 | HsTop (interface handshake) | bounded model checking, 24 cycles |
 | SyncRam / Bram2048x2 / BramMix / Fifo (block RAM) | bounded model checking, 4 / 4 / 12 / 6 cycles |
 | UartLoop / VgaTiming | bounded model checking, 24 / 8 cycles |

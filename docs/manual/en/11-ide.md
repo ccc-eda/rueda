@@ -1,6 +1,6 @@
 # 11. Web IDE
 
-<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>
+<https://ccc-eda.github.io/rueda/web/dist/index.html>
 
 The whole toolchain (simulator, synthesizer, FPGA and ASIC flows, C compiler) is compiled to WebAssembly and served on a web page,
 **no server needed, no code uploaded**: all computation happens in your browser. Download the whole `web/dist/` directory and open it with `file://` to use it offline.
@@ -49,7 +49,7 @@ The **▾** next to it lists all actions, grouped into three by "what you want t
 |---|---|
 | Verify | ▶ Test, ✔ Full verification |
 | See the circuit | ⚙ Synthesis: FPGA (iCE40), ASIC · vlib, ASIC · SKY130, ⇄ FPGA vs ASIC comparison |
-| Run it | ⚡ Virtual board, 🖥 Machine (RV64 board can choose riscv-emu or veryl-emu) |
+| Run it | ⚡ Virtual board, 🖥 Machine (RV64 board can choose riscv/rvemu or veryl/emu) |
 
 The recommended action is labeled "Recommended". Actions this project cannot use are dimmed, and the description says why; clicking one pops up the reason and what you can do, e.g. "add pins.pcf",
 "flash anyway (default pins)", "open main.py", "🖥 boot".
@@ -89,15 +89,15 @@ The features are exactly the same as on desktop (the same page); URL parameters 
   "See examples like this" opens the example library filtered to that category. Below are ＋ New project, 📚 Open example, ⇪ Import `.veryl` files, and recent projects.
   Choosing a card only decides where you start; the interface is never locked: the main button and ▾ keep following the project.
 - Projects opened from an example can be edited without affecting the example; "Restore example source" returns to the original, and edited files are marked on their tabs.
-- Downloading a project `.zip` gives `Veryl.toml` + `src/`, a project the official `veryl` can use; `v2c` reads `src/*.veryl` directly.
+- Downloading a project `.zip` gives `Veryl.toml` + `src/`, a project the official `veryl` can use; `reda` reads `src/*.veryl` directly.
 - C programs: name the file `xxx.c` when adding it (one per project), and the design must use `RvBoard` (easiest to start from the "C programs" example).
 
 ## Testing and verification
 
 | Action | Command-line equivalent |
 |---|---|
-| ▶ Test (Ctrl/⌘+Enter) | `v2c sim` |
-| Simulate: RTL / gate-level: generic gates / iCE40 / standard cells | `v2c gatesim opt / ice40 / asic` |
+| ▶ Test (Ctrl/⌘+Enter) | `reda sim` |
+| Simulate: RTL / gate-level: generic gates / iCE40 / standard cells | `reda gatesim opt / ice40 / asic` |
 | ✔ Full verification | Run RTL and all three netlists once each and compare |
 | Simulation top menu | `--top` (default: all `#[test]`) |
 
@@ -126,7 +126,7 @@ target (ASIC: WNS, TNS, number of failing endpoints). If the project has a `.sdc
 |---|---|---|
 | ① RTL→Logic | shared: logic mapped from the Veryl source | |
 | ② Logic Netlist | shared: gate-level netlist before optimization | |
-| ③ Tech-indep Syn | shared: after optimization (`v2c synth`) | |
+| ③ Tech-indep Syn | shared: after optimization (`reda synth`) | |
 | ④ | LUT4 mapping (`SB_LUT4` / `SB_CARRY`…) | standard-cell mapping |
 | ⑤ | Placement (annealing animation) | row-based placement (annealing animation) |
 | ⑥ | Global and detailed routing | clock tree + global routing |
@@ -149,7 +149,7 @@ target (ASIC: WNS, TNS, number of failing endpoints). If the project has a `.sdc
 ## Machine (🖥)
 
 Some designs don't fit an FPGA and don't suit an ASIC either, e.g. the RV64 SoC with 256 MB of RAM. Such designs are "made real" in a third way:
-the "🖥 Machine" button in the title bar uses veryl-emu (`veryl-emu/`, see the source map in chapter 13) to compile the design to WebAssembly and boot it as a machine in a background worker of the browser,
+the "🖥 Machine" button in the title bar uses veryl/emu (`veryl/emu`, see the source map in chapter 13) to compile the design to WebAssembly and boot it as a machine in a background worker of the browser,
 with the UART connected to the terminal in the tab.
 
 - The project needs a `machine.json` describing the top module and what the pins are for:
@@ -182,18 +182,18 @@ with the UART connected to the terminal in the tab.
   `micropython <file>` (`.sh` runs `sh <file>`); if the board isn't on it boots first. "▶ Run main.py" on the machine toolbar does the same.
   Examples: `main.py` (the red LED on GPIO 5 and the USER LED take turns), `button.py` (counts button presses), `traffic.py` (red/yellow/green lights on the breadboard at GPIO 5 / 12 / 13,
   with a button on GPIO 6 ending green early).
-- **C** (v2.20): a board project can have several `.c` files; open one and press "▶ Run", and the IDE uses veryl-eda's C compiler (`--linux`, see chapter 10) in the browser to
+- **C** (v2.20): a board project can have several `.c` files; open one and press "▶ Run", and the IDE uses veryl/synth's C compiler (`--linux`, see chapter 10) in the browser to
   compile it into an RV64 Linux executable, puts it into `/root` (filename without `.c`) and runs `./<file>`; compile errors appear in the Problems panel. The assembly tab shows the open `.c`.
   Library: `printf`, `delay_ms`, `gpio_write`, `gpio_read`, `pin_mode`, file `open` / `read` / `write`, etc. Examples `blink.c`, `count.c`,
   `lights.c` match the three MicroPython examples. `savefiles` does not send compiled executables back to the project (it only accepts text files).
-- **Target menu** (v2.25): the title bar's target menu has two groups: synthesis (FPGA, ASIC · vlib, ASIC · SKY130) and machine (veryl-emu, riscv-emu).
+- **Target menu** (v2.25): the title bar's target menu has two groups: synthesis (FPGA, ASIC · vlib, ASIC · SKY130) and machine (veryl/emu, riscv/rvemu).
   Choosing a machine opens the machine tab and boots with that engine; choosing synthesis returns to the synthesis flow. The menu follows the tab (showing the machine's engine while on the machine tab),
-  and machines this project cannot use are greyed out (no `machine.json`, or riscv-emu when the design is not Rv64Soc). How to choose among the four targets: [chapter 15](15-targets.md).
-- **Engine** (v2.23): when `machine.json` has `"riscv": true` (the design is Rv64Soc), the machine toolbar can choose an engine: **riscv-emu** (default) simulates only the instruction set,
-  like QEMU — a cold boot reaches a shell in seconds, `sleep(1)` really takes one second (time follows the clock), and the status bar shows MIPS; **veryl-emu** simulates the Veryl hardware itself
+  and machines this project cannot use are greyed out (no `machine.json`, or riscv/rvemu when the design is not Rv64Soc). How to choose among the four targets: [chapter 15](15-targets.md).
+- **Engine** (v2.23): when `machine.json` has `"riscv": true` (the design is Rv64Soc), the machine toolbar can choose an engine: **riscv/rvemu** (default) simulates only the instruction set,
+  like QEMU — a cold boot reaches a shell in seconds, `sleep(1)` really takes one second (time follows the clock), and the status bar shows MIPS; **veryl/emu** simulates the Veryl hardware itself
   (every cycle, every signal, booted from a snapshot) — choose it to see your own edited Veryl design. GPIO, breadboard, files, ▶ Run, screen, and 💾 work the same on both engines
-  (a saved state belongs to the engine that saved it). riscv-emu does not read the project's Veryl source: its SoC is [riscv-emu](../riscv-emu/README.tw.md) written after Rv64Soc.
-  Since v2.24 riscv-emu translates hot program blocks to WebAssembly (like QEMU), about 4× faster for long-running programs.
+  (a saved state belongs to the engine that saved it). riscv/rvemu does not read the project's Veryl source: its SoC is [riscv/rvemu](../../../riscv/rvemu/README.tw.md) written after Rv64Soc.
+  Since v2.24 riscv/rvemu translates hot program blocks to WebAssembly (like QEMU), about 4× faster for long-running programs.
 - **Screen** (v2.21): when `machine.json` has `"fb": { "addr": "0x8EF00000", "width": 320, "height": 240 }`, a 320 × 240 screen appears between the board and the breadboard:
   Linux's `simple-framebuffer` (`/dev/fb0`, RGB565) lives in RAM, and the worker checks it every 0.1 s, drawing to the canvas only on change.
   At boot fbcon (tty1) shows a greeting; `echo hi > /dev/tty1` writes text on the screen. MicroPython: `from pi import Screen` is a 320 × 240
@@ -224,8 +224,8 @@ with the UART connected to the terminal in the tab.
 
 When the project has a `.c` file:
 
-- "C: view assembly" in the command menu opens the assembly tab (same as `v2c cc -S`).
-- "C: run on the instruction-set simulator" prints the serial output to the Output panel (same as `v2c cc --run`; you can enter the text to feed the program first).
+- "C: view assembly" in the command menu opens the assembly tab (same as `reda cc -S`).
+- "C: run on the instruction-set simulator" prints the serial output to the Output panel (same as `reda cc --run`; you can enter the text to feed the program first).
 - ⚡ Virtual board compiles and loads the C automatically (chapter 12).
 
 ## Keyboard
@@ -244,14 +244,14 @@ When the project has a `.c` file:
 
 | Category | Examples |
 |---|---|
-| Tutorial | Blinky, Knight rider, UART echo (`tutorial/`) |
-| Labs | Button counter, traffic-light state machine, breadboard logic gates (used by `tutorial/labs.tw.md`) |
+| Tutorial | Blinky, Knight rider, UART echo (`veryl/tutorial/`) |
+| Labs | Button counter, traffic-light state machine, breadboard logic gates (used by `veryl/tutorial/labs.tw.md`) |
 | Basics | Adder, package + enum, generate, function |
 | Sequential | Counter, state machine, RAM, block RAM, FIFO, struct, seven-segment display |
 | Peripherals | UART, VGA |
 | RV64 board | Linux + MicroPython + C + screen (machine); knight rider, reaction-time game, breathing LED, snake, Tetris, system monitor, Linux command intro |
 | RISC-V | Single-cycle RV32I, RISC-V SoC |
-| C programs | The 8 programs in `examples/c/` on `RvBoard` |
+| C programs | The 8 programs in `veryl/examples/c/` on `RvBoard` |
 | Mixed | Carry chain, multiple block RAMs, a grab-bag of language features |
 
 The filter buttons above the example library (All, 🧪, ⚡, 🖥, ⚙, with counts) show only examples that can do that thing; the choice is remembered in the browser, and the welcome page's cards set it too.

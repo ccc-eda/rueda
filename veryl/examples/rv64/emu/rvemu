@@ -1,0 +1,4 @@
+#!/bin/sh
+# The RV64 board's instruction-set emulator (reda rvemu) as one command, for the test scripts'
+# SIM: SIM=emu/rvemu sim/riscv_tests.sh, linux/test.sh, xv6/test.sh, verify/random.sh.
+exec "$(dirname "$0")/../../../../target/release/reda" rvemu "$@"

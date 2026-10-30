@@ -1,6 +1,6 @@
 # 11. 网页 IDE
 
-<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>
+<https://ccc-eda.github.io/rueda/web/dist/index.html>
 
 整套工具（仿真器、综合器、FPGA 与 ASIC 流程、C 编译器）编成 WebAssembly 放在网页里，
 **不需要服务器、不上传代码**：所有计算都在你的浏览器里做。`web/dist/` 整个目录下载下来，用 `file://` 打开也能脱机用。
@@ -48,7 +48,7 @@
 |---|---|
 | 验证 | ▶ 测试、✔ 全面验证 |
 | 看电路 | ⚙ 综合：FPGA（iCE40）、ASIC · vlib、ASIC · SKY130，⇄ FPGA 与 ASIC 比较 |
-| 跑起来 | ⚡ 虚拟板、🖥 仿真机（RV64 开发板可选 riscv-emu 或 veryl-emu） |
+| 跑起来 | ⚡ 虚拟板、🖥 仿真机（RV64 开发板可选 riscv/rvemu 或 veryl/emu） |
 
 建议的那一项标着「建议」。这个项目用不到的动作是淡色的，说明写的是原因；点了会跳出原因与能做的事，例如「添加 pins.pcf」
 「仍要刻录（默认引脚）」「打开 main.py」「🖥 开机」。
@@ -88,15 +88,15 @@
   「看这一类的示例」打开示例库并筛选成那一类。下面是＋ 新项目、📚 打开示例、⇪ 导入 `.veryl` 档、最近的项目。
   选了卡片只决定从哪里开始，接口不会被锁住：主按钮与 ▾ 照样跟着项目走。
 - 从示例开的项目改了也不会影响示例；「还原成示例源代码」可以回到原样，改过的文件在分页上有标记。
-- 下载项目 `.zip`：`Veryl.toml` + `src/`，就是一个官方 `veryl` 能用的项目；`v2c` 直接读 `src/*.veryl` 即可。
+- 下载项目 `.zip`：`Veryl.toml` + `src/`，就是一个官方 `veryl` 能用的项目；`reda` 直接读 `src/*.veryl` 即可。
 - C 程序：添加文件时取名 `xxx.c`（一个项目一个），设计要用 `RvBoard`（从「C 程序」示例开始最简单）。
 
 ## 测试与验证
 
 | 动作 | 对应的命令行 |
 |---|---|
-| ▶ 测试（Ctrl/⌘+Enter） | `v2c sim` |
-| 仿真对象：RTL / 门级：通用门 / iCE40 / 标准单元 | `v2c gatesim opt / ice40 / asic` |
+| ▶ 测试（Ctrl/⌘+Enter） | `reda sim` |
+| 仿真对象：RTL / 门级：通用门 / iCE40 / 标准单元 | `reda gatesim opt / ice40 / asic` |
 | ✔ 全面验证 | RTL 和三种网表各跑一次，比较结果 |
 | 仿真顶层菜单 | `--top`（默认：全部 `#[test]`） |
 
@@ -125,7 +125,7 @@
 |---|---|---|
 | ① RTL→Logic | 共用：Veryl 源代码对应到的逻辑 | |
 | ② Logic Netlist | 共用：优化前的门级网表 | |
-| ③ Tech-indep Syn | 共用：优化后（`v2c synth`） | |
+| ③ Tech-indep Syn | 共用：优化后（`reda synth`） | |
 | ④ | LUT4 对应（`SB_LUT4` / `SB_CARRY`…） | 标准单元对应 |
 | ⑤ | 布局（退火动画） | 行式布局（退火动画） |
 | ⑥ | 全局与详细布线 | 时钟树 + 全局布线 |
@@ -148,7 +148,7 @@
 ## 仿真机（🖥）
 
 有些设计放不进 FPGA，也不适合走 ASIC，例如有 256 MB RAM 的 RV64 SoC。这种设计用第三种方式「实体化」：
-标题列的「🖥 仿真机」用 veryl-emu（`veryl-emu/`，见第 13 章的源代码地图）把设计编译成 WebAssembly，在浏览器的背景 worker 里当成一台机器开机，
+标题列的「🖥 仿真机」用 veryl/emu（`veryl/emu`，见第 13 章的源代码地图）把设计编译成 WebAssembly，在浏览器的背景 worker 里当成一台机器开机，
 UART 接到分页里的终端机。
 
 - 项目要有 `machine.json`，说明顶层模块和引脚的用途：
@@ -181,18 +181,18 @@ UART 接到分页里的终端机。
   `micropython 檔名`（`.sh` 是 `sh 檔名`）；板子没开时先开机。仿真机工具列的「▶ 运行 main.py」做同样的事。
   示例：`main.py`（GPIO 5 的红灯与 USER 灯轮流亮）、`button.py`（数按钮次数）、`traffic.py`（面包板上的红黄绿灯 GPIO 5 / 12 / 13，
   GPIO 6 的按钮让绿灯提早结束）。
-- **C**（v2.20）：开发板项目可以有好几个 `.c` 档；打开一个按「▶ 运行」，IDE 用 veryl-eda 的 C 编译器（`--linux`，见第 10 章）在浏览器里
+- **C**（v2.20）：开发板项目可以有好几个 `.c` 档；打开一个按「▶ 运行」，IDE 用 veryl/synth 的 C 编译器（`--linux`，见第 10 章）在浏览器里
   编成 RV64 Linux 运行档，放进 `/root`（文件名去掉 `.c`）再运行 `./檔名`；编译错误在「问题」面板。汇编语言分页显示打开的那个 `.c`。
   函数库：`printf`、`delay_ms`、`gpio_write`、`gpio_read`、`pin_mode`、文件的 `open` / `read` / `write` 等。示例 `blink.c`、`count.c`、
   `lights.c` 对应三个 MicroPython 示例。`savefiles` 不会把编译出来的运行档送回项目（只收文本档）。
-- **目标菜单**（v2.25）：标题列的目标菜单有两组：综合（FPGA、ASIC · vlib、ASIC · SKY130）与仿真机（veryl-emu、riscv-emu）。
+- **目标菜单**（v2.25）：标题列的目标菜单有两组：综合（FPGA、ASIC · vlib、ASIC · SKY130）与仿真机（veryl/emu、riscv/rvemu）。
   选仿真机就打开仿真机分页、用那个引擎开机；选综合就回到综合流程。菜单跟着分页走（在仿真机分页显示它的引擎），项目用不到的仿真机
-  是灰的（没有 `machine.json`，或不是 Rv64Soc 时的 riscv-emu）。四种目标怎么选见[第 15 章](15-targets.md)。
-- **引擎**（v2.23）：`machine.json` 有 `"riscv": true`（设计是 Rv64Soc）时，仿真机工具列可以选引擎：**riscv-emu**（默认）只仿真指令集，
-  像 QEMU，冷开机几秒就有 shell，`sleep(1)` 就是真的一秒（时间跟着时钟走），状态栏显示 MIPS；**veryl-emu** 仿真 Veryl 写的硬件本身
+  是灰的（没有 `machine.json`，或不是 Rv64Soc 时的 riscv/rvemu）。四种目标怎么选见[第 15 章](15-targets.md)。
+- **引擎**（v2.23）：`machine.json` 有 `"riscv": true`（设计是 Rv64Soc）时，仿真机工具列可以选引擎：**riscv/rvemu**（默认）只仿真指令集，
+  像 QEMU，冷开机几秒就有 shell，`sleep(1)` 就是真的一秒（时间跟着时钟走），状态栏显示 MIPS；**veryl/emu** 仿真 Veryl 写的硬件本身
   （每一拍、每个信号，从快照开机），要看自己改过的 Veryl 设计就选它。GPIO、面包板、文件、▶ 运行、屏幕、💾 两种引擎都一样
-  （存下的状态属于存它的引擎）。riscv-emu 不看项目的 Veryl 源代码：它的 SoC 是 [riscv-emu](../riscv-emu/README.tw.md) 照 Rv64Soc 写的。
-  v2.24 起 riscv-emu 把常跑的程序片段翻成 WebAssembly（像 QEMU），一直在跑的程序约快四倍。
+  （存下的状态属于存它的引擎）。riscv/rvemu 不看项目的 Veryl 源代码：它的 SoC 是 [riscv/rvemu](../../../riscv/rvemu/README.tw.md) 照 Rv64Soc 写的。
+  v2.24 起 riscv/rvemu 把常跑的程序片段翻成 WebAssembly（像 QEMU），一直在跑的程序约快四倍。
 - **屏幕**（v2.21）：`machine.json` 有 `"fb": { "addr": "0x8EF00000", "width": 320, "height": 240 }` 时，板子和面包板之间多一个
   320 × 240 的屏幕：Linux 的 `simple-framebuffer`（`/dev/fb0`，RGB565）放在 RAM 里，worker 每 0.1 秒看一次，有变化才画到 canvas。
   开机时 fbcon（tty1）显示问候语；`echo hi > /dev/tty1` 写字到屏幕上。MicroPython：`from pi import Screen` 是 320 × 240 的
@@ -223,8 +223,8 @@ UART 接到分页里的终端机。
 
 项目有 `.c` 档时：
 
-- 命令菜单的「C：查看汇编语言」打开汇编语言分页（与 `v2c cc -S` 相同）。
-- 「C：在指令集仿真器上运行」把串口输出印到输出面板（等于 `v2c cc --run`，可以先输入要送给程序的文本）。
+- 命令菜单的「C：查看汇编语言」打开汇编语言分页（与 `reda cc -S` 相同）。
+- 「C：在指令集仿真器上运行」把串口输出印到输出面板（等于 `reda cc --run`，可以先输入要送给程序的文本）。
 - ⚡ 虚拟板会自动编译 C 并加载（第 12 章）。
 
 ## 键盘
@@ -243,14 +243,14 @@ UART 接到分页里的终端机。
 
 | 分类 | 示例 |
 |---|---|
-| 教学 | Blinky、跑马灯、UART 回声（`tutorial/`） |
-| 实验 | 按一下加一、红绿灯状态机、面包板逻辑门（`tutorial/labs.tw.md` 用） |
+| 教学 | Blinky、跑马灯、UART 回声（`veryl/tutorial/`） |
+| 实验 | 按一下加一、红绿灯状态机、面包板逻辑门（`veryl/tutorial/labs.tw.md` 用） |
 | 基础 | 加法器、package + enum、generate、function |
 | 时序 | 计数器、状态机、RAM、block RAM、FIFO、struct、七段显示器 |
 | 周边 | UART、VGA |
 | RV64 开发板 | Linux + MicroPython + C + 屏幕（仿真机）；跑马灯、反应时间游戏、呼吸灯、贪食蛇、俄罗斯方块、系统监视器、Linux 指令入门 |
 | RISC-V | 单周期 RV32I、RISC-V SoC |
-| C 程序 | `examples/c/` 的 8 个程序在 `RvBoard` 上 |
+| C 程序 | `veryl/examples/c/` 的 8 个程序在 `RvBoard` 上 |
 | 综合 | 进位链、多块 block RAM、语言功能大杂烩 |
 
 示例库上方的筛选钮（全部、🧪、⚡、🖥、⚙，旁边是个数）只显示能做那件事的示例，选择记在浏览器里；欢迎页的卡片也会设置它。

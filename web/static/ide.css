@@ -1,4 +1,4 @@
-/* veryl2chip IDE: a VS Code style workbench (layout on top of style.css) */
+/* rueda IDE: a VS Code style workbench (layout on top of style.css) */
 body.ide {
   --bg: #1e1e1e; --side: #252526; --act: #333333; --tab: #2d2d2d; --line: #3c3c3c; --fg: #d4d4d4; --dim: #8f99a6;
   --accent: #0e7ad1; --sel: #04395e; --hover: #2a2d2e; --err: #f14c4c; --warn: #cca700; --ok: #4ec98a;

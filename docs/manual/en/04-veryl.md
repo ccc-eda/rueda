@@ -1,14 +1,14 @@
-# 4. Veryl for veryl2chip
+# 4. Veryl for rueda
 
-veryl2chip reads ordinary Veryl (parsed with `veryl-parser` 0.22); the files need no special format.
-The official `veryl check` is the ground truth for syntax and semantics; veryl2chip's simulator is deliberately smaller, and what it reports as "not supported" is not necessarily a syntax error.
+rueda reads ordinary Veryl (parsed with `veryl-parser` 0.22); the files need no special format.
+The official `veryl check` is the ground truth for syntax and semantics; rueda's simulator is deliberately smaller, and what it reports as "not supported" is not necessarily a syntax error.
 
 ## Files of a design
 
-- You can pass several `.veryl` files at once: `v2c sim a.veryl b.veryl`. Modules may reference each other, in any order.
+- You can pass several `.veryl` files at once: `reda sim a.veryl b.veryl`. Modules may reference each other, in any order.
 - Packages, enums (members written as `Pkg::EnumName::Member`), structs (the first field is at the MSB, as in SystemVerilog),
   const, function, interface and modport, generate for / if are all supported.
-- A Veryl project with a `Veryl.toml` works directly too: just hand the `src/*.veryl` files to `v2c`.
+- A Veryl project with a `Veryl.toml` works directly too: just hand the `src/*.veryl` files to `reda`.
 
 ## Testbench
 
@@ -39,7 +39,7 @@ module TestX {
 
 ## Supported syntax
 
-| Simulation (`v2c sim`) | Synthesis (`v2c synth / fpga / asic`) |
+| Simulation (`reda sim`) | Synthesis (`reda synth / fpga / asic`) |
 |---|---|
 | module, parameters, const, port, `var`, `let`, `assign`, `always_comb`, `always_ff` (`if_reset`, sync / async reset, rising / falling edge), `if`, `case`, `switch`, `for`, `inst`, `initial`, `final` | same as left (`initial` / `final` and `$display`-like calls are ignored) |
 | package, enum, struct, 1-D arrays, function (no recursion), generate, `import Pkg::*`, interface / modport | same as left; arrays read/written with a variable index become multiplexers / decoders |
@@ -53,7 +53,7 @@ module TestX {
 
 - **Memories**: an array is recognized as a memory if it is written as whole elements in **one** `always_ff` and also read as whole elements.
   If the read data goes through a register (**synchronous read**), it becomes a block RAM (`SB_RAM40_4K`) on FPGA and an SRAM macro on the vlib ASIC;
-  asynchronous-read memories stay in logic. Example: `examples/src/sync_ram.veryl`.
+  asynchronous-read memories stay in logic. Example: `veryl/examples/src/sync_ram.veryl`.
 - **Initial values**: the optimizer assumes flip-flops power up at 0 (true on iCE40); registers that are never written are removed as constant 0.
 - **Top level**: synthesis defaults to the **last non-testbench** module; add `--top` to synthesize something else.
 
@@ -63,4 +63,4 @@ module TestX {
 - Enum members must be fully qualified: `Pkg::EnumName::Member`, not `Pkg::Member`.
 - `bit` is a reserved keyword and cannot be used as a name.
 - Array writes without a reset make `veryl check` warn `missing_reset_statement`; put `#[allow(missing_reset_statement)]` before that `always_ff`.
-- Veryl 0.22's built-in simulator (`veryl test`) mis-simulates interface designs; veryl2chip and iverilog agree.
+- Veryl 0.22's built-in simulator (`veryl test`) mis-simulates interface designs; rueda and iverilog agree.

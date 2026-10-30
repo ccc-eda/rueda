@@ -1,4 +1,4 @@
-# 1. Meet veryl2chip
+# 1. Meet rueda
 
 ## What It Can Do
 
@@ -6,17 +6,17 @@ Take a digital circuit design written in Veryl all the way to "a flashable FPGA"
 
 ```
 Veryl source
-   │  v2c sim        simulate: run #[test] testbenches, view waveforms
+   │  reda sim        simulate: run #[test] testbenches, view waveforms
    ▼
-gate netlist      v2c synth      synthesize: elaborate and optimize to AND / OR / XOR / MUX / flip-flops
+gate netlist      reda synth      synthesize: elaborate and optimize to AND / OR / XOR / MUX / flip-flops
    │
-   ├─► FPGA   v2c fpga       iCE40UP5K: LUT mapping → place → route → timing → bitstream (flash to iCEBreaker with iceprog)
+   ├─► FPGA   reda fpga       iCE40UP5K: LUT mapping → place → route → timing → bitstream (flash to iCEBreaker with iceprog)
    │
-   └─► ASIC   v2c asic       standard-cell mapping → row-based placement → clock tree → routing → timing → power
+   └─► ASIC   reda asic       standard-cell mapping → row-based placement → clock tree → routing → timing → power
                               (vlib teaching cell library, or SkyWater SKY130: adds DRC and GDSII layout)
 
-synthesized netlist → v2c gatesim   re-simulate with the same testbench to confirm synthesis did not change behavior
-C program           → v2c cc        compile for the project's RISC-V SoC (itself written in Veryl)
+synthesized netlist → reda gatesim   re-simulate with the same testbench to confirm synthesis did not change behavior
+C program           → reda cc        compile for the project's RISC-V SoC (itself written in Veryl)
 ```
 
 All the tools are written in this project itself (the simulator, synthesizer, FPGA place & route and bitstream, ASIC back end, C compiler);
@@ -24,9 +24,9 @@ the only places external tools are needed are: flashing a physical board (`icepr
 
 ## Two Ways to Use It
 
-| | Web IDE | Command line `v2c` |
+| | Web IDE | Command line `reda` |
 |---|---|---|
-| Install | None, just open the page ([online version](https://ccc-eda.github.io/veryl2chip/web/dist/index.html)) | `cargo install veryl2chip-eda` |
+| Install | None, just open the page ([online version](https://ccc-eda.github.io/rueda/web/dist/index.html)) | `cargo install --git https://github.com/ccc-eda/rueda rueda` |
 | Good for | Classes, experiments, seeing each stage's diagram, the virtual board | Automation, large designs, integration into other flows |
 | Capability | Simulation, waveforms, diagrams of every synthesis stage, FPGA / ASIC (incl. SKY130), virtual board, C programs | The same flows, with file output (JSON, Verilog, `.asc`, `.bin`, DEF, GDS, VCD) |
 
@@ -51,11 +51,12 @@ Both use the **same program** (the web page runs the same Rust code compiled to 
 
 | Directory | Content |
 |---|---|
-| `veryl-sim/` | The simulator (crate `veryl2chip-sim`) |
-| `veryl-eda/` | Synthesis, FPGA, ASIC, C compiler, virtual board engine, and the `v2c` command (crate `veryl2chip-eda`) |
-| `veryl-wasm/` | The above two compiled to WebAssembly |
-| `web/` | The web IDE (`web/dist/index.html`) |
-| `examples/` | Example designs (adders, state machines, UART, VGA, RISC-V…) and C programs (`examples/c/`) |
-| `tutorial/` | The from-zero tutorial and the virtual lab course |
-| `tools/` | Small utilities: downloading SKY130, checking GDS, etc. |
-| `manual/` | This manual |
+| `reda/` | The `reda` command: every tool as a subcommand (`reda sim`, `reda synth`, `reda fpga`, …) |
+| `eda/` | The language-independent back end: gate netlist, FPGA mapping, place & route and bitstream, the ASIC flow, the virtual board |
+| `veryl/` | The Veryl language: simulator (`sim/`), synthesis (`synth/`), compiled emulator (`emu/`), examples, tutorial |
+| `fluxa/` | The Fluxa language (HLS: tasks and channels): its simulator, examples, RV32I / RV64 processors |
+| `riscv/` | RISC-V software tools: C compiler, assembler, instruction-set simulator (`rvtools/`), the RV64 board emulator (`rvemu/`) |
+| `web/` | The web IDE (`web/dist/index.html`) and its WebAssembly core (`web/wasm/`) |
+| `veryl/examples/` | Example designs (adders, state machines, UART, VGA, RISC-V…) and C programs (`veryl/examples/c/`) |
+| `veryl/tutorial/` | The from-zero tutorial and the virtual lab course |
+| `docs/manual/` | This manual |

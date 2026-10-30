@@ -214,7 +214,7 @@ export class PiBoard {
     s += `<text x="76" y="56" class="pi-t" text-anchor="end">1</text><text x="490" y="34" class="pi-t">40</text>`;
     // the SoC
     s += `<rect x="190" y="100" width="92" height="92" rx="6" class="pi-chip"/><text x="236" y="140" class="pi-chip-t" text-anchor="middle">Rv64Core</text><text x="236" y="156" class="pi-t" text-anchor="middle">RV64IMAC</text><text x="236" y="170" class="pi-t" text-anchor="middle">256 MB</text>`;
-    s += `<text x="236" y="210" class="pi-t" text-anchor="middle">veryl2chip RV64 ${tr('開發板', 'board')}</text>`;
+    s += `<text x="236" y="210" class="pi-t" text-anchor="middle">rueda RV64 ${tr('開發板', 'board')}</text>`;
     // UART and power
     s += `<rect x="16" y="110" width="44" height="40" rx="4" class="pi-usb"/><text x="38" y="166" class="pi-t" text-anchor="middle">UART</text>`;
     // LEDs: PWR (red, while running), ACT = GPIO 0 (green), USER = GPIO 1 (yellow)

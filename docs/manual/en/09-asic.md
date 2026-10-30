@@ -1,7 +1,7 @@
-# 9. ASIC: `v2c asic`
+# 9. ASIC: `reda asic`
 
 ```
-v2c asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
+reda asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
          [--verilog OUT.v] [--def OUT.def] [--gds OUT.gds] [--map-only] [-v] FILE.veryl...
 ```
 
@@ -20,7 +20,7 @@ with SKY130 this adds design rule checking (DRC), layout versus schematic (LVS),
 | DRC, LVS, antenna rules, GDSII, SPICE | None | Yes |
 | Good for | Understanding the flow, quick comparisons | Results on a real process, feeding other tools |
 
-The SKY130 cells the flow needs ship with `v2c`; nothing else to download. `--pdk sky130:DIR` reads the full PDK files instead (see the end of this chapter).
+The SKY130 cells the flow needs ship with `reda`; nothing else to download. `--pdk sky130:DIR` reads the full PDK files instead (see the end of this chapter).
 
 ## Reading the output
 
@@ -90,17 +90,17 @@ each of its 8 pieces, when a diode is inserted, makes detailed routing produce c
 When the router connects a diode to its net it sometimes uses higher layers, where the diode is not yet on the gate's conductor; to fix this completely, the router would have to connect the diode to the gate pin directly on low layers.
 `VERYL_EDA_ANTENNA_FIX=0` turns the fixing off so you can see the original violations.
 
-`tools/antenna_check.py` recomputes everything independently from the GDS with KLayout: gate areas from the real poly / diffusion overlaps inside the cell layouts, metal as merged polygons
-built up layer by layer (`python3 tools/antenna_check.py counter.gds`). The two agree on the invariant "veryl2chip is not more lenient":
-for the un-fixed Wide, KLayout finds 3 / 2 / 67 pieces on met2 / met3 / met4 where veryl2chip finds 4 / 5 / 73 (it sums the perimeters of overlapping shapes directly, which is slightly conservative).
+`eda/tools/antenna_check.py` recomputes everything independently from the GDS with KLayout: gate areas from the real poly / diffusion overlaps inside the cell layouts, metal as merged polygons
+built up layer by layer (`python3 eda/tools/antenna_check.py counter.gds`). The two agree on the invariant "rueda is not more lenient":
+for the un-fixed Wide, KLayout finds 3 / 2 / 67 pieces on met2 / met3 / met4 where rueda finds 4 / 5 / 73 (it sums the perimeters of overlapping shapes directly, which is slightly conservative).
 
 ### Timing constraints (v2.35)
 
 Without constraints, STA only answers "how many MHz is the fastest it can run" (Fmax). Given timing constraints, it answers "at the frequency I want, how far off is each path":
 
 ```sh
-v2c asic --pdk sky130 --clock 300 uart.veryl          # one 300 MHz clock, applied to everything
-v2c asic --pdk sky130 --sdc uart.sdc uart.veryl       # a full constraint file
+reda asic --pdk sky130 --clock 300 uart.veryl          # one 300 MHz clock, applied to everything
+reda asic --pdk sky130 --sdc uart.sdc uart.veryl       # a full constraint file
 ```
 
 `uart.sdc` (a common subset of SDC, time unit ns):
@@ -175,7 +175,7 @@ That is why SKY130 utilization usually lands at 30–55 %, and large designs are
 ## Looking at the chip layout
 
 ```sh
-v2c asic --pdk sky130 --gds counter.gds counter.veryl
+reda asic --pdk sky130 --gds counter.gds counter.veryl
 klayout counter.gds
 ```
 
@@ -185,33 +185,33 @@ IO pins on met4 (pin shape 71/16, label 71/5). The web IDE's ASIC · SKY130 can 
 To double-check the GDS yourself (needs `pip install klayout`):
 
 ```sh
-python3 tools/gds_check.py counter.gds Counter 62 555 7
+python3 eda/tools/gds_check.py counter.gds Counter 62 555 7
 ```
 
-The last three numbers are the "cell instances, shapes, labels" that `v2c` prints when it writes the GDS. It reads it back with KLayout, checks the top cell, the cell count,
+The last three numbers are the "cell instances, shapes, labels" that `reda` prints when it writes the GDS. It reads it back with KLayout, checks the top cell, the cell count,
 that cells do not overlap, and runs KLayout's own width / spacing checks on li1, met1–met4 and the cut layers.
 
 To do an independent LVS again with KLayout (needs the `sky130hd.cdl` from the full SKY130 files, see the next section):
 
 ```sh
-v2c asic --pdk sky130 --gds counter.gds --spice counter.sp counter.veryl
-python3 tools/lvs_check.py counter.gds counter.sp
+reda asic --pdk sky130 --gds counter.gds --spice counter.sp counter.veryl
+python3 eda/tools/lvs_check.py counter.gds counter.sp
 # KLayout LVS Counter: 14 cell instances, 19 nets extracted from the GDS: match
 ```
 
 KLayout extracts the connectivity itself from the GDS geometry and labels (li1, met1–met5 and the contacts / vias between them) and compares it net by net with the SPICE netlist.
-Standard cells are black boxes; only their pins are compared (the transistors inside them are verified by SkyWater); what is compared is the part veryl2chip made itself: the routing between the cells.
+Standard cells are black boxes; only their pins are compared (the transistors inside them are verified by SkyWater); what is compared is the part rueda made itself: the routing between the cells.
 
 ## Using the full SKY130 files
 
 ```sh
-tools/sky130.sh ~/sky130hd                 # downloads Liberty, tech LEF, cell LEF, GDS, cell SPICE subcircuits (Apache-2.0)
+eda/tools/sky130.sh ~/sky130hd                 # downloads Liberty, tech LEF, cell LEF, GDS, cell SPICE subcircuits (Apache-2.0)
 export VERYL_EDA_SKY130=~/sky130hd
-v2c pdk                                     # reads the files, lists the layers and cell bindings
-v2c asic --pdk sky130:$VERYL_EDA_SKY130 counter.veryl
+reda pdk                                     # reads the files, lists the layers and cell bindings
+reda asic --pdk sky130:$VERYL_EDA_SKY130 counter.veryl
 ```
 
-`v2c pdk` is also a checking tool: for every cell the flow uses, its truth table is compared against the Liberty function (for flip-flops: clock edge, next state, clear / preset);
+`reda pdk` is also a checking tool: for every cell the flow uses, its truth table is compared against the Liberty function (for flip-flops: clock edge, next state, clear / preset);
 on a mismatch the cell is refused.
 
 ## Limits

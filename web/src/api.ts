@@ -1,4 +1,4 @@
-// The WebAssembly core (veryl-sim + veryl-eda compiled from Rust).
+// The WebAssembly core (web/wasm: the Veryl and Fluxa simulators, synthesis and the eda flows, compiled from Rust).
 // No DOM here: the same code runs in the browser and in the Node tests.
 
 export interface VFile { name: string; src: string }

@@ -1,4 +1,4 @@
-// veryl2chip IDE (M11): a VS Code style workbench over the same WebAssembly
+// rueda IDE (M11): a VS Code style workbench over the same WebAssembly
 // core as the demo page — projects of .veryl files kept in the browser,
 // live syntax checking, tests (RTL and gate-level), and every synthesis
 // stage of the FPGA and ASIC flows as an editor tab.
@@ -136,7 +136,7 @@ const WELCOME = '\u2605welcome';
 const BOARD_TAB = '\u26a1board';
 const EMU_TAB = '\u{1f5a5}emu';
 /** the course tutorial (Traditional Chinese) */
-const TUTORIAL = 'https://github.com/ccc-eda/veryl2chip/blob/main/tutorial/README.tw.md';
+const TUTORIAL = 'https://github.com/ccc-eda/rueda/blob/main/veryl/tutorial/README.tw.md';
 const ASM_TAB = '\u2699asm';
 const tabName = (n: string) => n === FLOW_TAB ? tr('⚙ 合成流程', '⚙ Synthesis flow') : n === WELCOME ? tr('歡迎', 'Welcome') : n === BOARD_TAB ? tr('⚡ 虛擬 iCEBreaker', '⚡ Virtual iCEBreaker') : n === EMU_TAB ? tr('🖥 模擬機', '🖥 Emulator') : n === ASM_TAB ? tr('組合語言', 'Assembly') : n;
 /** tabs that are not files */
@@ -603,7 +603,7 @@ async function startGoal(goal: Goal): Promise<void> {
 
 function welcome(): void {
   const recent = projects.slice(-8).reverse();
-  $('welcome').innerHTML = `<h2>veryl2chip IDE</h2><p>${tr('Veryl → 模擬 → 合成 → FPGA / ASIC，全部在瀏覽器裡。', 'Veryl → simulation → synthesis → FPGA / ASIC, all in the browser.')}</p>
+  $('welcome').innerHTML = `<h2>rueda IDE</h2><p>${tr('Veryl → 模擬 → 合成 → FPGA / ASIC，全部在瀏覽器裡；Fluxa（任務與通道）的程式也能在這裡寫、跑 test。', 'Veryl → simulation → synthesis → FPGA / ASIC, all in the browser; Fluxa programs (tasks and channels) can be written and tested here too.')}</p>
     <h3 class="goal-h">${tr('你想做什麼？', 'What do you want to do?')}</h3>
     <div class="goals">${goals().map(g => {
       const ex = examples().find(e => e.id === g.ex);

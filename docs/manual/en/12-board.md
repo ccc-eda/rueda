@@ -14,13 +14,13 @@ It runs in its own background thread and never blocks the editor.
 
 - After flashing, the status bar shows the virtual time and "× real time"; the speed menu can pick "no faster than real time" or "fastest", and you can pause.
 - ⟲ Power cycle: start over (all registers back to 0, like a real chip).
-- 📂 `.bin` (or drag a file onto the board): loads **any** iCE40UP5K bitstream, e.g. one made by `v2c fpga --bin` or nextpnr + icepack.
+- 📂 `.bin` (or drag a file onto the board): loads **any** iCE40UP5K bitstream, e.g. one made by `reda fpga --bin` or nextpnr + icepack.
 - ⬇ .bin downloads the current bitstream, ready to be flashed to a real board with `iceprog`.
 
 Made from the command line and run on the virtual board:
 
 ```sh
-v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
 ```
 
 Then drag `counter.bin` onto the virtual board.
@@ -92,11 +92,11 @@ A lab contains the files, `pins.pcf`, modules, and the breadboard. Two ways to s
 - **🔗 Share lab (make a link)**: the whole lab is compressed into the URL (`index.html#lab=…`); whoever opens it imports it as a new project — no server needed.
 - **Export the lab file `.lab.json`**: open it with ⇪ Import.
 
-`tutorial/labs.tw.md` is a course of 8 labs using the virtual board; each lab is a `#ex=…&board=1` link.
+`veryl/tutorial/labs.tw.md` is a course of 8 labs using the virtual board; each lab is a `#ex=…&board=1` link.
 
 ## Differences from a real board
 
 - Bitstream mode simulates the logic and routing inside the bitstream, **not** analog effects: no glitches from delays, no metastability.
-- Timing violations are not simulated: a design with Fmax below 12 MHz still works fine here but wouldn't on a real chip. Check the Fmax printed by `v2c fpga`.
+- Timing violations are not simulated: a design with Fmax below 12 MHz still works fine here but wouldn't on a real chip. Check the Fmax printed by `reda fpga`.
 - Buttons don't bounce.
 - The board drawing is a schematic, not a picture.

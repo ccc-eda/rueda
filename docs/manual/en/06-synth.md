@@ -1,7 +1,7 @@
-# 6. Synthesis: `v2c synth`
+# 6. Synthesis: `reda synth`
 
 ```
-v2c synth [--top MODULE] [-o OUT.json] [--verilog OUT.v] FILE.veryl...
+reda synth [--top MODULE] [-o OUT.json] [--verilog OUT.v] FILE.veryl...
 ```
 
 Elaborates the Veryl design into a **flat gate-level netlist**: all submodules are flattened (signal names like `u_alu.sum`), if / case become multiplexers,
@@ -10,7 +10,7 @@ for loops are unrolled, functions are inlined, `always_ff` becomes flip-flops.
 ## Output
 
 ```sh
-$ v2c synth -o counter.json --verilog counter.v counter.veryl
+$ reda synth -o counter.json --verilog counter.v counter.veryl
 === Counter ===
   port input    1 i_clk
   ...
@@ -45,5 +45,5 @@ those with synchronous reads become block RAM / SRAM macros. For example, a 512Ã
 
 ## Checking that synthesis is correct
 
-- `v2c gatesim opt FILE...`: run the synthesized netlist with the original testbench (chapter 8).
-- With yosys (including the slang front end), you can formally prove equivalence against the SystemVerilog produced by the official `veryl build` (the project's `veryl-eda/test.sh` does exactly this, chapter 13).
+- `reda gatesim opt FILE...`: run the synthesized netlist with the original testbench (chapter 8).
+- With yosys (including the slang front end), you can formally prove equivalence against the SystemVerilog produced by the official `veryl build` (the project's `veryl/synth/test.sh` does exactly this, chapter 13).

@@ -1,7 +1,7 @@
-# 9. ASIC：`v2c asic`
+# 9. ASIC：`reda asic`
 
 ```
-v2c asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
+reda asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
          [--verilog OUT.v] [--def OUT.def] [--gds OUT.gds] [--map-only] [-v] FILE.veryl...
 ```
 
@@ -20,7 +20,7 @@ v2c asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
 | DRC、LVS、天線規則、GDSII、SPICE | 無 | 有 |
 | 適合 | 看懂流程、快速比較 | 真實製程的結果、拿去給其他工具 |
 
-需要的 SKY130 元件已經隨 `v2c` 附上，不用另外下載。`--pdk sky130:目錄` 改讀完整的 PDK 檔案（見本章最後）。
+需要的 SKY130 元件已經隨 `reda` 附上，不用另外下載。`--pdk sky130:目錄` 改讀完整的 PDK 檔案（見本章最後）。
 
 ## 讀懂輸出
 
@@ -90,17 +90,17 @@ diode）時電荷有地方去，上限就大很多（SKY130：沒有擴散區 40
 繞線器把 diode 接上網路時有時走較高的層，那時 diode 還不在閘極那一塊上；要完全解決，得讓繞線器用低層把 diode 直接接到閘極腳。
 `VERYL_EDA_ANTENNA_FIX=0` 可以關掉修正，看原本的違規。
 
-`tools/antenna_check.py` 用 KLayout 從 GDS 獨立再算一次：閘極面積用元件版圖裡真正的 poly 與擴散區重疊，金屬用合併後的多邊形，
-一層一層蓋上去檢查（`python3 tools/antenna_check.py counter.gds`）。兩邊的結果一致於「veryl2chip 不會比較寬鬆」：
-不修的 Wide，KLayout 在 met2 / met3 / met4 找到 3 / 2 / 67 塊，veryl2chip 找到 4 / 5 / 73 塊（它把重疊形狀的周長直接加總，略為保守）。
+`eda/tools/antenna_check.py` 用 KLayout 從 GDS 獨立再算一次：閘極面積用元件版圖裡真正的 poly 與擴散區重疊，金屬用合併後的多邊形，
+一層一層蓋上去檢查（`python3 eda/tools/antenna_check.py counter.gds`）。兩邊的結果一致於「rueda 不會比較寬鬆」：
+不修的 Wide，KLayout 在 met2 / met3 / met4 找到 3 / 2 / 67 塊，rueda 找到 4 / 5 / 73 塊（它把重疊形狀的周長直接加總，略為保守）。
 
 ### 時序約束（v2.35）
 
 沒有約束時，STA 只回答「最快能跑多少 MHz」（Fmax）。給了時序約束，它回答的是「在我要的頻率下，每條路徑還差多少」：
 
 ```sh
-v2c asic --pdk sky130 --clock 300 uart.veryl          # 一個 300 MHz 的時脈，套用到全部
-v2c asic --pdk sky130 --sdc uart.sdc uart.veryl       # 完整的約束檔
+reda asic --pdk sky130 --clock 300 uart.veryl          # 一個 300 MHz 的時脈，套用到全部
+reda asic --pdk sky130 --sdc uart.sdc uart.veryl       # 完整的約束檔
 ```
 
 `uart.sdc`（SDC 的常用子集，時間單位 ns）：
@@ -175,7 +175,7 @@ timing: repair 10 cells made stronger, 2 buffers: WNS -0.240 -> +0.098 ns
 ## 看晶片版圖
 
 ```sh
-v2c asic --pdk sky130 --gds counter.gds counter.veryl
+reda asic --pdk sky130 --gds counter.gds counter.veryl
 klayout counter.gds
 ```
 
@@ -185,33 +185,33 @@ IO 腳在 met4（腳形 71/16、標籤 71/5）。網頁 IDE 的 ASIC · SKY130 �
 想自己再檢查一次 GDS（需要 `pip install klayout`）：
 
 ```sh
-python3 tools/gds_check.py counter.gds Counter 62 555 7
+python3 eda/tools/gds_check.py counter.gds Counter 62 555 7
 ```
 
-後面三個數字是 `v2c` 寫 GDS 時印出的「cell instances、shapes、labels」。它用 KLayout 讀回，檢查頂層、元件數、
+後面三個數字是 `reda` 寫 GDS 時印出的「cell instances、shapes、labels」。它用 KLayout 讀回，檢查頂層、元件數、
 元件不重疊，並跑 KLayout 自己對 li1、met1–met4 與各 cut 層的寬度 / 間距檢查。
 
 用 KLayout 再做一次獨立的 LVS（需要完整 SKY130 檔案裡的 `sky130hd.cdl`，見下一節）：
 
 ```sh
-v2c asic --pdk sky130 --gds counter.gds --spice counter.sp counter.veryl
-python3 tools/lvs_check.py counter.gds counter.sp
+reda asic --pdk sky130 --gds counter.gds --spice counter.sp counter.veryl
+python3 eda/tools/lvs_check.py counter.gds counter.sp
 # KLayout LVS Counter: 14 cell instances, 19 nets extracted from the GDS: match
 ```
 
 KLayout 從 GDS 的幾何與標籤（li1、met1–met5 與它們之間的 contact / via）自己抽出接線，和 SPICE 網表逐個網路比對。
-標準元件當成黑盒子，只比它們的腳（元件內部的電晶體是 SkyWater 驗證過的）；比的是 veryl2chip 自己做的部分：元件之間的繞線。
+標準元件當成黑盒子，只比它們的腳（元件內部的電晶體是 SkyWater 驗證過的）；比的是 rueda 自己做的部分：元件之間的繞線。
 
 ## 用完整的 SKY130 檔案
 
 ```sh
-tools/sky130.sh ~/sky130hd                 # 下載 Liberty、tech LEF、cell LEF、GDS、元件的 SPICE 子電路（Apache-2.0）
+eda/tools/sky130.sh ~/sky130hd                 # 下載 Liberty、tech LEF、cell LEF、GDS、元件的 SPICE 子電路（Apache-2.0）
 export VERYL_EDA_SKY130=~/sky130hd
-v2c pdk                                     # 讀檔、列出各層與元件綁定
-v2c asic --pdk sky130:$VERYL_EDA_SKY130 counter.veryl
+reda pdk                                     # 讀檔、列出各層與元件綁定
+reda asic --pdk sky130:$VERYL_EDA_SKY130 counter.veryl
 ```
 
-`v2c pdk` 也是檢查工具：流程用到的每個元件，都會拿 Liberty 裡的函式比對真值表（正反器比對時脈邊緣、下一狀態、clear / preset），
+`reda pdk` 也是檢查工具：流程用到的每個元件，都會拿 Liberty 裡的函式比對真值表（正反器比對時脈邊緣、下一狀態、clear / preset），
 不一致就拒絕使用。
 
 ## 限制

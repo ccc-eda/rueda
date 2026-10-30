@@ -52,7 +52,7 @@
 
 **路線 A：瀏覽器（免安裝，建議課堂使用）**
 
-打開 veryl2chip IDE：<https://ccc-eda.github.io/veryl2chip/web/dist/index.html>
+打開 rueda IDE：<https://ccc-eda.github.io/rueda/web/dist/index.html>
 
 所有工具（模擬器、合成、佈局繞線、位元流產生器）都編譯成 WebAssembly 在瀏覽器裡執行，不需要伺服器。
 左邊「📚 範例庫」最上面的「教學」分組就是本教學的兩個設計。
@@ -64,23 +64,22 @@
 # 1. Rust（https://rustup.rs）與官方 Veryl 工具
 cargo install veryl
 
-# 2. 本專案的模擬器與合成工具
-git clone https://github.com/ccc-eda/veryl2chip.git
-cd veryl2chip
-(cd veryl-sim && cargo build --release)
-(cd veryl-eda && cargo build --release)
+# 2. 本專案的模擬器與合成工具：reda 一個指令就包含全部
+git clone https://github.com/ccc-eda/rueda.git
+cd rueda
+cargo build --release -p rueda       # target/release/reda
 
 # 3. FPGA 工具鏈（iceprog 燒錄、gtkwave 看波形、nextpnr 可選）
 #    下載 OSS CAD Suite：https://github.com/YosysHQ/oss-cad-suite-build/releases
 source oss-cad-suite/environment
 ```
 
-為了少打字，以下假設你在 `tutorial/` 目錄，並設好兩個變數：
+為了少打字，以下假設你在 `veryl/tutorial/` 目錄，並設好兩個變數：
 
 ```sh
-cd tutorial
-SIM=../veryl-sim/target/release/veryl-sim
-EDA=../veryl-eda/target/release/veryl-eda
+cd veryl/tutorial
+SIM="../../target/release/reda sim"
+EDA="../../target/release/reda synth"
 ```
 
 ---
@@ -641,7 +640,7 @@ IDE：範例庫 → 教學 → 「第 3 課 UART 回聲」→ **⚡ 虛擬板**�
 
 ### 本教學驗證過的事
 
-本目錄的三個設計都經過：官方 `veryl check` / `veryl test`、veryl-sim 模擬、三種網表的閘級模擬；
+本目錄的三個設計都經過：官方 `veryl check` / `veryl test`、veryl/sim 模擬、三種網表的閘級模擬；
 自製佈局繞線與 nextpnr 都產生了位元流（Fmax 都高於 12 MHz），`.bin` 與 icepack 的輸出逐位元組相同，
 並用 icebox_vlog 把位元流轉回電路，和網表做 1000 個時脈的隨機輸入比對，結果一致。
 （燒進實體板子的結果請以你手上的 iCEBreaker 為準；腳位依 iCEBreaker 官方腳位表。）

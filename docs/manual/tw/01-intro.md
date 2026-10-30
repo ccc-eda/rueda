@@ -1,4 +1,4 @@
-# 1. 認識 veryl2chip
+# 1. 認識 rueda
 
 ## 它能做什麼
 
@@ -6,17 +6,17 @@
 
 ```
 Veryl 原始碼
-   │  v2c sim        模擬：跑 #[test] testbench，看波形
+   │  reda sim        模擬：跑 #[test] testbench，看波形
    ▼
-閘級網表          v2c synth      合成：展開、最佳化成 AND / OR / XOR / MUX / 正反器
+閘級網表          reda synth      合成：展開、最佳化成 AND / OR / XOR / MUX / 正反器
    │
-   ├─► FPGA   v2c fpga       iCE40UP5K：LUT 對應 → 佈局 → 繞線 → 時序 → 位元流（iceprog 燒進 iCEBreaker）
+   ├─► FPGA   reda fpga       iCE40UP5K：LUT 對應 → 佈局 → 繞線 → 時序 → 位元流（iceprog 燒進 iCEBreaker）
    │
-   └─► ASIC   v2c asic       標準元件對應 → 列式佈局 → 時脈樹 → 繞線 → 時序 → 功耗
+   └─► ASIC   reda asic       標準元件對應 → 列式佈局 → 時脈樹 → 繞線 → 時序 → 功耗
                               （vlib 教學元件庫，或 SkyWater SKY130：再加 DRC 與 GDSII 版圖）
 
-合成後的網表 → v2c gatesim   用同一個 testbench 再模擬一次，確認合成沒有改變行為
-C 程式       → v2c cc        編譯給專案裡的 RISC-V SoC（也是用 Veryl 寫的）執行
+合成後的網表 → reda gatesim   用同一個 testbench 再模擬一次，確認合成沒有改變行為
+C 程式       → reda cc        編譯給專案裡的 RISC-V SoC（也是用 Veryl 寫的）執行
 ```
 
 全部工具都是這個專案自己寫的（模擬器、合成器、FPGA 佈局繞線與位元流、ASIC 後端、C 編譯器），
@@ -24,9 +24,9 @@ C 程式       → v2c cc        編譯給專案裡的 RISC-V SoC（也是用 Ve
 
 ## 兩種用法
 
-| | 網頁 IDE | 命令列 `v2c` |
+| | 網頁 IDE | 命令列 `reda` |
 |---|---|---|
-| 安裝 | 不用，打開網頁即可（[線上版](https://ccc-eda.github.io/veryl2chip/web/dist/index.html)） | `cargo install veryl2chip-eda` |
+| 安裝 | 不用，打開網頁即可（[線上版](https://ccc-eda.github.io/rueda/web/dist/index.html)） | `cargo install --git https://github.com/ccc-eda/rueda rueda` |
 | 適合 | 上課、實驗、看每個階段的圖、虛擬開發板 | 自動化、大設計、整合到其他流程 |
 | 能力 | 模擬、波形、合成各階段的圖、FPGA / ASIC（含 SKY130）、虛擬開發板、C 程式 | 同樣的流程，輸出檔案（JSON、Verilog、`.asc`、`.bin`、DEF、GDS、VCD） |
 
@@ -51,11 +51,12 @@ C 程式       → v2c cc        編譯給專案裡的 RISC-V SoC（也是用 Ve
 
 | 目錄 | 內容 |
 |---|---|
-| `veryl-sim/` | 模擬器（crate `veryl2chip-sim`） |
-| `veryl-eda/` | 合成、FPGA、ASIC、C 編譯器、虛擬板引擎，以及 `v2c` 指令（crate `veryl2chip-eda`） |
-| `veryl-wasm/` | 上面兩者編成 WebAssembly |
-| `web/` | 網頁 IDE（`web/dist/index.html`） |
-| `examples/` | 範例設計（加法器、狀態機、UART、VGA、RISC-V…）與 C 程式（`examples/c/`） |
-| `tutorial/` | 從零開始的教學與虛擬實驗課 |
-| `tools/` | 下載 SKY130、檢查 GDS 等小工具 |
-| `manual/` | 本手冊 |
+| `reda/` | `reda` 指令：每個工具都是它的子指令（`reda sim`、`reda synth`、`reda fpga`…） |
+| `eda/` | 與語言無關的後端：閘級網表、FPGA 對應、佈局繞線與位元流、ASIC 流程、虛擬開發板 |
+| `veryl/` | Veryl 語言：模擬器（`sim/`）、合成（`synth/`）、編譯式模擬機（`emu/`）、範例、教學 |
+| `fluxa/` | Fluxa 語言（高階合成：任務與通道）：模擬器、範例、RV32I / RV64 處理器 |
+| `riscv/` | RISC-V 軟體工具：C 編譯器、組譯器、指令集模擬器（`rvtools/`），RV64 開發板模擬機（`rvemu/`） |
+| `web/` | 網頁 IDE（`web/dist/index.html`）與它的 WebAssembly 核心（`web/wasm/`） |
+| `veryl/examples/` | 範例設計（加法器、狀態機、UART、VGA、RISC-V…）與 C 程式（`veryl/examples/c/`） |
+| `veryl/tutorial/` | 從零開始的教學與虛擬實驗課 |
+| `docs/manual/` | 本手冊 |

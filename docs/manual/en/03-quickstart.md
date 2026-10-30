@@ -67,18 +67,18 @@ set_io o_count[3] 23
 ## 1. Simulate
 
 ```sh
-$ v2c sim counter.veryl
+$ reda sim counter.veryl
 === simulating TestCounter ===
 $finish called at time 95
 TestCounter: PASS
 ```
 
-`v2c sim --vcd wave.vcd counter.veryl` additionally writes a waveform, which you can open with GTKWave.
+`reda sim --vcd wave.vcd counter.veryl` additionally writes a waveform, which you can open with GTKWave.
 
 ## 2. Synthesize
 
 ```sh
-$ v2c synth -o counter.json --verilog counter.v counter.veryl
+$ reda synth -o counter.json --verilog counter.v counter.veryl
 === Counter ===
   port input    1 i_clk
   port input    1 i_rst
@@ -97,7 +97,7 @@ The synthesizer automatically picked the last module that is not a testbench (`C
 ## 3. FPGA Bitstream
 
 ```sh
-$ v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+$ reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
   cells: 10
     SB_DFFR        4
     SB_LUT4        6
@@ -112,7 +112,7 @@ An Fmax of 122 MHz is far above the board's 12 MHz, so you can flash it with con
 ## 4. Simulate Again after Synthesis
 
 ```sh
-$ v2c gatesim ice40 counter.veryl
+$ reda gatesim ice40 counter.veryl
 TestCounter: PASS
 gate-level simulation: Counter as 10 cells (ice40)
 ```
@@ -122,8 +122,8 @@ The same testbench run on the synthesized iCE40 netlist gives the same result, s
 ## 5. ASIC
 
 ```sh
-$ v2c asic counter.veryl                         # the teaching vlib cell library
-$ v2c asic --pdk sky130 --def counter.def --gds counter.gds counter.veryl
+$ reda asic counter.veryl                         # the teaching vlib cell library
+$ reda asic --pdk sky130 --def counter.def --gds counter.gds counter.veryl
 ...
 asic: DRC 1999 shapes: 0 shorts, 0 spacing, 0 min-area, 0 opens; 11 taps (0 sites too far)
 timing: critical path 1.339 ns, Fmax 747.0 MHz

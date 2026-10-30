@@ -14,13 +14,13 @@
 
 - 刻录后状态栏显示虚拟时间与「真实的几倍」；速度菜单可选「不超过即时」或「最快」，也可以暂停。
 - ⟲ 重新上电：从头开始（所有寄存器回到 0，和真芯片一样）。
-- 📂 `.bin`（或直接拖放到板子上）：加载**任何** iCE40UP5K 的比特流，例如 `v2c fpga --bin` 或 nextpnr + icepack 做的。
+- 📂 `.bin`（或直接拖放到板子上）：加载**任何** iCE40UP5K 的比特流，例如 `reda fpga --bin` 或 nextpnr + icepack 做的。
 - ⬇ .bin 下载目前的比特流，`iceprog` 就能烧进真的板子。
 
 从命令行做出来、拿到虚拟板上跑：
 
 ```sh
-v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
 ```
 
 然后把 `counter.bin` 拖到虚拟板上。
@@ -92,11 +92,11 @@ PMOD1A 的引脚：1–4 = 4、2、47、45，7–10 = 3、48、46、44；PMOD1B�
 - **🔗 分享实验（产生链接）**：整个实验压缩进网址（`index.html#lab=…`），对方打开就导入成新项目，不需要任何服务器。
 - **导出实验档 `.lab.json`**：用 ⇪ 导入打开。
 
-`tutorial/labs.tw.md` 是用虚拟板上课的 8 个实验讲义，每个实验都是一个 `#ex=…&board=1` 链接。
+`veryl/tutorial/labs.tw.md` 是用虚拟板上课的 8 个实验讲义，每个实验都是一个 `#ex=…&board=1` 链接。
 
 ## 和真的板子差在哪
 
 - 比特流模式仿真的是比特流里的逻辑与布线，**没有**模拟效应：没有延迟造成的毛刺，没有亚稳态。
-- 不仿真时序违规：Fmax 低于 12 MHz 的设计在这里照样正常，在真芯片上不会。请看 `v2c fpga` 打印的 Fmax。
+- 不仿真时序违规：Fmax 低于 12 MHz 的设计在这里照样正常，在真芯片上不会。请看 `reda fpga` 打印的 Fmax。
 - 按钮没有弹跳。
 - 板子的图是示意图。

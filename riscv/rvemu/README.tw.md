@@ -1,11 +1,11 @@
 [English](README.md) | [繁體中文](README.tw.md)
 
-# riscv-emu
+# riscv/rvemu
 
-veryl2chip 的 RV64 開發板（[`examples/rv64`](../examples/rv64/) 的 `Rv64Soc`）的**指令集模擬器**，像 QEMU：
-不模擬電路，只算每個指令的效果，所以比模擬硬體的 [veryl-emu](../veryl-emu/) 與 Verilator 快幾十倍；
+rueda 的 RV64 開發板（[`veryl/examples/rv64`](../../veryl/examples/rv64/) 的 `Rv64Soc`）的**指令集模擬器**，像 QEMU：
+不模擬電路，只算每個指令的效果，所以比模擬硬體的 [veryl/emu](../../veryl/emu/) 與 Verilator 快幾十倍；
 跑的是同樣的程式（riscv-tests、OpenSBI + Linux、xv6、板子上的 MicroPython 與 C）。Veryl 設計本身的驗證還是用
-Verilator 與 veryl-emu；riscv-emu 的正確性用 riscv-tests、spike 與 RTL 的逐指令比對來確認。
+Verilator 與 veryl/emu；riscv/rvemu 的正確性用 riscv-tests、spike 與 RTL 的逐指令比對來確認。
 
 ```sh
 cargo build --release
@@ -13,7 +13,7 @@ cargo test --release          # 自己的小測試；有 riscv-tests 與 Linux �
 target/release/rvemu ../examples/rv64/linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # 開 Linux，終端機直接打字
 ```
 
-| | Verilator（RTL） | veryl-emu（RTL，Node） | riscv-emu |
+| | Verilator（RTL） | veryl/emu（RTL，Node） | riscv/rvemu |
 |---|---|---|---|
 | `linux/test.sh`（開機 + 指令，約 1 億個指令） | 50 秒 | 107 秒 | 1.6 秒 |
 | xv6 `usertests`（285 億個指令） | 不實際 | 不實際 | 5.6 分鐘 |
@@ -57,16 +57,16 @@ Node 上約 50 MIPS（原生約 65–85 MIPS）。
 ## rvemu
 
 ```
-rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
+reda rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
 ```
 
-選項和 `examples/rv64` 的 `sim/obj/rv64sim`（Verilator）與 `emu/rv64emu`（veryl-emu）相同，所以那裡的腳本都可以換成它：
+選項和 `veryl/examples/rv64` 的 `sim/obj/rv64sim`（Verilator）與 `emu/rv64emu`（veryl/emu）相同，所以那裡的腳本都可以換成它：
 
 ```sh
 cd ../examples/rv64
-SIM=../../riscv-emu/target/release/rvemu sim/riscv_tests.sh
-SIM=../../riscv-emu/target/release/rvemu linux/test.sh
-SIM=../../riscv-emu/target/release/rvemu xv6/test.sh usertests
+SIM=emu/rvemu sim/riscv_tests.sh
+SIM=emu/rvemu linux/test.sh
+SIM=emu/rvemu xv6/test.sh usertests
 ```
 
 `-t` 每個指令印一行，格式和 `spike -l --log-commits` 相同（可以和 RTL 的 `rv64sim -t` diff；開 Linux 時前 58 萬個指令

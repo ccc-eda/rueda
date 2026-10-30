@@ -1,11 +1,11 @@
-# 5. 仿真：`v2c sim`
+# 5. 仿真：`reda sim`
 
 ```
-v2c sim [--top MODULE] [--vcd FILE.vcd] [--max-time N] FILE.veryl...
-v2c list FILE.veryl...
+reda sim [--top MODULE] [--vcd FILE.vcd] [--max-time N] FILE.veryl...
+reda list FILE.veryl...
 ```
 
-`v2c sim` 是事件驱动的仿真器（类似 Icarus Verilog）：4 态值（0 / 1 / x）、delta cycle、非阻塞赋值、时钟产生器、VCD。
+`reda sim` 是事件驱动的仿真器（类似 Icarus Verilog）：4 态值（0 / 1 / x）、delta cycle、非阻塞赋值、时钟产生器、VCD。
 
 ## 跑哪个 module
 
@@ -15,10 +15,10 @@ v2c list FILE.veryl...
 | 没有任何 testbench | 最后声明的 module |
 | `--top M`（或 `-s M`） | 只有 `M` |
 
-不确定文件里有哪些 module，用 `v2c list`：
+不确定文件里有哪些 module，用 `reda list`：
 
 ```sh
-$ v2c list counter.veryl
+$ reda list counter.veryl
 Counter
 TestCounter  (#[test])
 ```
@@ -26,7 +26,7 @@ TestCounter  (#[test])
 ## 结果与结束码
 
 ```sh
-$ v2c sim counter.veryl
+$ reda sim counter.veryl
 === simulating TestCounter ===
 $finish called at time 95
 TestCounter: PASS
@@ -43,9 +43,9 @@ TestCounter: 1 failure(s)
 |---|---|
 | 0 | 全部通过 |
 | 1 | 有断言失败，或文件 / 语法 / 展开错误（例如 `err.veryl:2:1: parse error: ...`） |
-| 2 | 命令行参数错误（提示 `v2c help sim`） |
+| 2 | 命令行参数错误（提示 `reda help sim`） |
 
-所以可以直接放进引脚本或 CI：`v2c sim *.veryl || exit 1`。
+所以可以直接放进引脚本或 CI：`reda sim *.veryl || exit 1`。
 
 ## 时间
 
@@ -56,7 +56,7 @@ TestCounter: 1 failure(s)
 ## 波形
 
 ```sh
-v2c sim --vcd wave.vcd counter.veryl
+reda sim --vcd wave.vcd counter.veryl
 gtkwave wave.vcd
 ```
 

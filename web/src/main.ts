@@ -1,4 +1,4 @@
-// veryl2chip web environment: page controller.
+// rueda web environment: page controller.
 
 import { fromBase64, ModuleInfo, SimResult, VFile } from './api';
 import { Core, startCore } from './client';

@@ -1,12 +1,12 @@
 [English](README.md) | [繁體中文](README.tw.md)
 
-# riscv-emu
+# riscv/rvemu
 
-An **instruction-set emulator** of veryl2chip's RV64 board (`Rv64Soc` in [`examples/rv64`](../examples/rv64/)), like QEMU:
+An **instruction-set emulator** of rueda's RV64 board (`Rv64Soc` in [`veryl/examples/rv64`](../../veryl/examples/rv64/)), like QEMU:
 it does not simulate the circuit, only what each instruction does, so it is tens of times faster than
-[veryl-emu](../veryl-emu/) and Verilator, which simulate the hardware, while running the same programs (riscv-tests,
+[veryl/emu](../../veryl/emu/) and Verilator, which simulate the hardware, while running the same programs (riscv-tests,
 OpenSBI + Linux, xv6, the board's MicroPython and C). The Veryl design itself is still verified with Verilator and
-veryl-emu; riscv-emu is checked with riscv-tests, spike and instruction-by-instruction against the RTL.
+veryl/emu; riscv/rvemu is checked with riscv-tests, spike and instruction-by-instruction against the RTL.
 
 ```sh
 cargo build --release
@@ -14,7 +14,7 @@ cargo test --release          # its own small tests; riscv-tests and Linux too w
 target/release/rvemu ../examples/rv64/linux/build/opensbi/platform/generic/firmware/fw_payload.bin   # boots Linux; type in the terminal
 ```
 
-| | Verilator (RTL) | veryl-emu (RTL, Node) | riscv-emu |
+| | Verilator (RTL) | veryl/emu (RTL, Node) | riscv/rvemu |
 |---|---|---|---|
 | `linux/test.sh` (boot + commands, about 100 M instructions) | 50 s | 107 s | 1.6 s |
 | xv6 `usertests` (28.5 G instructions) | impractical | impractical | 5.6 min |
@@ -64,17 +64,17 @@ Booting is mostly code that runs once, so it gains little; code that keeps runni
 ## rvemu
 
 ```
-rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
+reda rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
 ```
 
-The options are those of `sim/obj/rv64sim` (Verilator) and `emu/rv64emu` (veryl-emu) in `examples/rv64`, so its
+The options are those of `sim/obj/rv64sim` (Verilator) and `emu/rv64emu` (veryl/emu) in `veryl/examples/rv64`, so its
 scripts take it as well:
 
 ```sh
 cd ../examples/rv64
-SIM=../../riscv-emu/target/release/rvemu sim/riscv_tests.sh
-SIM=../../riscv-emu/target/release/rvemu linux/test.sh
-SIM=../../riscv-emu/target/release/rvemu xv6/test.sh usertests
+SIM=emu/rvemu sim/riscv_tests.sh
+SIM=emu/rvemu linux/test.sh
+SIM=emu/rvemu xv6/test.sh usertests
 ```
 
 `-t` prints a line per instruction in the format of `spike -l --log-commits` (diff it with the RTL's `rv64sim -t`: booting

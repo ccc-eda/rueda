@@ -1,18 +1,18 @@
-# 10. RISC-V and C: `v2c cc`
+# 10. RISC-V and C: `reda cc`
 
 This project has a RISC-V CPU written in Veryl, plus a compiler that turns C into its machine code.
 So you can "design your own CPU, then run your own C programs on it" — on the virtual dev board, or programmed onto a real iCEBreaker.
 
-## Hardware: `examples/src/rvsoc.veryl`
+## Hardware: `veryl/examples/src/rvsoc.veryl`
 
 | Module | Contents |
 |---|---|
 | `RvCore` | Multi-cycle **RV32IMA + Zicsr**: ordinary instructions 2 cycles, loads 3 cycles, multiply/divide 35 cycles; machine-mode interrupts and exceptions (timer, software, external = the serial port received a byte; ecall, ebreak, illegal instruction, misaligned address), `mret`, `wfi`; the register file lives in block RAM |
 | `RvSoc` | CPU + 8 KB of memory (block RAM) + memory-mapped peripherals + a loader port for the testbench |
-| `RvBoard` | The iCEBreaker top (pins in `examples/rvsoc.pcf`): BTN1–3, the 8 outputs of PMOD1A (LED modules…), the 8 switches of PMOD1B, the USB serial port |
-| `RvVgaBoard` (`examples/src/rvvga.veryl`) | Adds a 40 × 30 character VGA text screen |
+| `RvBoard` | The iCEBreaker top (pins in `veryl/examples/rvsoc.pcf`): BTN1–3, the 8 outputs of PMOD1A (LED modules…), the 8 switches of PMOD1B, the USB serial port |
+| `RvVgaBoard` (`veryl/examples/src/rvvga.veryl`) | Adds a 40 × 30 character VGA text screen |
 
-Separately, `examples/src/rv32i.veryl` is a single-cycle RV32I (`RiscvCore`), easier to read and good for teaching.
+Separately, `veryl/examples/src/rv32i.veryl` is a single-cycle RV32I (`RiscvCore`), easier to read and good for teaching.
 
 ### Memory map
 
@@ -31,11 +31,11 @@ Separately, `examples/src/rv32i.veryl` is a single-cycle RV32I (`RiscvCore`), ea
 ## Compiling and running
 
 ```
-v2c cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
+reda cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
 ```
 
 ```sh
-$ v2c cc --run examples/c/hello.c
+$ reda cc --run veryl/examples/c/hello.c
 hello.c: 2488 bytes of code and data, 2492 with bss (RAM 8192 bytes)
 Hello from C on a RISC-V you built in Veryl!
 ...
@@ -43,7 +43,7 @@ Hello from C on a RISC-V you built in Veryl!
 
 | Option | Contents |
 |---|---|
-| `-o PROG.bin` | Binary image starting at address 0 (for `v2c fpga --program`, the virtual board) |
+| `-o PROG.bin` | Binary image starting at address 0 (for `reda fpga --program`, the virtual board) |
 | `-S PROG.s` | Generated assembly: each statement is preceded by a line of C source as a comment |
 | `-L PROG.lst` | Listing: address, machine code, assembly and C source side by side |
 | `--run [N]` | Run for up to N instructions on the instruction-set simulator (default 10 million). Serial output is printed to the screen; at the end it prints the instruction count, clock cycles and LEDs |
@@ -80,7 +80,7 @@ When the program reaches the end of `main` it stops at `_halt` (showing `halted`
 
 Only functions the program actually uses are put into the image.
 
-## Examples (`examples/c/`)
+## Examples (`veryl/examples/c/`)
 
 | File | Demonstrates |
 |---|---|
@@ -95,7 +95,7 @@ Only functions the program actually uses are put into the image.
 
 ## On the dev board's Linux (v2.20)
 
-`v2c cc PROG.c --linux -o PROG` compiles the same C into a static ELF executable for the Linux on the RV64 dev board (`examples/rv64`, the simulator of chapter 11):
+`reda cc PROG.c --linux -o PROG` compiles the same C into a static ELF executable for the Linux on the RV64 dev board (`veryl/examples/rv64`, the simulator of chapter 11):
 
 - The data model is unchanged: `int`, `long` and pointers are all 4 bytes (like x32). The program is RV64 instructions, computing 32-bit integers with the *W instructions (`addw`, `mulw`, …),
   so registers always hold "32-bit, sign-extended" values; the program is loaded at 0x10000, its own stack (256 KB) is placed in the bss, the heap grows up via `brk`,
@@ -106,8 +106,8 @@ Only functions the program actually uses are put into the image.
   2 is the button, the rest go through `/sys/class/gpio`); screen (v2.21, 320 × 240 RGB565): `fb_init`, `fb_clear`, `fb_pixel`, `fb_rect`, `fb_line`,
   `fb_circle`, `fb_text`, `RGB(r, g, b)` and a few color names (`/dev/fb0` mapped fixed at 0x40000000 with `mmap`, because pointers are only 32 bits).
   `#include <gpio.h>` and other `#include`s are ignored as usual (the library is always there).
-- Testing: `cargo test cc_linux` compiles `src/rv/tests/*.c` and `tests/linux/*.c` into Linux executables and runs them with spike + pk (the proxy kernel,
-  same system call numbers as Linux); the output must match the host-compiled results (`.out`); `linux/test.sh` runs one on the Verilator / veryl-emu Linux.
+- Testing: `cargo test cc_linux` compiles `riscv/rvtools/tests/*.c` and `tests/linux/*.c` into Linux executables and runs them with spike + pk (the proxy kernel,
+  same system call numbers as Linux); the output must match the host-compiled results (`.out`); `linux/test.sh` runs one on the Verilator / veryl/emu Linux.
 - IDE: with a `.c` file open in a dev-board project, press "▶ Run" to compile in the browser and run the executable (named after the file without `.c`) together with the project's files in `/root`.
 
 ## Putting it on an FPGA
@@ -118,9 +118,9 @@ with the same memory map, peripherals and cycle counts per instruction as `RvSoc
 Physical board:
 
 ```sh
-v2c cc -o hello.bin examples/c/hello.c
-v2c fpga --top RvBoard --pnr veryl --pcf examples/rvsoc.pcf --program hello.bin --bin soc.bin \
-    examples/src/rv32i.veryl examples/src/sync_ram.veryl examples/src/uart.veryl examples/src/rvsoc.veryl
+reda cc -o hello.bin veryl/examples/c/hello.c
+reda fpga --top RvBoard --pnr veryl --pcf veryl/examples/rvsoc.pcf --program hello.bin --bin soc.bin \
+    veryl/examples/src/rv32i.veryl veryl/examples/src/sync_ram.veryl veryl/examples/src/uart.veryl veryl/examples/src/rvsoc.veryl
 iceprog soc.bin
 ```
 

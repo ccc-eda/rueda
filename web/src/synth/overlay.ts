@@ -1025,7 +1025,7 @@ export class SynthOverlay {
   }
 }
 
-/** the FPGA STA's path steps (written in Chinese by veryl-eda) in the current language */
+/** the FPGA STA's path steps (written in Chinese by eda) in the current language */
 function stepText(w: string): string {
   let m = /^繞線 (.*)（(\d+) 段）$/.exec(w);
   if (m) return tr(w, `route ${m[1]} (${m[2]} segments)`);

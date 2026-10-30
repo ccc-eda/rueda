@@ -1,7 +1,7 @@
-# 7. FPGA：`v2c fpga`
+# 7. FPGA：`reda fpga`
 
 ```
-v2c fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
+reda fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
          [--pnr veryl|nextpnr] [--seed N] [--no-timing-driven] [--program PROG.bin]
          [-o OUT.json] [--verilog OUT.v] [-v] FILE.veryl...
 ```
@@ -28,7 +28,7 @@ v2c fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
 和網表逐週期比對過（第 13 章）。
 
 ```sh
-$ v2c fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
+$ reda fpga --pnr veryl --pcf counter.pcf --bin counter.bin counter.veryl
   veryl pnr: 6 LCs, 52 routing pips, 0.2s
   power: 0.199 mW at 122.1 MHz = ...
   timing: critical path 8.19 ns, Fmax 122.10 MHz (wirelength-only pass 122.10 MHz)
@@ -40,7 +40,7 @@ wrote counter.bin
 ## 腳位檔（`.pcf`）
 
 每一行 `set_io 埠名 腳號`，向量埠寫 `o_led[0]`。`-nowarn` 表示設計沒用到這支腳也沒關係。
-iCEBreaker 常用的腳（`tutorial/icebreaker.pcf` 有完整清單）：
+iCEBreaker 常用的腳（`veryl/tutorial/icebreaker.pcf` 有完整清單）：
 
 | 腳 | 用途 |
 |---|---|
@@ -77,9 +77,9 @@ iceprog counter.bin
 對於程式存在 block RAM 的 CPU（例如本專案的 `RvBoard`，第 10 章），`--program PROG.bin` 從位址 0 把二進位檔填進記憶體：
 
 ```sh
-v2c cc -o hello.bin examples/c/hello.c
-v2c fpga --top RvBoard --pnr veryl --pcf examples/rvsoc.pcf --program hello.bin --bin soc.bin \
-    examples/src/rv32i.veryl examples/src/sync_ram.veryl examples/src/uart.veryl examples/src/rvsoc.veryl
+reda cc -o hello.bin veryl/examples/c/hello.c
+reda fpga --top RvBoard --pnr veryl --pcf veryl/examples/rvsoc.pcf --program hello.bin --bin soc.bin \
+    veryl/examples/src/rv32i.veryl veryl/examples/src/sync_ram.veryl veryl/examples/src/uart.veryl veryl/examples/src/rvsoc.veryl
 iceprog soc.bin
 ```
 
@@ -90,15 +90,15 @@ iceprog soc.bin
 ## Lattice ECP5（`--arch ecp5`）
 
 ```
-v2c fpga --arch ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf]
+reda fpga --arch ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf]
          [--config OUT.config] [--bit OUT.bit] [--seed N] [-o OUT.json] [-v] FILE.veryl...
 ```
 
 ECP5 是比 iCE40 大得多的 FPGA（25F 約 2.4 萬、85F 約 8.4 萬個 LUT，還有 SDRAM 介面的開發板，例如開源的 **ULX3S**）。
-對應由 `v2c` 做（`LUT4`、進位鏈 `CCU2C`、正反器 `TRELLIS_FF`），佈局繞線與位元流交給 OSS CAD Suite 的 **nextpnr-ecp5** 與 **ecppack**：
+對應由 `reda` 做（`LUT4`、進位鏈 `CCU2C`、正反器 `TRELLIS_FF`），佈局繞線與位元流交給 OSS CAD Suite 的 **nextpnr-ecp5** 與 **ecppack**：
 
 ```sh
-$ v2c fpga --arch ecp5 --bit counter.bit counter.veryl
+$ reda fpga --arch ecp5 --bit counter.bit counter.veryl
 === Counter ===
   ...
   cells: 9
@@ -118,7 +118,7 @@ wrote counter.bit
 - 腳位檔是 Lattice 的 `.lpf`：`LOCATE COMP "o_led[0]" SITE "B2";`、`IOBUF PORT "o_led[0]" IO_TYPE=LVCMOS33;`。
   沒給 `--lpf` 時 nextpnr 自己放 IO。
 - `--config` 是繞好的文字設定（Project Trellis 格式），`--bit` 是位元流，用 `openFPGALoader -b ulx3s counter.bit` 燒錄。
-- `v2c gatesim ecp5` 用原本的 testbench 跑 ECP5 網表（第 8 章）。
+- `reda gatesim ecp5` 用原本的 testbench 跑 ECP5 網表（第 8 章）。
 - 和 iCE40 不同：reset 值是 1 的正反器，上電時就是 1（iCE40 全部上電為 0）。
 - 同步讀取的記憶體（例如 `SyncRam`）變成 block RAM `DP16KD`（v2.9；每顆 2048 × 9 位元，85F 有 208 顆）。
 - 目前還沒有：乘法器、自己的 ECP5 佈局繞線、虛擬板。

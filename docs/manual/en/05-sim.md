@@ -1,11 +1,11 @@
-# 5. Simulation: `v2c sim`
+# 5. Simulation: `reda sim`
 
 ```
-v2c sim [--top MODULE] [--vcd FILE.vcd] [--max-time N] FILE.veryl...
-v2c list FILE.veryl...
+reda sim [--top MODULE] [--vcd FILE.vcd] [--max-time N] FILE.veryl...
+reda list FILE.veryl...
 ```
 
-`v2c sim` is an event-driven simulator (like Icarus Verilog): 4-state values (0 / 1 / x), delta cycles, non-blocking assignments, a clock generator, VCD.
+`reda sim` is an event-driven simulator (like Icarus Verilog): 4-state values (0 / 1 / x), delta cycles, non-blocking assignments, a clock generator, VCD.
 
 ## Which module runs
 
@@ -15,10 +15,10 @@ v2c list FILE.veryl...
 | No testbench at all | the last declared module |
 | `--top M` (or `-s M`) | only `M` |
 
-Not sure which modules a file contains? Use `v2c list`:
+Not sure which modules a file contains? Use `reda list`:
 
 ```sh
-$ v2c list counter.veryl
+$ reda list counter.veryl
 Counter
 TestCounter  (#[test])
 ```
@@ -26,7 +26,7 @@ TestCounter  (#[test])
 ## Results and exit code
 
 ```sh
-$ v2c sim counter.veryl
+$ reda sim counter.veryl
 === simulating TestCounter ===
 $finish called at time 95
 TestCounter: PASS
@@ -43,9 +43,9 @@ TestCounter: 1 failure(s)
 |---|---|
 | 0 | everything passed |
 | 1 | an assertion failed, or a file / syntax / elaboration error (e.g. `err.veryl:2:1: parse error: ...`) |
-| 2 | bad command-line arguments (hints `v2c help sim`) |
+| 2 | bad command-line arguments (hints `reda help sim`) |
 
-So it drops straight into scripts or CI: `v2c sim *.veryl || exit 1`.
+So it drops straight into scripts or CI: `reda sim *.veryl || exit 1`.
 
 ## Time
 
@@ -56,7 +56,7 @@ If a large design (e.g. a RISC-V core running a whole program) does not finish, 
 ## Waveforms
 
 ```sh
-v2c sim --vcd wave.vcd counter.veryl
+reda sim --vcd wave.vcd counter.veryl
 gtkwave wave.vcd
 ```
 

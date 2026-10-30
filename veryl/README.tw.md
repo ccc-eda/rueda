@@ -1,24 +1,26 @@
-# veryl2chip
+# rueda 裡的 Veryl
 [English](README.md) | **繁體中文** | [简体中文](README.cn.md)
 
-**線上直接使用**（免安裝）：[IDE](https://ccc-eda.github.io/veryl2chip/web/dist/index.html) · [展示頁](https://ccc-eda.github.io/veryl2chip/web/dist/demo.html)
+這是 [rueda](../README.tw.md) 裡原本叫 veryl2chip 的部分；它原本包含、與語言無關的後端現在在 [`eda/`](../eda/)。
+
+**線上直接使用**（免安裝）：[IDE](https://ccc-eda.github.io/rueda/web/dist/index.html) · [展示頁](https://ccc-eda.github.io/rueda/web/dist/demo.html)
 
 **從零開始的教學**（課程教材）：[寫 Veryl → 模擬 → 看波形 → 合成 → 燒進 iCEBreaker](tutorial/README.tw.md)；**虛擬實驗課**（不用買板子）：[虛擬 iCEBreaker 上的 8 個實驗](tutorial/labs.tw.md)
 
 Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一路到位元流）與 ASIC 流程
 （標準元件、佈局、繞線、時序分析），全部用 Rust 寫成。
 從 v2.0 起，ASIC 流程也能用 SkyWater 的開源 **SKY130** PDK（`sky130_fd_sc_hd`），一路做到通過 DRC 的 GDSII 版圖
-（[說明](veryl-eda/README.tw.md)）。v2.2 起 FPGA 流程也能對應到 Lattice **ECP5**（ULX3S），佈局繞線交給 nextpnr-ecp5（`v2c fpga --arch ecp5`）。[`examples/rv64/`](examples/rv64/README.md) 是用 Veryl 寫的 RV64IMAC 處理器（M / S / U 模式、SV39），能開 **xv6** 與 **Linux**（用官方 `veryl build` + Verilator 驗證）。各版本的歷史：[history.md](history.md)。使用手冊：[manual/](manual/README.md)（命令列一律用 `v2c`）。
+（[說明](synth/README.tw.md)）。v2.2 起 FPGA 流程也能對應到 Lattice **ECP5**（ULX3S），佈局繞線交給 nextpnr-ecp5（`reda fpga --arch ecp5`）。[`veryl/examples/rv64/`](examples/rv64/README.md) 是用 Veryl 寫的 RV64IMAC 處理器（M / S / U 模式、SV39），能開 **xv6** 與 **Linux**（用官方 `veryl build` + Verilator 驗證）。各版本的歷史：[history.md](history.md)。使用手冊：[docs/manual/](../docs/manual/README.md)（命令列一律用 `reda`）。
 
 | | |
 |---|---|
-| [`veryl-sim/`](veryl-sim/) | Veryl testbench 的事件驅動模擬器（`$tb::clock_gen`、`$assert`、VCD） |
-| [`veryl-eda/`](veryl-eda/) | 合成成閘級網表、iCE40 與 ECP5 對應、自製佈局繞線 + 位元流（iCE40）、ASIC 後端（`--asic`） |
-| [`veryl-emu/`](veryl-emu/) | 把設計編譯成 WebAssembly 做快速的週期模擬（像 Verilator，在 Node 或瀏覽器裡跑）：RV64 SoC 在它上面約 2 MHz 開 Linux |
-| [`riscv-emu/`](riscv-emu/) | RV64 開發板的指令集模擬器（像 QEMU）：不模擬電路，同樣的 Linux、xv6 與程式快幾十倍（`rvemu`） |
-| [`veryl-wasm/`](veryl-wasm/) | 兩個 crate 編譯成 WebAssembly，以 JSON API 呼叫 |
-| [`web/`](web/) | 純前端的網頁環境（TypeScript） |
-| [`examples/`](examples/) | 範例設計的 Veryl 專案，含一顆單週期 RV32I CPU |
+| [`veryl/sim`](sim/) | Veryl testbench 的事件驅動模擬器（`$tb::clock_gen`、`$assert`、VCD） |
+| [`veryl/synth`](synth/) | Veryl → 閘級網表；它驅動的後端（iCE40 與 ECP5 對應、自製佈局繞線 + 位元流、ASIC 流程）在 [`eda/`](../eda/) |
+| [`veryl/emu`](emu/) | 把設計編譯成 WebAssembly 做快速的週期模擬（像 Verilator，在 Node 或瀏覽器裡跑）：RV64 SoC 在它上面約 2 MHz 開 Linux |
+| [`riscv/rvemu`](../riscv/rvemu/) | RV64 開發板的指令集模擬器（像 QEMU）：不模擬電路，同樣的 Linux、xv6 與程式快幾十倍（`rvemu`） |
+| [`web/wasm`](../web/wasm/) | 兩個 crate 編譯成 WebAssembly，以 JSON API 呼叫 |
+| [`web/`](../web/) | 純前端的網頁環境（TypeScript） |
+| [`veryl/examples/`](examples/) | 範例設計的 Veryl 專案，含一顆單週期 RV32I CPU |
 
 ## 網頁環境
 用瀏覽器開啟 `web/dist/index.html` 就是 VS Code 風格的 IDE，不需要伺服器、不需要安裝，從 `file://` 開也能用。
@@ -32,8 +34,8 @@ Veryl HDL 的 EDA 工具：模擬、邏輯合成、FPGA 流程（iCE40UP5K，一
   （ⓘ 階段說明、連線、退火動畫、⬇ 下載、縮放），數字在狀態列
 - 下方面板（問題、輸出、測試結果、波形）、狀態列、命令選單（Ctrl/⌘+Shift+P）、快速開檔（Ctrl/⌘+P）
 - ⚡ **虛擬 iCEBreaker**：把設計燒錄到畫出來的開發板上，LED 會亮（亮度依工作週期）、按鈕可以按，腳位和真實板相同（跑的是佈局繞線後真正的位元流：解碼回電路、逐週期模擬，小設計約真實速度的 0.3–0.4 倍；任何 iCE40UP5K 的 `.bin`，例如 nextpnr 產生的，都可以拖放上去）；可以接上 USB 序列終端機與 PMOD 模組（8 顆 LED、8 個開關、兩位數七段顯示器、VGA 螢幕、蜂鳴器）與**麵包板**（LED、電阻、按鈕、開關、導線接在 PMOD 腳上；短路、沒有限流電阻、輸入浮接都會警告）；腳位表會寫入專案的 `pins.pcf`；整個實驗（檔案、腳位、模組、麵包板）可以用一個連結分享
-- **在你自己的 RISC-V 上跑 C**：`RvSoc`（`examples/src/rvsoc.veryl`，多週期 RV32IMA + Zicsr、有中斷，暫存器檔與 8 KB 記憶體都在 block RAM，加上 LED、按鈕、開關、UART、計時器）跑在瀏覽器裡由 veryl-eda 自己的編譯器（`src/rv/`：C 子集、組譯器、指令集模擬器）編出來的 C 程式；⚡ 把程式放進 block RAM（只改程式時不用重新合成、佈局繞線），虛擬板的 CPU 模式以即時速度執行，閘級 SoC 約真實的 1%；還有 VGA 文字模式（`RvVgaBoard`，40 × 30 字元）、用 C 寫的搶佔式多執行緒核心（計時器中斷、ecall、原子指令）；範例在「C 程式」群組
-- 🖥 **模擬機**：放不進 FPGA、也不適合 ASIC 的大設計：veryl-emu 把設計編成 WebAssembly，在 worker 裡當成一台機器跑，UART 接到終端機（專案的 `machine.json` 說明腳位）；範例 **RV64 開發板**在瀏覽器裡開 OpenSBI + Linux + busybox，有 MicroPython、C、GPIO、麵包板與螢幕。引擎可以選 veryl-emu（硬體本身，每秒約 370 萬拍）或 riscv-emu（開發板的指令集，像 QEMU，常跑的碼翻成 WebAssembly：幾秒開到 shell）；標題列的目標選單有 FPGA / ASIC / veryl-emu / riscv-emu
+- **在你自己的 RISC-V 上跑 C**：`RvSoc`（`veryl/examples/src/rvsoc.veryl`，多週期 RV32IMA + Zicsr、有中斷，暫存器檔與 8 KB 記憶體都在 block RAM，加上 LED、按鈕、開關、UART、計時器）跑在瀏覽器裡由 veryl/synth 自己的編譯器（`src/rv/`：C 子集、組譯器、指令集模擬器）編出來的 C 程式；⚡ 把程式放進 block RAM（只改程式時不用重新合成、佈局繞線），虛擬板的 CPU 模式以即時速度執行，閘級 SoC 約真實的 1%；還有 VGA 文字模式（`RvVgaBoard`，40 × 30 字元）、用 C 寫的搶佔式多執行緒核心（計時器中斷、ecall、原子指令）；範例在「C 程式」群組
+- 🖥 **模擬機**：放不進 FPGA、也不適合 ASIC 的大設計：veryl/emu 把設計編成 WebAssembly，在 worker 裡當成一台機器跑，UART 接到終端機（專案的 `machine.json` 說明腳位）；範例 **RV64 開發板**在瀏覽器裡開 OpenSBI + Linux + busybox，有 MicroPython、C、GPIO、麵包板與螢幕。引擎可以選 veryl/emu（硬體本身，每秒約 370 萬拍）或 riscv/rvemu（開發板的指令集，像 QEMU，常跑的碼翻成 WebAssembly：幾秒開到 shell）；標題列的目標選單有 FPGA / ASIC / veryl/emu / riscv/rvemu
 - 介面可用繁體中文、簡體中文或英文（標題列的選單切換；預設依瀏覽器語言）
 
 `index.html#ex=fifo&stage=place` 會開啟某個範例並跳到某個階段；加上 `&run=1` / `&verify=1` 會直接開始測試，`&board=1` 會燒錄到虛擬板。
@@ -61,15 +63,15 @@ IDE 以前是 `ide.html`：那一頁現在會（帶著 `#…`）轉到 `index.ht
 在專案根目錄一次建置、一次測試全部：
 
 ```sh
-./build.sh          # veryl-sim、veryl-eda（release）與 web/dist（wasm + 網頁）；--no-web 只建 Rust 工具
-./test.sh           # veryl-sim、veryl-eda 的 cargo test、教學流程、npm test（和 CI 相同）
-./test.sh --full    # 再加 veryl-eda/test.sh：用 yosys 做形式等價、FPGA 流程（需要 OSS CAD Suite）
+./build.sh          # veryl/sim、veryl/synth（release）與 web/dist（wasm + 網頁）；--no-web 只建 Rust 工具
+./test.sh           # veryl/sim、veryl/synth 的 cargo test、教學流程、npm test（和 CI 相同）
+./test.sh --full    # 再加 veryl/synth/test.sh：用 yosys 做形式等價、FPGA 流程（需要 OSS CAD Suite）
 ```
 
-從 crates.io 安裝命令列工具（`v2c`、`veryl-sim`、`veryl-eda`）：
+從 crates.io 安裝命令列工具（`reda`、`veryl/sim`、`veryl/synth`）：
 
 ```sh
-cargo install veryl2chip-sim veryl2chip-eda
+cargo install --git https://github.com/ccc-eda/rueda rueda
 ```
 
 重新建置（需要 Rust + wasm32 target、Node.js）：
@@ -85,28 +87,28 @@ npm test
 （`.asc` 與 CLI 相同，`.bin` 與 icepack 相同）、ASIC 流程（結果與 CLI 相同）、每個範例的閘級模擬、
 解開匯出的專案 `.zip` 並以 `veryl test` 檢查，以及介面翻譯。
 
-## 命令列：`v2c`
-所有功能一個指令，像 git 一樣用子命令（`v2c help`、`v2c help <子命令>` 或 `v2c <子命令> -h` 看選項）：
+## 命令列：`reda`
+所有功能一個指令，像 git 一樣用子命令（`reda help`、`reda help <子命令>` 或 `reda <子命令> -h` 看選項）：
 
 | | |
 |---|---|
-| `v2c sim [--top M] [--vcd F] 檔案...` | 跑 `#[test]` testbench（`$assert` 失敗時結束碼為 1） |
-| `v2c list 檔案...` | 列出模組，標出哪些是 testbench |
-| `v2c synth [-o OUT.json] [--verilog OUT.v] 檔案...` | 閘級網表（yosys JSON、Verilog）與統計 |
-| `v2c fpga [--pcf P] [--asc A] [--bin B] [--pnr veryl] 檔案...` | iCE40UP5K：LUT 對應、佈局繞線、位元流 |
-| `v2c asic [--pdk vlib\|sky130] [--def D] [--gds G] 檔案...` | 標準元件、佈局、繞線、時序、功耗、DRC（SKY130）、GDSII |
-| `v2c fpga --arch ecp5 [--lpf L] [--bit B] 檔案...` | ECP5：LUT4 / CCU2C 對應，nextpnr-ecp5 + ecppack |
-| `v2c gatesim opt\|ice40\|ecp5\|asic\|sky130 檔案...` | 在合成後的網表上跑 testbench |
-| `v2c cc PROG.c [-o PROG.bin] [--run]` | 給 RISC-V SoC 的 C（或組合語言）；`--run` 在指令集模擬器上執行 |
-| `v2c pdk [目錄]` | 檢查完整的 SKY130 PDK 目錄 |
+| `reda sim [--top M] [--vcd F] 檔案...` | 跑 `#[test]` testbench（`$assert` 失敗時結束碼為 1） |
+| `reda list 檔案...` | 列出模組，標出哪些是 testbench |
+| `reda synth [-o OUT.json] [--verilog OUT.v] 檔案...` | 閘級網表（yosys JSON、Verilog）與統計 |
+| `reda fpga [--pcf P] [--asc A] [--bin B] [--pnr veryl] 檔案...` | iCE40UP5K：LUT 對應、佈局繞線、位元流 |
+| `reda asic [--pdk vlib\|sky130] [--def D] [--gds G] 檔案...` | 標準元件、佈局、繞線、時序、功耗、DRC（SKY130）、GDSII |
+| `reda fpga --arch ecp5 [--lpf L] [--bit B] 檔案...` | ECP5：LUT4 / CCU2C 對應，nextpnr-ecp5 + ecppack |
+| `reda gatesim opt\|ice40\|ecp5\|asic\|sky130 檔案...` | 在合成後的網表上跑 testbench |
+| `reda cc PROG.c [-o PROG.bin] [--run]` | 給 RISC-V SoC 的 C（或組合語言）；`--run` 在指令集模擬器上執行 |
+| `reda pdk [目錄]` | 檢查完整的 SKY130 PDK 目錄 |
 
 ```sh
-v2c sim --vcd wave.vcd tutorial/src/blinky.veryl
-v2c fpga --pnr veryl --pcf tutorial/icebreaker.pcf --bin blinky.bin tutorial/src/blinky.veryl
-v2c asic --pdk sky130 --gds alu.gds examples/src/rv32i.veryl --top Alu
+reda sim --vcd wave.vcd veryl/tutorial/src/blinky.veryl
+reda fpga --pnr veryl --pcf veryl/tutorial/icebreaker.pcf --bin blinky.bin veryl/tutorial/src/blinky.veryl
+reda asic --pdk sky130 --gds alu.gds veryl/examples/src/rv32i.veryl --top Alu
 ```
 
-`v2c` 隨 `veryl2chip-eda` 安裝（`cargo install veryl2chip-eda`，或 `./build.sh`：`veryl-eda/target/release/v2c`）；
-原本的 `veryl-sim` 與 `veryl-eda`（`veryl-eda --ice40`、`--asic`、`--cc`…）照舊可用。
+`reda` 隨 `rueda` 安裝（`cargo install --git https://github.com/ccc-eda/rueda rueda`，或 `./build.sh`：`target/release/reda`）；
+原本的 `veryl/sim` 與 `veryl/synth`（`reda synth --ice40`、`--asic`、`--cc`…）照舊可用。
 
-指令與架構見 [AGENTS.md](AGENTS.md)；各 crate 的 README（[veryl-sim](veryl-sim/README.tw.md)、[veryl-eda](veryl-eda/README.tw.md)）有更多細節。
+指令與架構見 [AGENTS.md](AGENTS.md)；各 crate 的 README（[veryl/sim](sim/README.tw.md)、[veryl/synth](synth/README.tw.md)）有更多細節。
