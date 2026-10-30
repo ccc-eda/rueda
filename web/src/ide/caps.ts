@@ -63,16 +63,18 @@ export function caps(i: CapInput): Record<Act, Cap> {
   };
 }
 
-/** a Fluxa program: its tests run (on the Fluxa simulator); synthesis to gates is not there yet */
+/** a Fluxa program: its tests run (on the Fluxa simulator, or with a task as gates), its tasks
+ * synthesize; it has no pins for the virtual board (its ports are valid / ready streams) */
 function fluxaCaps(i: CapInput): Record<Act, Cap> {
-  const noSynth = tr('Fluxa 目前只有行為模擬（▶ 執行它的 test）；合成到閘級、FPGA、ASIC 還沒有。', 'Fluxa has behavioral simulation only for now (▶ Run its tests); synthesis to gates, FPGA and ASIC are not there yet.');
-  const off: Cap = { on: false, why: noSynth };
+  const tests = hasTests(i);
+  const noTests: Cap = { on: false, why: tr('這個 Fluxa 程式沒有 test 區塊，沒有東西可以測試。', 'This Fluxa program has no test block: nothing to test.') };
+  const noTask = tr('沒有 task 可以合成。', 'No task to synthesize.');
   return {
-    test: hasTests(i) ? { on: true } : { on: false, why: tr('這個 Fluxa 程式沒有 test 區塊，沒有東西可以測試。', 'This Fluxa program has no test block: nothing to test.') },
-    verify: off,
-    board: off,
-    emu: off,
-    synth: off,
+    test: tests ? { on: true } : noTests,
+    verify: !tests ? noTests : i.top ? { on: true } : { on: false, why: noTask },
+    board: { on: false, why: tr('Fluxa 的 task 的埠是資料流（valid / ready），不是板子的腳位；虛擬板要用 Veryl 寫的設計。可以按「⚙ 合成」看它變成的 FPGA 與晶片。', 'A Fluxa task\'s ports are streams (valid / ready), not the board\'s pins: the virtual board takes Veryl designs. "⚙ Synthesize" shows the FPGA and chip it becomes.') },
+    emu: { on: false, why: tr('模擬機要有 machine.json（Veryl 寫的機器）。', 'The emulator needs a machine.json (a machine written in Veryl).') },
+    synth: i.top ? { on: true } : { on: false, why: noTask },
   };
 }
 

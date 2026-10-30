@@ -358,20 +358,47 @@ type SynthOut = (veryl_synth::elab::Stages, Netlist);
 
 /// parse + synthesize + map; (top, (stages, iCE40 netlist))
 fn synth_netlists(v: &Value) -> R<(String, SynthOut)> {
+    let (top, st, _) = stages(v)?;
+    let mapped = eda::fpga::ice40::map(&st.opt)?;
+    Ok((top, (st, mapped)))
+}
+
+/// a Fluxa project: .fx files and no Veryl
+fn is_fluxa(fs: &[(String, String)]) -> bool { fs.iter().any(|f| f.0.ends_with(".fx")) && !fs.iter().any(|f| f.0.ends_with(".veryl")) }
+
+/// the design synthesized (Veryl, or a Fluxa task): (top, stages, the modules / tasks to pick from)
+fn stages(v: &Value) -> R<(String, veryl_synth::elab::Stages, Vec<Value>)> {
     let fs = files(v)?;
+    let want = v.get("top").and_then(|t| t.as_str());
+    if is_fluxa(&fs) {
+        let prog = fluxa::load_many(&fs)?;
+        let tasks = fluxa_synth::tasks(&prog);
+        let top = match want { Some(t) if tasks.iter().any(|x| x == t) => t.to_string(), _ => fluxa_synth::default_top(&prog).ok_or("no task to synthesize")? };
+        let s = fluxa_synth::synthesize(&prog, &top, &Default::default()).map_err(|e| format!("synthesis error in '{}': {}", top, e))?;
+        let nl = s.netlist;
+        let st = veryl_synth::elab::Stages {
+            insts: s.insts,
+            ports: nl.ports.iter().map(|p| (p.name.clone(), p.dir, p.bits.len())).collect(),
+            signals: nl.nets.iter().filter(|(n, _)| !n.starts_with("$mem:")).map(|(n, b)| (n.clone(), b.len())).collect(),
+            // the task's FSM and datapath come out of the generator already optimized
+            raw: nl.clone(),
+            opt: nl,
+            warnings: s.warnings,
+        };
+        return Ok((top, st, tasks.iter().map(|n| json!({ "name": n, "test": false })).collect()));
+    }
     let mut parsers = vec![];
     for (name, src) in &fs {
         parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?);
     }
     let mut lib = veryl_synth::elab::Lib::new();
     for p in &parsers { lib.add(&p.veryl); }
-    let top = match v.get("top").and_then(|t| t.as_str()) {
+    let top = match want {
         Some(t) => t.to_string(),
         None => lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()).ok_or("no synthesizable (non-#[test]) module")?,
     };
     let st = veryl_synth::elab::synthesize_stages(&lib, &top)?;
-    let mapped = eda::fpga::ice40::map(&st.opt)?;
-    Ok((top, (st, mapped)))
+    Ok((top, st, lib.order.iter().map(|(n, t)| json!({ "name": n, "test": t })).collect()))
 }
 
 /// the virtual board: synthesize, map to iCE40 and power up an iCEBreaker with the design
@@ -699,23 +726,12 @@ fn board_reset() -> R<Value> {
 }
 
 fn synth(v: &Value) -> R<Value> {
-    let fs = files(v)?;
-    let mut parsers = vec![];
-    for (name, src) in &fs {
-        parsers.push(veryl_parser::Parser::parse(src, name).map_err(|e| veryl_sim::parse_err(name, src, &e))?);
-    }
-    let mut lib = veryl_synth::elab::Lib::new();
-    for p in &parsers { lib.add(&p.veryl); }
-    let top = match v.get("top").and_then(|t| t.as_str()) {
-        Some(t) => t.to_string(),
-        None => lib.order.iter().rev().find(|(_, t)| !t).map(|x| x.0.clone()).ok_or("no synthesizable (non-#[test]) module")?,
-    };
-    let st = veryl_synth::elab::synthesize_stages(&lib, &top)?;
+    let (top, st, modules) = stages(v)?;
     let mapped = eda::fpga::ice40::map(&st.opt)?;
     Ok(json!({
         "ok": true,
         "top": top,
-        "modules": lib.order.iter().map(|(n, t)| json!({ "name": n, "test": t })).collect::<Vec<_>>(),
+        "modules": modules,
         "warnings": st.warnings,
         "hier": st.insts.iter().map(|(p, m)| json!({ "path": p, "module": m })).collect::<Vec<_>>(),
         "ports": st.ports.iter().map(|(n, d, w)| json!({ "name": n, "dir": dir(*d), "width": w })).collect::<Vec<_>>(),
@@ -732,13 +748,26 @@ fn fluxa_run(v: &Value) -> R<Value> {
     let prog = fluxa::load_many(&files(v)?)?;
     let only: Option<Vec<&str>> = v.get("tests").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).collect());
     let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
-    let opts = fluxa::Options { trace: flag("trace"), stats: flag("stats"), coop: true, hw: None };
+    // gate level: task `synth` replaced by its `gate` netlist (opt, ice40, ecp5, asic, sky130)
+    let gate = match (v.get("gate").and_then(|g| g.as_str()), v.get("synth").and_then(|t| t.as_str())) {
+        (Some(kind), Some(top)) => Some((std::sync::Arc::new(fluxa_synth::hw::Provider::new(&prog, top, kind)?), top, kind)),
+        _ => None,
+    };
+    let hw = gate.as_ref().map(|g| g.0.clone() as std::sync::Arc<dyn fluxa::runtime::HwProvider>);
+    let opts = fluxa::Options { trace: flag("trace"), stats: flag("stats"), coop: true, hw };
     let mut results = vec![];
     for t in prog.tests.iter().filter(|t| only.as_ref().is_none_or(|o| o.contains(&t.name.as_str()))) {
         let r = fluxa::run_test(&prog, t, &opts);
         results.push(json!({ "name": r.name, "passed": r.passed, "message": r.message, "output": r.output, "stats": r.stats }));
     }
-    Ok(json!({ "ok": true, "results": results }))
+    let gate_info = match &gate {
+        Some((p, top, kind)) => {
+            let cells = p.report().into_iter().find(|(n, _)| n == top).and_then(|(_, r)| r.ok()).unwrap_or(0);
+            json!({ "top": top, "kind": kind, "cells": cells })
+        }
+        None => Value::Null,
+    };
+    Ok(json!({ "ok": true, "results": results, "gate": gate_info }))
 }
 
 fn files(v: &Value) -> R<Vec<(String, String)>> {
@@ -813,7 +842,7 @@ pub fn dispatch(v: &Value) -> R<Value> {
         // cooperative scheduler (no threads in WebAssembly)
         "fluxa_list" => {
             let prog = fluxa::load_many(&files(v)?)?;
-            Ok(json!({ "ok": true, "tests": prog.tests.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), "fns": prog.fns.len() }))
+            Ok(json!({ "ok": true, "tests": prog.tests.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), "tasks": fluxa_synth::tasks(&prog), "fns": prog.fns.len() }))
         }
         "fluxa_run" => fluxa_run(v),
         "chipdb_loaded" => Ok(json!({ "ok": true, "loaded": CHIP.with(|c| c.borrow().is_some()) })),

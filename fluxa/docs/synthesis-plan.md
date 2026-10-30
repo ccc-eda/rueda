@@ -63,6 +63,10 @@
   週期內的組合邏輯（沒有切成多級管線暫存器）。`mem<T, N>`（初值全 0）只以 `m[i]` 存取時，讀寫各佔
   一個週期，讀出的字直接進暫存器，網表記成 `$mem:` 網路，iCE40 對應成 `SB_RAM40_4K`；其他用法退回
   暫存器陣列並給警告。
+- F6 完成：`reda fpga / asic` 收 `.fx`。16 階 FIR 在 iCE40 UP5K 放不下（104% 邏輯、40 支 IO），
+  新增的 `examples/fir4.fx`（4 階、8 位元）是 191 個元件、77 MHz，做出位元流；16 階 FIR 做出 SKY130 GDS
+  （38 MHz，DRC 0、LVS 相符）。網頁 IDE 的 Fluxa 專案有「⚙ 合成」（① 列出 task 與實例）、閘級的 ▶ 測試
+  與 ✔ 全面驗證；`npm test` 對每個有合成頂層的 Fluxa 範例做合成與閘級測試，e2e 從合成跑到繞線再跑閘級測試。
 
 每個版本：先寫測試、再實作，`cargo test`、`npm test`、`npm run e2e` 全過才 commit。
 

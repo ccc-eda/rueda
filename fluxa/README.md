@@ -26,6 +26,22 @@ cargo test --release -p rueda-fluxa           # 完整回歸測試：examples + 
 
 結束碼：全部通過 0，有失敗 1，載入/語法錯誤 2。
 
+## 合成
+
+`fluxa/synth`（crate `rueda-fluxa-synth`）把 task 合成成和 Veryl 一樣的閘級網表，後面接 rueda 的 FPGA / ASIC 流程：
+
+```
+reda synth --top Fir examples/fir.fx           # 網表；-o 寫 yosys JSON、--verilog 寫 Verilog
+reda fpga --asc fir4.asc --bin fir4.bin examples/fir4.fx    # iCE40 位元流
+reda asic --pdk sky130 --gds fir.gds examples/fir.fx        # SKY130 版圖
+reda gatesim ice40 examples/fir.fx             # test 照跑，task 換成它的網表
+cargo test --release -p rueda-fluxa-synth      # 合成與閘級共模擬的回歸測試
+```
+
+task 變成狀態機加資料路徑，通道變成 valid / ready 串流埠；`pipeline(ii = 1)` 一個時脈一次迭代；
+`mem` 在 iCE40 上變成 block RAM；建網路的 task 整個變成一個網表（內部通道是 FIFO）。
+細節見手冊第 17 章與 [`docs/synthesis-plan.md`](docs/synthesis-plan.md)。
+
 ## 模擬模型
 
 - 每個 `task` 是一個獨立執行的程序，通道是有界 FIFO（`depth`）：滿了 `send` 阻塞、空了 `recv` 阻塞。
@@ -58,8 +74,8 @@ cargo test --release -p rueda-fluxa           # 完整回歸測試：examples + 
 ## 刻意不做的事（行為模擬器的邊界）
 
 - **`stage` 層與 `;;`**：週期精確語意需要另一個模擬器，遇到會明確報錯。
-- **靜態檢查**：II 可達性（E0412）、bank 衝突（E0401）、SDF 速率平衡（E0501）屬於編譯器前端，這裡沒有實作；
-  `pipeline(ii = n)` 與 `schedule` 只被解析，不影響行為。
+- **靜態檢查**：bank 衝突（E0401）、SDF 速率平衡（E0501）沒有實作；II 可達性（E0412）由合成檢查。
+  `pipeline(ii = n)` 與 `schedule` 在模擬器裡只被解析，不影響行為。
 - **comptime `Graph` 建構器**：用 `array(n, |_| chan::<T>(..))` 加迴圈 `spawn` 可寫出同樣的拓樸（見 `examples/gemm.fx`）。
 - **非阻塞通道操作**（`try_recv` / `empty`）在 task 層被禁止，因為它們會破壞 KPN 的確定性。
 - 預設一個 task 對應一條 OS 執行緒，數百個 PE 沒問題，數萬個就不適合（`--coop` 沒有這個限制）；`print` 在多任務間的交錯順序不保證。
@@ -89,7 +105,9 @@ sim/src/parser.rs   語法分析（規格 §2） sim/src/interp.rs   樹走訪�
 sim/src/ast.rs      語法樹            sim/src/value.rs    值、型別、定點數與範圍檢查
 sim/src/lib.rs      load / run_test   sim/src/cli.rs      命令列（reda sim / reda list）
 sim/tests/          回歸測試（examples.rs 驅動下面所有 .fx）
-examples/           basics fir mac gemm fanout，以及 err_* 四個預期失敗的範例
+synth/src/          合成：lower.rs（狀態）、gen.rs（閘）、ty.rs（位寬）、graph.rs（任務網路）、hw.rs（閘級共模擬）、cli.rs
+synth/tests/        合成與閘級共模擬的回歸測試
+examples/           basics fir fir4 mac gemm fanout pipeline，以及 err_* 四個預期失敗的範例
 rv32i/ rv64/        RISC-V 處理器範例（見上）
 docs/           語言規格與版本紀錄
 ```

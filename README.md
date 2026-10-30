@@ -61,7 +61,7 @@ rueda/
 | Language | Simulation | Synthesis, FPGA, ASIC | Web IDE |
 |---|---|---|---|
 | Veryl (`.veryl`) | `reda sim`, `reda emu` | `reda synth / fpga / asic / gatesim` | yes |
-| Fluxa (`.fx`) | `reda sim` | not yet (the next front end for eda) | yes (tests) |
+| Fluxa (`.fx`) | `reda sim` | `reda synth / fpga / asic / gatesim` (a task, or a network of tasks) | yes |
 
 ## Building and testing
 

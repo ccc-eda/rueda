@@ -230,7 +230,13 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
     let nl: Netlist = netlist::optimize(b, &alias, ports, vec![], &decl.name)?;
     let mut warnings = vec![];
     for inst in &insts { warnings.extend(inst.s.warnings.iter().map(|w| format!("{}: {}", inst.name, w))); }
-    Ok(crate::Synth { netlist: nl, iface, warnings })
+    // instance k of task T is `t<k>` (its own instances below it)
+    let mut tree = vec![(String::new(), decl.name.clone())];
+    for (k, inst) in insts.iter().enumerate() {
+        let me = format!("{}{}", inst.name.trim_start_matches('$').to_lowercase(), k);
+        for (p, t) in &inst.s.insts { tree.push((if p.is_empty() { me.clone() } else { format!("{}.{}", me, p) }, t.clone())); }
+    }
+    Ok(crate::Synth { netlist: nl, iface, warnings, insts: tree })
 }
 
 /// a FIFO of `depth` tokens of `w` data bits (+ the close flag): push side (data, close, valid)

@@ -39,8 +39,11 @@ of yosys internal cells, optimizes it and prints its statistics.
 Fluxa (FILE.fx...): synthesizes a task (--top TASK, default the last one) into an FSM and its
 datapath; each channel parameter c becomes a valid / ready stream (c_data, c_close, c_valid,
 c_ready), every other parameter an input port unless fixed with --param NAME=VALUE. The same
-flags then work for fpga, asic and the outputs.
+flags then work for fpga, asic and the outputs (e.g. reda fpga --bin fir4.bin fir4.fx).
+pipeline(ii = 1) loops start an iteration every clock (else error E0412); a mem used as m[i]
+becomes block RAM; a task that spawns a network becomes one netlist (channels: FIFOs).
   --param NAME=VALUE  a scalar parameter as a constant (Fluxa)
+  --list              the tasks of a Fluxa program
 examples: reda synth -o adder.json adder.veryl     reda synth fluxa/examples/mac.fx"),
     ("fpga", "FPGA flow (iCE40UP5K, ECP5): LUT mapping, place & route, bitstream", "\
 usage: reda fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
@@ -89,8 +92,9 @@ usage: reda gatesim opt|ice40|ecp5|asic|sky130 [--top MODULE] FILE.veryl...|FILE
 Post-synthesis simulation: MODULE (default: the last non-#[test] module) is replaced by its
 synthesized netlist (opt: generic gates, ice40: LUTs / block RAM, ecp5: ECP5 LUTs / carries,
 asic: vlib cells, sky130: SKY130 cells) and its #[test] testbenches run against it.
-Fluxa (FILE.fx...): the program's tests run with TASK (--top, default the last task) replaced
-by its synthesized netlist; its channels are connected to the netlist's stream ports.
+Fluxa (FILE.fx...): the program's tests run with TASK (--top) replaced by its synthesized
+netlist, its channels connected to the netlist's stream ports; without --top every task that
+synthesizes runs as gates.
 examples: reda gatesim ice40 fifo.veryl     reda gatesim asic fluxa/examples/mac.fx"),
     ("emu", "compile a Veryl design to WebAssembly (fast cycle-based simulation)", "\
 usage: reda emu [--top MODULE] [--stop SIGNAL,...] [-o OUT.wasm] FILE.veryl...

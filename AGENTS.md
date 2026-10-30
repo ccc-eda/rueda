@@ -17,6 +17,7 @@ between the languages and the back end. **`eda/` must not depend on any language
 | `veryl/synth/` | `rueda-veryl-synth` (`veryl_synth`) | Veryl → netlist (`elab.rs`), `gatesim.rs`, `cli.rs` (`reda synth/fpga/asic/gatesim`); `test.sh`, `fpga/` yosys/nextpnr comparison flows |
 | `veryl/emu/` | `rueda-veryl-emu` (`veryl_emu`) | Veryl → WebAssembly |
 | `fluxa/sim/` | `rueda-fluxa` (`fluxa`) | Fluxa simulator; see `fluxa/AGENTS.md` (zero dependencies, async interpreter, two schedulers) |
+| `fluxa/synth/` | `rueda-fluxa-synth` (`fluxa_synth`) | Fluxa → netlist (task FSM + datapath, networks), gate-level co-simulation, `cli.rs` (`reda synth/fpga/asic/gatesim` for `.fx`) |
 | `riscv/rvtools/` | `rueda-rvtools` (`rvtools`) | C compiler, assembler, RV32 ISS; `cli.rs` (`reda cc`) |
 | `riscv/rvemu/` | `rueda-rvemu` (`riscv_emu`) | RV64 board emulator, wasm JIT (`.cargo/config.toml` holds its wasm32 link flags) |
 | `web/wasm/` | `rueda-wasm` | the web core: C ABI, JSON in / out (`src/api.rs` `dispatch`) |
@@ -46,6 +47,7 @@ cd web && npm run e2e                   # the IDE end to end in the installed Ch
   moving files means updating those paths and the scripts (`*.sh` call `$REDA`, i.e. `target/release/reda`).
 - Environment variables keep their old names: `VERYL_EDA_CHIPDB`, `VERYL_EDA_SKY130`, `VERYL_EDA_PROFILE`.
 - Web UI text is `tr('繁體中文', 'English')`; docs come in English, 繁體中文 and 简体中文 (`tools/tocn.py`).
-- Fluxa has no synthesis yet: `reda synth/fpga/asic/gatesim` refuse `.fx` files, and the IDE turns those
-  actions off for Fluxa projects with a reason. A Fluxa front end would produce an `eda::netlist::Netlist`.
+- Fluxa synthesis is `fluxa/synth` (crate rueda-fluxa-synth): a task → FSM + datapath (`lower.rs` states,
+  `gen.rs` gates), networks → one netlist (`graph.rs`), the gate-level co-simulation (`hw.rs`). Its output is an
+  `eda::netlist::Netlist`, so `eda::flow` does the rest; plan and progress: `fluxa/docs/synthesis-plan.md`.
 - Per-area notes: `veryl/AGENTS.md` (Veryl tools, from veryl2chip), `fluxa/AGENTS.md`, `web/PLAN.md`.

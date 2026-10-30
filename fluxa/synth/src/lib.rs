@@ -25,6 +25,8 @@ pub struct Synth {
     /// its stream and scalar ports, by parameter
     pub iface: hw::Iface,
     pub warnings: Vec<String>,
+    /// the task and, for a network, its instances: (path, task); the task itself is ("", name)
+    pub insts: Vec<(String, String)>,
 }
 
 /// synthesize task `top` of `prog`; `params` fixes scalar parameters (else they are inputs)

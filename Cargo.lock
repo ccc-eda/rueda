@@ -1086,6 +1086,7 @@ version = "0.6.0"
 dependencies = [
  "rueda-eda",
  "rueda-fluxa",
+ "rueda-fluxa-synth",
  "rueda-rvtools",
  "rueda-veryl-emu",
  "rueda-veryl-sim",

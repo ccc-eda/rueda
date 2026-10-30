@@ -1032,7 +1032,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             ParamHw::Scalar(_, Some(_)) => {}
         }
     }
-    Ok(crate::Synth { netlist, iface, warnings })
+    Ok(crate::Synth { netlist, iface, warnings, insts: vec![(String::new(), decl.name.clone())] })
 }
 
 /// a memory address: the bits that pick one of `n` words (a block RAM has no more; an

@@ -52,11 +52,43 @@ regression tests run every example both ways and compare).
 - **▶ Run** runs the tests (all of them, or one from the Tests side bar). The Output panel shows each test's `print`
   output, `[PASS]` / `[FAIL]` with the reason, and the channel statistics.
 - The example library has a **Fluxa** group: basics, a FIR filter, a multiply-accumulate unit, a systolic-array
-  matrix multiply, a broadcast fan-out, a deadlock (on purpose), an RV32I processor written as four pipelined tasks, and an
+  matrix multiply, a broadcast fan-out, a deadlock (on purpose), a 4-tap FIR, a network of tasks, an RV32I processor written as four pipelined tasks, and an
   RV64G processor (M/S/U modes, Sv39, an IEEE-754 FPU, a mini OS; 90 tests).
 
-## What is not there yet
+## Synthesis
 
-Fluxa has behavioral simulation only. `reda synth / fpga / asic / gatesim` refuse `.fx` files, and the IDE turns
-those buttons off for a Fluxa project. Synthesis would be a Fluxa front end producing the same gate netlist as
-Veryl's (`eda::netlist::Netlist`); from there the FPGA and ASIC flows need no change.
+`reda synth / fpga / asic / gatesim` take `.fx` files too: the front end produces the same gate netlist as Veryl's
+(`eda::netlist::Netlist`), and the FPGA and ASIC flows after it are the same.
+
+```sh
+reda synth --top Fir fluxa/examples/fir.fx          # netlist statistics; -o writes yosys JSON, --verilog Verilog
+reda fpga --asc fir4.asc --bin fir4.bin fluxa/examples/fir4.fx   # iCE40 place and route, bitstream
+reda asic --pdk sky130 --gds fir.gds fluxa/examples/fir.fx       # SKY130 chip layout
+reda gatesim ice40 fluxa/examples/fir.fx            # the tests, with the task replaced by its iCE40 netlist
+reda synth --list fluxa/examples/pipeline.fx        # the tasks that can be synthesized
+```
+
+- The top is the task named by `--top` (default: the last one). Each channel parameter becomes a stream port
+  `NAME_data`, `NAME_close`, `NAME_valid`, `NAME_ready` (a valid / ready handshake; close is the end of the stream);
+  the other parameters are input ports, or constants with `--param NAME=VALUE`. Plus `clk` and `rst`.
+- A task becomes a finite-state machine with a datapath: every channel operation is a state boundary, and the pure
+  computation between them is done in one clock. Widths follow the specification's range inference; fixed-point
+  rounding and overflow modes, `@reg` (reads see the old value, committed at the iteration's end), arrays,
+  `unrolled()` and functions all become gates.
+- A `pipeline(ii = 1)` loop becomes one state: an iteration runs on every clock where its inputs are valid and its
+  outputs ready (the FIR takes a sample a clock). Each channel is received at most once and sent at most once per
+  iteration, not under an `if`, and no receive comes after a send; otherwise E0412 says why (with `ii >= 2` the loop
+  falls back to ordinary states).
+- `let m: mem<T, N> = [0; N]` used only as `m[i]` takes a clock per access (the word read goes straight into a
+  register) and becomes block RAM on the iCE40 (`SB_RAM40_4K`); other uses keep it as registers, with a warning.
+- A task that builds a network (`chan`, `spawn`, `broadcast`) becomes one netlist: a circuit for each spawn and a
+  FIFO of the channel's `depth` for each internal channel (`fluxa/examples/pipeline.fx`).
+- Not synthesized yet: generic tasks, channels of tuples or arrays, array parameters (so not the RV32I / RV64
+  processors yet).
+- In the web IDE a Fluxa project has **⚙ Synthesize** too: ① shows the task and its instances, ②–⑦ are the same as
+  for Veryl. With the simulation target set to generic gates / iCE40 / standard cells, **▶ Run** runs the tests with
+  the synthesis top replaced by its netlist, and **✔ Verify all** compares every implementation side by side. The
+  virtual board does not take Fluxa (its ports are streams, not the board's pins). The example "FIR filter (4 taps)"
+  fits an iCE40; "A network of tasks as one circuit" shows a network.
+
+Design and progress: `fluxa/docs/synthesis-plan.md`.

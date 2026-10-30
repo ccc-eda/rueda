@@ -37,8 +37,8 @@ cargo test --release -p rueda-fluxa                 # full regression suite (exa
 These are intentionally unimplemented per README / spec; encountering them should produce a clear error or be parsed-and-ignored, not implemented:
 
 - `stage` layer and `;;` (cycle-accurate semantics are a different simulator).
-- Static checks: II reachability (E0412), bank conflicts (E0401), SDF rate balance (E0501).
-- `pipeline(ii = n)` and `schedule`: parsed, no behavioral effect.
+- Static checks in the simulator: II reachability (E0412: synthesis checks it, `synth/src/lower.rs`), bank conflicts (E0401), SDF rate balance (E0501).
+- `pipeline(ii = n)` and `schedule`: parsed, no behavioral effect in the simulator (synthesis pipelines `ii` loops).
 - Non-blocking channel ops (`try_recv`/`empty`) are forbidden — they would break KPN determinism.
 
 ## Core semantics (breaking these breaks the spec)
@@ -50,5 +50,7 @@ These are intentionally unimplemented per README / spec; encountering them shoul
 - `fixed<I,F>`: exact arithmetic — addition aligns fractional bits, multiplication adds them.
 
 ## Layout
+
+Synthesis (`synth/`, crate rueda-fluxa-synth): `lower.rs` (unique names, CFG blocks = FSM states; channel ops, `mem` accesses and `pipeline` loops become terminators), `gen.rs` (type pass with widening, then gates: registers, state, stream ports, `$mem:` nets for block RAM), `ty.rs` (widths, fixed point), `graph.rs` (a task that spawns: elaborated by the interpreter with a recording provider, one netlist with FIFOs), `hw.rs` (`HwSim` / `Provider`: the netlist run through `runtime::HwProvider` for `reda gatesim`). Tests: `synth/tests/gatesim.rs` checks every gate-level run against the behavioral one test by test — a difference is a synthesis bug.
 
 `sim/src/lexer.rs` → `parser.rs` → `ast.rs` → `interp.rs` (async tree-walking interpreter; `eval`, `eval_type`, `exec_body`, `match_pat` return boxed futures to break the recursion) with `runtime.rs` (threads or the cooperative scheduler, channels, deadlock detection), `value.rs` (values/types/fixed-point). Entry points: `lib.rs` (`load`/`load_many`/`run_test`, used by `cli.rs`, `sim/tests/examples.rs` and the web core `web/wasm`) and `cli.rs` (`reda sim` / `reda list` for .fx files).

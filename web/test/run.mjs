@@ -546,10 +546,13 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     if (!ex.emu && !ex.pcf && (c.board.on || !c.board.fix?.includes('addPcf'))) errs.push(`${ex.id}: no pins, but the board is ${c.board.on ? 'on' : 'off without "add pins.pcf"'}`);
   }
   for (const ex of FLUXA) {
-    const i = { files: ex.files, mods: null, top: '' };
+    const i = { files: ex.files, mods: null, top: ex.synth ?? '' };
     const c = caps(i);
     if (start(i) !== 'test' || !c.test.on) errs.push(`${ex.id}: a Fluxa program does not start with its tests`);
-    for (const a of ['synth', 'board', 'verify', 'emu']) if (c[a].on || !c[a].why) errs.push(`${ex.id}: ${a} should be off, with a reason`);
+    // its tasks synthesize (and its tests run on their gates); no pins for the board
+    const off = ['board', 'emu', ...(ex.synth ? [] : ['synth', 'verify'])];
+    for (const a of off) if (c[a].on || !c[a].why) errs.push(`${ex.id}: ${a} should be off, with a reason`);
+    if (ex.synth && (!c.synth.on || !c.verify.on)) errs.push(`${ex.id}: synthesis of ${ex.synth} is off`);
   }
   // the welcome page's starting points open these examples
   const main = fs.readFileSync(path.join(dist, '../src/ide/main.ts'), 'utf8');
@@ -811,6 +814,25 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     } catch (e) {
       bad++;
       line = `FAIL ${ex.id.padEnd(9)} fluxa ${e.message}`;
+    }
+    console.log(`${line}  (${Date.now() - t0} ms)`);
+  }
+  // synthesis: each example's task as gates, the tests on them as on the simulator; the
+  // network's instances; a small one placed and routed on the iCE40
+  for (const ex of FLUXA.filter((e) => e.synth)) {
+    const t0 = Date.now();
+    let line;
+    try {
+      const s = core.call({ cmd: 'synth', files: ex.files, top: ex.synth });
+      const g = core.call({ cmd: 'fluxa_run', files: ex.files, gate: 'opt', synth: ex.synth });
+      const fails = g.results.filter((t) => !t.passed);
+      const insts = s.hier.length;
+      const ok = s.top === ex.synth && s.map.cells.length > 0 && !fails.length && g.gate.cells > 0 && (ex.id !== 'fx_pipeline' || insts > 3);
+      if (!ok) bad++;
+      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} synth ${ex.synth}: ${s.map.cells.length} iCE40 cells, ${insts} instance(s); gates ${g.results.length - fails.length}/${g.results.length} tests${fails.length ? ': ' + fails[0].message.split('\n')[0] : ''}`;
+    } catch (e) {
+      bad++;
+      line = `FAIL ${ex.id.padEnd(9)} synth ${e.message}`;
     }
     console.log(`${line}  (${Date.now() - t0} ms)`);
   }

@@ -50,10 +50,39 @@ reda list fluxa/examples/fir.fx                 # 列出 test
 - **▶ 运行** 跑 test（全部，或从侧栏的「测试」点一个）。「输出」面板显示每个 test 的 `print` 输出、
   `[PASS]` / `[FAIL]` 与原因，以及通道统计。
 - 示例库有 **Fluxa** 一组：基本语法、FIR 滤波器、乘加器、脉动阵列矩阵乘法、broadcast 扇出、（故意的）死锁，
-  用四个流水线任务写成的 RV32I 处理器，
+  4 阶 FIR、任务网络，用四个流水线任务写成的 RV32I 处理器，
   以及 RV64G 处理器（M/S/U 特权模式、Sv39、IEEE-754 FPU、迷你 OS；90 个 test）。
 
-## 还没有的
+## 综合
 
-Fluxa 目前只有行为仿真。`reda synth / fpga / asic / gatesim` 不接收 `.fx` 文件，IDE 在 Fluxa 项目里也会把这些按钮关掉。
-综合要做的是一个 Fluxa 前端，产生和 Veryl 一样的门级网表（`eda::netlist::Netlist`）；从那里开始，FPGA 与 ASIC 流程都不用改。
+`reda synth / fpga / asic / gatesim` 也接收 `.fx` 文件，前端产生和 Veryl 一样的门级网表（`eda::netlist::Netlist`），
+后面的 FPGA 与 ASIC 流程不变。
+
+```sh
+reda synth --top Fir fluxa/examples/fir.fx          # 网表统计；-o 写 yosys JSON、--verilog 写 Verilog
+reda fpga --asc fir4.asc --bin fir4.bin fluxa/examples/fir4.fx   # iCE40 布局布线与比特流
+reda asic --pdk sky130 --gds fir.gds fluxa/examples/fir.fx       # SKY130 芯片版图
+reda gatesim ice40 fluxa/examples/fir.fx            # test 照跑，但 task 换成它的 iCE40 网表
+reda synth --list fluxa/examples/pipeline.fx        # 可以综合的 task
+```
+
+- 顶层是 `--top` 指定的 task（默认最后一个）。每个通道参数变成流端口 `NAME_data`、`NAME_close`、
+  `NAME_valid`、`NAME_ready`（valid / ready 握手；close 是流结束），其他参数是输入端口，或用
+  `--param NAME=VALUE` 固定成常数。另有 `clk` 与 `rst`。
+- 一个 task 是一个有限状态机加数据路径：每个通道操作是状态的边界，中间的纯计算在一个时钟里做完。
+  位宽照规格的范围推导；定点数的舍入与溢出模式、`@reg`（读到旧值、迭代结束提交）、数组、`unrolled()`、
+  函数都会展开成门。
+- `pipeline(ii = 1)` 的循环变成一个状态：输入都 valid、输出都 ready 的那个时钟就跑一次迭代（FIR 一个时钟一个样本）。
+  每个通道每次迭代最多收一次、送一次，通道操作不能放在 `if` 里，收不能在送之后；做不到时报 E0412 并说明原因
+  （`ii ≥ 2` 则退回一般状态机）。
+- `let m: mem<T, N> = [0; N]` 只用 `m[i]` 读写时，每次访问占一个时钟（读出的字直接进寄存器），
+  iCE40 会把它做成 block RAM（`SB_RAM40_4K`）；其他用法退回寄存器数组并给警告。
+- 建网络的 task（`chan`、`spawn`、`broadcast`）整个变成一个网表：每个 spawn 一个电路，每条内部通道一个
+  照它的 `depth` 做的 FIFO（`fluxa/examples/pipeline.fx`）。
+- 还不能综合的：泛型 task、元素是 tuple 或数组的通道、数组参数（所以 RV32I / RV64 处理器还不行）。
+- 网页 IDE 的 Fluxa 项目也有「⚙ 综合」：① 显示 task 与它的实例，②–⑦ 和 Veryl 一样；
+  「仿真对象」选通用门 / iCE40 / 标准单元时，▶ 运行 会把综合顶层换成它的网表再跑 test，
+  「✔ 全面验证」把每种实现的结果并排比对。虚拟板不接收 Fluxa（它的端口是数据流，不是板子的引脚）。
+  示例「FIR 滤波器（4 阶）」放得进 iCE40，「任务网络综合成一个电路」示范网络。
+
+设计与进度见 `fluxa/docs/synthesis-plan.md`。

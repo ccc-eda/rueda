@@ -170,15 +170,40 @@ for (const size of SIZES) {
     return /✓ 90 /.test(banner) ? null : `tests: ${banner}`;
   });
 
-  // a Fluxa example from the list: the deadlock is reported, synthesis is off
-  await check('Fluxa deadlock example reported, synthesis off', size, async () => {
+  // a Fluxa example from the list: the deadlock is reported (the first step is the tests)
+  await check('Fluxa deadlock example reported', size, async () => {
     const { ctx, page } = await open(size, '#ex=fx_deadlock');
-    // the suggested first step of a Fluxa program is its tests; synthesis is not offered
     const steps = await page.$$eval('#guide [data-step]', (b) => b.map((x) => x.dataset.step));
     await page.click('#mainBtn');
     await page.waitForFunction(() => /deadlock/.test(document.getElementById('p-output').textContent), null, { timeout: 20000 });
     await ctx.close();
-    return steps[0] !== 'test' ? `first step ${steps[0]}` : steps.includes('synth') ? 'synthesis is suggested' : null;
+    return steps[0] !== 'test' ? `first step ${steps[0]}` : null;
+  });
+
+  // Fluxa synthesis: a Fluxa task through the stages to the routed iCE40, then its tests on the gates
+  await check('Fluxa synthesis: stages drawn, routed, tests on gates', size, async () => {
+    const { ctx, page, errors } = await open(size, '#ex=fx_fir4');
+    const steps = await page.$$eval('#guide [data-step]', (b) => b.map((x) => x.dataset.step));
+    if (!steps.includes('synth')) { await ctx.close(); return `synthesis not suggested: ${steps}`; }
+    await page.click('#guide [data-step="synth"]');
+    await page.waitForSelector('#flowStage', { state: 'visible' });
+    const missing = [];
+    for (const stage of ['rtl', 'raw', 'opt', 'map', 'route']) {
+      await blank(page);
+      await page.selectOption('#flowStage', stage);
+      if (await waitDrawn(page, stage === 'route' ? 120000 : 10000) <= 200) missing.push(stage);
+    }
+    const crumb = await page.textContent('#synCrumb');
+    // the simulation target is in the full-mode toolbar: set it, then the main button runs the tests
+    await page.$eval('#simMode', (s) => { s.value = 'ice40'; s.dispatchEvent(new Event('change')); });
+    await page.click('#mainBtn');
+    await page.waitForSelector('#p-results .banner', { timeout: 60000 });
+    const banner = await page.textContent('#p-results .banner');
+    await ctx.close();
+    if (missing.length) return `nothing drawn at ${missing.join(', ')}`;
+    if (!/Fir4/.test(crumb)) return `breadcrumb ${crumb}`;
+    if (!/✓/.test(banner) || !/Fir4/.test(banner)) return `gate-level tests: ${banner}`;
+    return errors.length ? `page errors: ${errors[0]}` : null;
   });
 }
 

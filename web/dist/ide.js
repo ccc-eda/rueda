@@ -5107,14 +5107,15 @@ ${lines.join("\n")}
     };
   }
   function fluxaCaps(i) {
-    const noSynth = tr("Fluxa \u76EE\u524D\u53EA\u6709\u884C\u70BA\u6A21\u64EC\uFF08\u25B6 \u57F7\u884C\u5B83\u7684 test\uFF09\uFF1B\u5408\u6210\u5230\u9598\u7D1A\u3001FPGA\u3001ASIC \u9084\u6C92\u6709\u3002", "Fluxa has behavioral simulation only for now (\u25B6 Run its tests); synthesis to gates, FPGA and ASIC are not there yet.");
-    const off = { on: false, why: noSynth };
+    const tests = hasTests(i);
+    const noTests = { on: false, why: tr("\u9019\u500B Fluxa \u7A0B\u5F0F\u6C92\u6709 test \u5340\u584A\uFF0C\u6C92\u6709\u6771\u897F\u53EF\u4EE5\u6E2C\u8A66\u3002", "This Fluxa program has no test block: nothing to test.") };
+    const noTask = tr("\u6C92\u6709 task \u53EF\u4EE5\u5408\u6210\u3002", "No task to synthesize.");
     return {
-      test: hasTests(i) ? { on: true } : { on: false, why: tr("\u9019\u500B Fluxa \u7A0B\u5F0F\u6C92\u6709 test \u5340\u584A\uFF0C\u6C92\u6709\u6771\u897F\u53EF\u4EE5\u6E2C\u8A66\u3002", "This Fluxa program has no test block: nothing to test.") },
-      verify: off,
-      board: off,
-      emu: off,
-      synth: off
+      test: tests ? { on: true } : noTests,
+      verify: !tests ? noTests : i.top ? { on: true } : { on: false, why: noTask },
+      board: { on: false, why: tr("Fluxa \u7684 task \u7684\u57E0\u662F\u8CC7\u6599\u6D41\uFF08valid / ready\uFF09\uFF0C\u4E0D\u662F\u677F\u5B50\u7684\u8173\u4F4D\uFF1B\u865B\u64EC\u677F\u8981\u7528 Veryl \u5BEB\u7684\u8A2D\u8A08\u3002\u53EF\u4EE5\u6309\u300C\u2699 \u5408\u6210\u300D\u770B\u5B83\u8B8A\u6210\u7684 FPGA \u8207\u6676\u7247\u3002", `A Fluxa task's ports are streams (valid / ready), not the board's pins: the virtual board takes Veryl designs. "\u2699 Synthesize" shows the FPGA and chip it becomes.`) },
+      emu: { on: false, why: tr("\u6A21\u64EC\u6A5F\u8981\u6709 machine.json\uFF08Veryl \u5BEB\u7684\u6A5F\u5668\uFF09\u3002", "The emulator needs a machine.json (a machine written in Veryl).") },
+      synth: i.top ? { on: true } : { on: false, why: noTask }
     };
   }
   function start(i) {
@@ -5250,6 +5251,7 @@ test ${task.toLowerCase()}_doubles {
   }
   var fxFiles = () => proj.files.filter((f) => f.name.endsWith(".fx"));
   var fluxaProject = () => fxFiles().length > 0 && !proj.files.some((f) => f.name.endsWith(".veryl"));
+  var hdlFiles = () => fluxaProject() ? fxFiles() : proj.files.filter((f) => f.name.endsWith(".veryl"));
   var PCF = "pins.pcf";
   function pcfOf(p) {
     return p.files.find((f) => f.name.endsWith(".pcf"))?.src;
@@ -5789,8 +5791,10 @@ test ${task.toLowerCase()}_doubles {
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
     let errs = [];
     try {
-      if (fluxaProject()) mods = (await core.call({ cmd: "fluxa_list", files: fxFiles() })).tests.map((name) => ({ name, test: true }));
-      else mods = (await core.call({ cmd: "list", files })).modules;
+      if (fluxaProject()) {
+        const r = await core.call({ cmd: "fluxa_list", files: fxFiles() });
+        mods = [...r.tests.map((name) => ({ name, test: true })), ...r.tasks.map((name) => ({ name, test: false }))];
+      } else mods = (await core.call({ cmd: "list", files })).modules;
       modsKnown = true;
     } catch (e) {
       errs = parseErrors(String(e.message ?? e), "check");
@@ -5943,7 +5947,7 @@ int main(void) {
   function refreshTops() {
     const st = $2("simTop");
     const keep = st.value;
-    st.innerHTML = `<option value="">${tr("\u5168\u90E8 #[test]", "all #[test]")}</option>` + mods.map((m) => `<option value="${esc4(m.name)}">${esc4(m.name)}${m.test ? "  (test)" : ""}</option>`).join("");
+    st.innerHTML = `<option value="">${fluxaProject() ? tr("\u5168\u90E8 test", "all tests") : tr("\u5168\u90E8 #[test]", "all #[test]")}</option>` + (fluxaProject() ? mods.filter((m) => m.test) : mods).map((m) => `<option value="${esc4(m.name)}">${esc4(m.name)}${m.test ? "  (test)" : ""}</option>`).join("");
     if (mods.some((m) => m.name === keep)) st.value = keep;
     const sy = $2("synthTop");
     const designs = mods.filter((m) => !m.test);
@@ -5984,8 +5988,12 @@ int main(void) {
     $2("statusbar").classList.toggle("busy", busy > 0);
     if (on) $2("sbTest").textContent = what;
   }
-  var KIND = (k) => ({ rtl: "RTL", opt: tr("\u901A\u7528\u9598", "generic gates"), ice40: "iCE40", asic: tr("\u6A19\u6E96\u5143\u4EF6", "standard cells") })[k] ?? k;
+  var KIND = (k) => ({ rtl: fluxaProject() ? "Fluxa" : "RTL", opt: tr("\u901A\u7528\u9598", "generic gates"), ice40: "iCE40", asic: tr("\u6A19\u6E96\u5143\u4EF6", "standard cells") })[k] ?? k;
   async function simulate(top, mode, vcd) {
+    if (fluxaProject()) {
+      const r = await fluxaRun(top ? [top] : null, mode);
+      return { log: r.results.map((t) => t.output + (t.passed ? "" : t.message + "\n")).join(""), tops: r.results.map((t) => ({ name: t.name, fails: t.passed ? 0 : 1, finished: true })), vcd: [], gate: r.gate };
+    }
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
     const mc = machineCfg();
     if (mc && (!top && !mods.some((m) => m.test) || top === mc.top)) throw new Error(tr(`${mc.top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u9069\u5408 testbench \u6A21\u64EC\uFF1A\u8ACB\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${mc.top} is a machine (machine.json), too large for the testbench simulator: use "\u{1F5A5} Emulator"`));
@@ -6035,15 +6043,21 @@ int main(void) {
     renderTests();
     renderProblems();
   }
+  function fluxaRun(tests, mode) {
+    if (mode !== "rtl" && !synthTop()) throw new Error(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684 task\uFF08\u9598\u7D1A\u6A21\u64EC\u9700\u8981\u5408\u6210\u9802\u5C64\uFF09", "No task to synthesize (gate-level simulation needs a synthesis top)"));
+    const gate = mode === "rtl" ? {} : { gate: mode, synth: synthTop() };
+    return core.call({ cmd: "fluxa_run", files: fxFiles(), tests, stats: true, ...gate });
+  }
   async function runFluxa(only) {
     const names = only ? [only] : mods.filter((m) => m.test).map((m) => m.name);
+    const mode = $2("simMode").value;
     for (const n of names) testState.set(n, "run");
     renderTests();
-    setBusy(true, tr("\u25B6 Fluxa \u6E2C\u8A66\u4E2D\u2026", "\u25B6 Running the Fluxa tests\u2026"));
+    setBusy(true, tr(`\u25B6 Fluxa \u6E2C\u8A66\u4E2D\uFF08${KIND(mode)}\uFF09\u2026`, `\u25B6 Running the Fluxa tests (${KIND(mode)})\u2026`));
     const t0 = performance.now();
     problems = problems.filter((p) => p.from !== "run");
     try {
-      const r = await core.call({ cmd: "fluxa_run", files: fxFiles(), tests: only ? [only] : null, stats: true });
+      const r = await fluxaRun(only ? [only] : null, mode);
       let out = "";
       for (const t of r.results) {
         testState.set(t.name, t.passed ? "pass" : "fail");
@@ -6057,7 +6071,8 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
       out += tr(`${r.results.length - fails.length} \u500B\u901A\u904E\uFF0C${fails.length} \u500B\u5931\u6557`, `${r.results.length - fails.length} passed, ${fails.length} failed`);
       $2("p-output").textContent = out;
       const msg = fails.length ? tr(`\u2717 ${fails.length} \u500B\u6E2C\u8A66\u5931\u6557\uFF08${fails.map((t) => t.name).join(", ")}\uFF09`, `\u2717 ${fails.length} test(s) failed (${fails.map((t) => t.name).join(", ")})`) : tr(`\u2713 ${r.results.length} \u500B\u6E2C\u8A66\u901A\u904E`, `\u2713 ${r.results.length} test(s) passed`);
-      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg)}</div><table><tr><th>test</th><th>Fluxa</th></tr>${r.results.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.passed ? "pass" : "fail"}">${t.passed ? "\u2713 PASS" : esc4("\u2717 " + t.message.split("\n")[0])}</td></tr>`).join("")}</table>`;
+      const where = r.gate ? tr(`\u3000\u9598\u7D1A\uFF1A${r.gate.top} \u2192 ${r.gate.cells} \u500B${KIND(mode)}\u5143\u4EF6`, `\u3000gate level: ${r.gate.top} \u2192 ${r.gate.cells} ${KIND(mode)}`) : "";
+      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg + where)}</div><table><tr><th>test</th><th>${KIND(mode)}</th></tr>${r.results.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.passed ? "pass" : "fail"}">${t.passed ? "\u2713 PASS" : esc4("\u2717 " + t.message.split("\n")[0])}</td></tr>`).join("")}</table>`;
       $2("sbTest").textContent = `${fails.length ? "\u2717" : "\u2713"} ${msg.slice(2)}\uFF08${((performance.now() - t0) / 1e3).toFixed(2)} s\uFF09`;
       panel(fails.length ? "output" : "results");
     } catch (e) {
@@ -6151,7 +6166,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
       alert(tr(`${top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u80FD\u5408\u6210\uFF1A\u8ACB\u9078\u5B83\u88E1\u9762\u7684\u6A21\u7D44\uFF0C\u6216\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${top} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "\u{1F5A5} Emulator"`));
       return;
     }
-    const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
+    const files = hdlFiles();
     const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
     openFile(FLOW_TAB);
     if (phone()) $2("panel").classList.add("collapsed");
@@ -6454,6 +6469,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
   var ACT_BTN = [["test", "cmdRun"], ["verify", "cmdVerify"], ["board", "cmdBoard"], ["emu", "cmdEmu"]];
   var btnTitle = /* @__PURE__ */ new Map();
   function applyCaps() {
+    $2("sbLang").textContent = fluxaProject() ? "Fluxa" : "Veryl";
     if (!core) return;
     const c = projCaps();
     const first = start(capIn());
@@ -6916,7 +6932,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       const v = parseFloat(clockEl.value);
       proj.clockMhz = v > 0 ? v : void 0;
       persist();
-      synthKey = JSON.stringify([proj.files.filter((f) => f.name.endsWith(".veryl")), synthTop(), pcfOf(proj), sdcOf(proj)]);
+      synthKey = JSON.stringify([hdlFiles(), synthTop(), pcfOf(proj), sdcOf(proj)]);
       synth?.setSdc(sdcOf(proj));
     };
     $2("mainMore").onclick = () => $2("mainMenu").classList.contains("hidden") ? showMenu() : hideMenu();

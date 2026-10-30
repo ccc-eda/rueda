@@ -147,6 +147,8 @@ function file(name: string): VFile | undefined { return proj.files.find(f => f.n
 /** a Fluxa project: .fx files and no Veryl. Its tests run on the Fluxa simulator; it has no synthesis (yet) */
 const fxFiles = () => proj.files.filter(f => f.name.endsWith('.fx'));
 const fluxaProject = () => fxFiles().length > 0 && !proj.files.some(f => f.name.endsWith('.veryl'));
+/** the hardware description: the Fluxa files of a Fluxa project, else the Veryl files */
+const hdlFiles = () => fluxaProject() ? fxFiles() : proj.files.filter(f => f.name.endsWith('.veryl'));
 
 /** the pin file is an ordinary project file (the first .pcf) */
 const PCF = 'pins.pcf';
@@ -651,7 +653,11 @@ async function check(): Promise<void> {
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
   let errs: typeof problems = [];
   try {
-    if (fluxaProject()) mods = (await core.call<{ tests: string[] }>({ cmd: 'fluxa_list', files: fxFiles() })).tests.map(name => ({ name, test: true }));
+    if (fluxaProject()) {
+      // its tests, and its tasks (what synthesis can take)
+      const r = await core.call<{ tests: string[]; tasks: string[] }>({ cmd: 'fluxa_list', files: fxFiles() });
+      mods = [...r.tests.map(name => ({ name, test: true })), ...r.tasks.map(name => ({ name, test: false }))];
+    }
     else mods = (await core.call<{ modules: ModuleInfo[] }>({ cmd: 'list', files })).modules;
     modsKnown = true;
   } catch (e) {
@@ -813,7 +819,7 @@ function synthTop(): string {
 function refreshTops(): void {
   const st = $<HTMLSelectElement>('simTop');
   const keep = st.value;
-  st.innerHTML = `<option value="">${tr('全部 #[test]', 'all #[test]')}</option>` + mods.map(m => `<option value="${esc(m.name)}">${esc(m.name)}${m.test ? '  (test)' : ''}</option>`).join('');
+  st.innerHTML = `<option value="">${fluxaProject() ? tr('全部 test', 'all tests') : tr('全部 #[test]', 'all #[test]')}</option>` + (fluxaProject() ? mods.filter(m => m.test) : mods).map(m => `<option value="${esc(m.name)}">${esc(m.name)}${m.test ? '  (test)' : ''}</option>`).join('');
   if (mods.some(m => m.name === keep)) st.value = keep;
   const sy = $<HTMLSelectElement>('synthTop');
   const designs = mods.filter(m => !m.test);
@@ -850,9 +856,14 @@ function setBusy(on: boolean, what = ''): void {
   if (on) $('sbTest').textContent = what;
 }
 
-const KIND = (k: string) => ({ rtl: 'RTL', opt: tr('通用閘', 'generic gates'), ice40: 'iCE40', asic: tr('標準元件', 'standard cells') } as Record<string, string>)[k] ?? k;
+const KIND = (k: string) => ({ rtl: fluxaProject() ? 'Fluxa' : 'RTL', opt: tr('通用閘', 'generic gates'), ice40: 'iCE40', asic: tr('標準元件', 'standard cells') } as Record<string, string>)[k] ?? k;
 
 async function simulate(top: string | null, mode: string, vcd: boolean): Promise<SimResult & { gate: { top: string; cells: number } | null }> {
+  if (fluxaProject()) {
+    // the Fluxa tests, as testbench results (a failed test: one failure)
+    const r = await fluxaRun(top ? [top] : null, mode);
+    return { log: r.results.map(t => t.output + (t.passed ? '' : t.message + '\n')).join(''), tops: r.results.map(t => ({ name: t.name, fails: t.passed ? 0 : 1, finished: true })), vcd: [], gate: r.gate } as SimResult & { gate: { top: string; cells: number } | null };
+  }
   const files = proj.files.filter(f => f.name.endsWith('.veryl'));
   // a machine (machine.json) is too large for the testbench simulator: it runs in the emulator
   const mc = machineCfg();
@@ -906,16 +917,24 @@ async function runTests(only?: string): Promise<void> {
 
 interface FluxaResult { name: string; passed: boolean; message: string; output: string; stats: string }
 
+/** a Fluxa project's tests on the simulator, or (mode: a netlist kind) with the synthesis top replaced by its gates */
+function fluxaRun(tests: string[] | null, mode: string): Promise<{ results: FluxaResult[]; gate: { top: string; cells: number } | null }> {
+  if (mode !== 'rtl' && !synthTop()) throw new Error(tr('沒有可合成的 task（閘級模擬需要合成頂層）', 'No task to synthesize (gate-level simulation needs a synthesis top)'));
+  const gate = mode === 'rtl' ? {} : { gate: mode, synth: synthTop() };
+  return core!.call({ cmd: 'fluxa_run', files: fxFiles(), tests, stats: true, ...gate });
+}
+
 /** a Fluxa project's tests (all, or `only`) on the Fluxa simulator: print output, the channel statistics */
 async function runFluxa(only?: string): Promise<void> {
   const names = only ? [only] : mods.filter(m => m.test).map(m => m.name);
+  const mode = $<HTMLSelectElement>('simMode').value;
   for (const n of names) testState.set(n, 'run');
   renderTests();
-  setBusy(true, tr('▶ Fluxa 測試中…', '▶ Running the Fluxa tests…'));
+  setBusy(true, tr(`▶ Fluxa 測試中（${KIND(mode)}）…`, `▶ Running the Fluxa tests (${KIND(mode)})…`));
   const t0 = performance.now();
   problems = problems.filter(p => p.from !== 'run');
   try {
-    const r = await core!.call<{ results: FluxaResult[] }>({ cmd: 'fluxa_run', files: fxFiles(), tests: only ? [only] : null, stats: true });
+    const r = await fluxaRun(only ? [only] : null, mode);
     let out = '';
     for (const t of r.results) {
       testState.set(t.name, t.passed ? 'pass' : 'fail');
@@ -926,8 +945,9 @@ async function runFluxa(only?: string): Promise<void> {
     out += tr(`${r.results.length - fails.length} 個通過，${fails.length} 個失敗`, `${r.results.length - fails.length} passed, ${fails.length} failed`);
     $('p-output').textContent = out;
     const msg = fails.length ? tr(`✗ ${fails.length} 個測試失敗（${fails.map(t => t.name).join(', ')}）`, `✗ ${fails.length} test(s) failed (${fails.map(t => t.name).join(', ')})`) : tr(`✓ ${r.results.length} 個測試通過`, `✓ ${r.results.length} test(s) passed`);
-    $('p-results').innerHTML = `<div class="banner ${fails.length ? 'fail' : 'pass'}">${esc(msg)}</div>`
-      + `<table><tr><th>test</th><th>Fluxa</th></tr>${r.results.map(t => `<tr><td>${esc(t.name)}</td><td class="${t.passed ? 'pass' : 'fail'}">${t.passed ? '✓ PASS' : esc('✗ ' + t.message.split('\n')[0])}</td></tr>`).join('')}</table>`;
+    const where = r.gate ? tr(`　閘級：${r.gate.top} → ${r.gate.cells} 個${KIND(mode)}元件`, `　gate level: ${r.gate.top} → ${r.gate.cells} ${KIND(mode)}`) : '';
+    $('p-results').innerHTML = `<div class="banner ${fails.length ? 'fail' : 'pass'}">${esc(msg + where)}</div>`
+      + `<table><tr><th>test</th><th>${KIND(mode)}</th></tr>${r.results.map(t => `<tr><td>${esc(t.name)}</td><td class="${t.passed ? 'pass' : 'fail'}">${t.passed ? '✓ PASS' : esc('✗ ' + t.message.split('\n')[0])}</td></tr>`).join('')}</table>`;
     $('sbTest').textContent = `${fails.length ? '✗' : '✓'} ${msg.slice(2)}（${((performance.now() - t0) / 1000).toFixed(2)} s）`;
     panel(fails.length ? 'output' : 'results');
   } catch (e) {
@@ -1024,7 +1044,7 @@ function runSynth(stage?: string): void {
   const top = synthTop();
   if (!top) { alert(tr('沒有可合成的模組（#[test] 模組不能合成）', 'No synthesizable module (#[test] modules cannot be synthesized)')); return; }
   if (machineCfg()?.top === top) { alert(tr(`${top} 是模擬機（machine.json），太大不能合成：請選它裡面的模組，或按「🖥 模擬機」`, `${top} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "🖥 Emulator"`)); return; }
-  const files = proj.files.filter(f => f.name.endsWith('.veryl'));
+  const files = hdlFiles();
   const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
   openFile(FLOW_TAB);
   // the chip views need the room on a phone; the panel comes back with the next run
@@ -1344,6 +1364,7 @@ const btnTitle = new Map<string, [string, string]>();
 
 /** buttons the project cannot use look off and explain why when clicked; the suggested first step is the primary button */
 function applyCaps(): void {
+  $('sbLang').textContent = fluxaProject() ? 'Fluxa' : 'Veryl';
   if (!core) return;
   const c = projCaps();
   const first = start(capIn());
@@ -1785,7 +1806,7 @@ function wire(): void {
     const v = parseFloat(clockEl.value);
     proj.clockMhz = v > 0 ? v : undefined;
     persist();
-    synthKey = JSON.stringify([proj.files.filter(f => f.name.endsWith('.veryl')), synthTop(), pcfOf(proj), sdcOf(proj)]);
+    synthKey = JSON.stringify([hdlFiles(), synthTop(), pcfOf(proj), sdcOf(proj)]);
     synth?.setSdc(sdcOf(proj));
   };
   $('mainMore').onclick = () => $('mainMenu').classList.contains('hidden') ? showMenu() : hideMenu();
