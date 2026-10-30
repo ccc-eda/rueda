@@ -4,7 +4,7 @@
   cosim.py MAPPED.json MAPPED.v CHIP.asc CHIP.pcf [--clock PORT] [--reset PORT:ACTIVE] [--cycles N]
 
 CHIP.asc is turned back into Verilog with icebox_vlog (the IceStorm decoder),
-MAPPED.v is veryl-eda's iCE40-mapped netlist simulated with yosys' cell
+MAPPED.v is eda's iCE40-mapped netlist simulated with yosys' cell
 models. Both get the same random inputs; every output is compared before
 each clock edge. Prints PASS / FAIL and exits non-zero on a mismatch.
 """

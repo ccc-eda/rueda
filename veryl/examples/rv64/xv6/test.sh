@@ -3,7 +3,7 @@
 #   xv6/test.sh            boot, echo / cat / ls / mkdir / wc
 #   xv6/test.sh usertests  + usertests -q (takes a long time in simulation)
 # Needs sim/build.sh and xv6/build.sh first. SIM picks another simulator (emu/rv64emu,
-# ../../riscv-emu/target/release/rvemu).
+# ../../../target/release/reda rvemu).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 OBJ=${OBJ:-sim/obj}

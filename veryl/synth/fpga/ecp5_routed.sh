@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ECP5 post-route check: every design is mapped (veryl-eda --ecp5), placed and routed by
+# ECP5 post-route check: every design is mapped (reda synth --ecp5), placed and routed by
 # nextpnr-ecp5 (--write: the packed netlist of TRELLIS_COMB / TRELLIS_FF / TRELLIS_IO),
 # and yosys proves the routed netlist equivalent to the mapped one (ecp5_unio.py turns the
 # IO buffers into wires and names the flip-flops alike on both sides; ecp5_comb.v fixes
@@ -12,7 +12,7 @@ ROOT=$(pwd)
 EX=$ROOT/../examples/src
 OUT=${OUT:-$(mktemp -d)}
 mkdir -p "$OUT"
-BIN=$ROOT/target/release/veryl-eda
+REDA=$ROOT/../../target/release/reda
 YOSYS=${YOSYS:-yosys}
 DESIGNS=${*:-"adder:Adder max3:Max3 rv32i:Alu gen_rev:GrayConv seq101:Seq101 pkt_reg:PktReg features:Top lang:Div lang:HsTop
 pnr_tests:AccTest uart:UartLoop vga:VgaDemo sevenseg:SevenSeg soc:RiscvSoc fifo:Fifo"}
@@ -24,7 +24,7 @@ for d in $DESIGNS; do
     IFS=: read -r f m <<< "$d"
     files="$(src "$f")"
     [ "$f" = soc ] && files="$EX/rv32i.veryl $EX/rv32i_rom.veryl $files"
-    "$BIN" --ecp5 --top "$m" -o "$OUT/$m.json" $files > /dev/null || { echo "$m: mapping FAILED"; fail=1; continue; }
+    "$REDA" synth --ecp5 --top "$m" -o "$OUT/$m.json" $files > /dev/null || { echo "$m: mapping FAILED"; fail=1; continue; }
     if ! nextpnr-ecp5 --85k --package CABGA381 --json "$OUT/$m.json" --write "$OUT/${m}_routed.json" --lpf-allow-unconstrained -q > "$OUT/${m}_pnr.log" 2>&1; then
         echo "$m: nextpnr-ecp5 FAILED (see $OUT/${m}_pnr.log)"; fail=1; continue
     fi

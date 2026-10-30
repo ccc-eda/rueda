@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Veryl -> iCE40 bitstream for the RISC-V SoC, with two gate-level simulations:
-#   1. veryl-eda: synthesis + iCE40 mapping, nextpnr-ice40 place & route, icepack
+#   1. reda synth: synthesis + iCE40 mapping, nextpnr-ice40 place & route, icepack
 #   2. simulate the mapped netlist (yosys iCE40 cell models)
 #   3. turn the routed bitstream back into Verilog (icebox_vlog) and simulate it
-# PNR=veryl uses veryl-eda's own place & route instead of nextpnr-ice40.
+# PNR=veryl uses rueda's own place & route instead of nextpnr-ice40.
 # Program a board with: iceprog build/soc.bin
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -13,8 +13,8 @@ EX=../../examples/src
 PCF=${PCF:-../examples/icebreaker.pcf}
 PNR=${PNR:-nextpnr}
 
-(cd .. && cargo build --release -q)
-../target/release/veryl-eda --top RiscvSoc --ice40 --pnr "$PNR" --pcf "$PCF" \
+(cd ../../.. && cargo build --release -q -p rueda)
+../../../target/release/reda synth --top RiscvSoc --ice40 --pnr "$PNR" --pcf "$PCF" \
     -o $B/soc.json --verilog $B/soc_mapped.v --asc $B/soc.asc --bin $B/soc.bin \
     $EX/rv32i.veryl ../examples/soc.veryl | grep -v "^  port"
 

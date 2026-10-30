@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# veryl-eda's own place & route (--pnr veryl): for every design, place and
+# rueda's own place & route (--pnr veryl): for every design, place and
 # route it, pack the bitstream, turn it back into Verilog (icebox_vlog) and
 # co-simulate it against the iCE40-mapped netlist with random inputs.
 set -euo pipefail
@@ -7,8 +7,8 @@ cd "$(dirname "$0")"
 B=build/pnr
 mkdir -p $B
 EX=../../examples/src
-(cd .. && cargo build --release -q)
-BIN=../target/release/veryl-eda
+(cd ../../.. && cargo build --release -q -p rueda)
+BIN="../../../target/release/reda synth"
 CHIPDB=${VERYL_EDA_CHIPDB:-}
 for c in /usr/local/share/icebox/chipdb-5k.txt /usr/share/icebox/chipdb-5k.txt /Users/Shared/ccc/oss-cad-suite/share/icebox/chipdb-5k.txt "$HOME/oss-cad-suite/share/icebox/chipdb-5k.txt"; do
     [ -z "$CHIPDB" ] && [ -f "$c" ] && CHIPDB=$c

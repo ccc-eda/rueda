@@ -2,8 +2,8 @@
 # The exchange area (linux/getfiles) from files on the command line, so the board's /root
 # gets them at boot, as the IDE does: "VERYLFS <bytes>" in a 512-byte block, then a tar.
 #   python3 linux/mkarea.py -o area.img board/main.py board/blink.sh blink
-#   ../../riscv-emu/target/release/rvemu -l 0x8F000000:area.img linux/build/opensbi/platform/generic/firmware/fw_payload.bin
-# Executable files (an ELF from v2c cc --linux) keep their x bit.
+#   ../../../target/release/reda rvemu -l 0x8F000000:area.img linux/build/opensbi/platform/generic/firmware/fw_payload.bin
+# Executable files (an ELF from reda cc --linux) keep their x bit.
 import io, os, sys, tarfile
 
 args = sys.argv[1:]

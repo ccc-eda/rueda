@@ -1,4 +1,4 @@
-// Rv64Soc on veryl-emu (the design compiled to WebAssembly): the same harness as
+// Rv64Soc on reda emu (the design compiled to WebAssembly): the same harness as
 // sim/main.cpp (Verilator), in JavaScript.
 //
 //   node emu/rv64emu.mjs [-t] [-m CYCLES] [-l ADDR:FILE]... [-s SCRIPT] PROG.elf
@@ -20,7 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadFiles } from '../../../veryl-emu/js/emu.mjs';
+import { loadFiles } from '../../../emu/js/emu.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RAM_BASE = 0x80000000n;

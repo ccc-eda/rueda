@@ -1,0 +1,239 @@
+// Build the front-end-only web environment into dist/:
+//   wasm.js      the Rust core (veryl/wasm) as base64, so file:// works
+//   examples.js  example projects (sources read from the repository)
+//   app.js       TypeScript UI bundled by esbuild into one classic script
+//   api.cjs      the same core API for the Node tests
+//   ide.js       the IDE page (M11), same core
+//   img_linux.js the emulator's Linux image for the RV64 example (OpenSBI + Linux + busybox, gzip + base64),
+//                loaded by the page only when the emulator boots it
+//   img_snap_linux.js  the same machine booted to its shell (snapshot.mjs: memory, gzip + base64), so the
+//                board starts in seconds; remade only when the model or the image changed
+// Usage: node build.mjs [--skip-wasm] [--skip-snapshot]
+//   index.html (the IDE), ide.css, demo.html (the demo page), style.css, ide.html (redirects to index.html)
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as esbuild from 'esbuild';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, '..');
+const dist = path.join(here, 'dist');
+fs.mkdirSync(dist, { recursive: true });
+
+// ---- WebAssembly core ----
+// both crates are built by the workspace (../Cargo.toml) with its `web` profile (LTO, panic = abort)
+const wasmDir = path.join(root, 'target/wasm32-unknown-unknown/web');
+const cargoWasm = (pkg, extra = []) => {
+  console.log(`cargo build ${pkg} (wasm32-unknown-unknown) …`);
+  execFileSync('cargo', ['build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', pkg, ...extra], { cwd: root, stdio: 'inherit' });
+};
+if (!process.argv.includes('--skip-wasm')) cargoWasm('rueda-veryl-wasm');
+const wasm = fs.readFileSync(path.join(wasmDir, 'rueda_veryl_wasm.wasm'));
+fs.writeFileSync(path.join(dist, 'wasm.js'), `var VERYL_WASM_B64 = "${wasm.toString('base64')}";\n`);
+console.log(`wasm.js      ${(wasm.length / 1e6).toFixed(1)} MB wasm`);
+
+// ---- riscv/rvemu (the RV64 board's instruction-set emulator), loaded when an emulator uses it ----
+if (!process.argv.includes('--skip-wasm')) cargoWasm('rueda-rvemu', ['--lib']);
+const rvWasm = fs.readFileSync(path.join(wasmDir, 'riscv_emu.wasm'));
+fs.writeFileSync(path.join(dist, 'rvemu.js'), `// riscv/rvemu (riscv/rvemu/src/wasm.rs) as base64\nvar VERYL_RVEMU_B64 = "${rvWasm.toString('base64')}";\n`);
+console.log(`rvemu.js     ${(rvWasm.length / 1e3).toFixed(0)} KB wasm`);
+
+// ---- examples ----
+const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
+// English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
+const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 'RV64 開發板': 'RV64 board', 其他: 'Other' };
+const EN = {
+  lab_gates: { title_en: 'Breadboard lab: logic gates', note_en: 'two switches (PMOD1B, each with a pull-down) → four LEDs for AND, OR, XOR, NOT (PMOD1A, each with a series resistor); the breadboard comes wired' },
+  lab_counter: { title_en: 'Lab: one press, plus one', note_en: 'each BTN1 press adds one (synchronizer + rising edge); the 8-bit count on the LED module in PMOD1A; BTN2 clears' },
+  lab_traffic: { title_en: 'Lab: traffic-light state machine', note_en: 'green 5 s → yellow 1 s → red 4 s; pressing BTN1 (pedestrian button) during green leaves it 1 more second; three LEDs on the breadboard (PMOD1A pins 1-3, each with a resistor)' },
+  c_hello: { title_en: 'C: Hello (serial port, LEDs)', note_en: 'a C program on the RISC-V SoC you built in Veryl: ⚡ Virtual board compiles it into the block RAM; prints on the USB terminal, counts on the LEDs, echoes in upper case' },
+  c_knight: { title_en: 'C: running light', note_en: 'the tutorial\'s Knight Rider in software; BTN1 faster, BTN2 slower (rising edges detected in C)' },
+  c_guess: { title_en: 'C: guess the number', note_en: 'a game on the USB terminal: read_line, atoi, rand seeded by the time you take to press Enter' },
+  c_sevenseg: { title_en: 'C: seven-segment display', note_en: '00-99 on the 7-segment module (PMOD1A), multiplexed in software; BTN1 clears' },
+  c_music: { title_en: 'C: music on the buzzer', note_en: 'square waves on PMOD1A pin 1 (the buzzer module): Twinkle, Twinkle' },
+  c_vga: { title_en: 'C: VGA text mode', note_en: 'RvVgaBoard: the SoC with a 40 × 30 character VGA screen (VgaText, font and characters in block RAM); uptime, buttons, and what you type on the terminal' },
+  c_switches: { title_en: 'C: switches', note_en: 'the 8 switches (PMOD1B) on the 8 LEDs (PMOD1A) and on the terminal in binary / hex' },
+  tut_blinky: { title_en: 'Lesson 1: Blinky', note_en: 'veryl/tutorial/README.tw.md lesson 1: a counter blinks the LEDs; iCEBreaker pins (onboard + break-off LEDs)' },
+  tut_uart: { title_en: 'Lesson 3: UART echo', note_en: 'tutorial lesson 3: talk to the computer over the USB serial port (pins 9 / 6, 115200 baud): greets with Hi!, echoes with the case swapped' },
+  sevenseg: { title_en: 'Seven-segment counter 00-99', note_en: 'two multiplexed digits on PMOD1A (the virtual 7-segment module); BTN1 clears' },
+  tut_knight: { title_en: 'Lesson 2: Knight Rider', note_en: 'tutorial lesson 2: tick divider, button synchronizer; hold BTN1 to pause' },
+  adder: { title_en: 'Adder' },
+  max3: { title_en: 'Max3 function' },
+  alu_pkg: { title_en: 'AluUnit package + enum' },
+  gen_rev: { title_en: 'BitRev / GrayConv generate' },
+  seq101: { title_en: 'Seq101 state machine' },
+  pkt_reg: { title_en: 'PktReg struct register' },
+  ram: { title_en: 'Ram 16×8' },
+  sync_ram: { title_en: 'SyncRam synchronous-read RAM → block RAM' },
+  fifo: { title_en: 'FIFO 256×8 (block RAM)', note_en: 'Synchronous-read memory → one SB_RAM40_4K / one SRAM macro' },
+  counter: { title_en: 'Counter (veryl-sim example)' },
+  features: { title_en: 'features: shifts / functions / ranges / counters' },
+  bram: { title_en: 'BramMix: 4 block RAMs + logic' },
+  lang: { title_en: 'lang: division, interface, 200 bits, two clocks' },
+  acc: { title_en: 'AccTest 32-bit carry chain' },
+  uart: { title_en: 'UART transmitter / receiver (loopback test)', note_en: 'UartTx → UartRx loopback, 8N1, 8 clocks per bit' },
+  vga: { title_en: 'VGA 640×480 timing + color bars', note_en: 'The test uses a small 24×12 frame; synthesis uses the default 800×525; on the virtual board a VGA monitor on PMOD1A+1B' },
+  rv64_linux: { title_en: 'RV64 board: Linux + MicroPython + C + screen (emulator)', note_en: 'A Raspberry Pi style board: Rv64Core (RV64IMAC, M/S/U, SV39) in Rv64Soc with 256 MB RAM and 16 GPIO pins, run in the emulator (🖥): veryl-emu compiles it to WebAssembly and boots OpenSBI + Linux 6.12 + busybox; the board\'s ACT / USER LEDs (GPIO 0, 1) and button (GPIO 2), GPIO 3-15 on the header and the breadboard (the same BCM numbers as on a Pi). Open main.py and press ▶ Run: the project\'s files go to /root and MicroPython runs it with the pi module (LED, Button, Pin); button.py counts presses, traffic.py is a traffic light on the breadboard; blink.c, count.c and lights.c are the same in C (▶ Run compiles them in the browser); clock.py and shapes.c draw on the 320 × 240 screen; type micropython for the REPL, sh blink.sh for the shell version; savefiles on the board sends /root back to the project' },
+  rv32i: { title_en: 'RV32I single-cycle CPU', note_en: 'TestRiscvCore runs examples/sw/rv32i_test.S (41 results, expected values cross-checked with spike)' },
+  soc: { title_en: 'RISC-V SoC (FPGA)', note_en: 'Fibonacci(10) = 55 → LEDs; iCEBreaker pins (LEDs on PMOD1A)' },
+  alu_fail: { title_en: 'Alu (with an assertion that fails on purpose)', note_en: 'What a failing assertion looks like: tb_alu has a "should fail on purpose" assertion' },
+};
+// the RV64 board (examples/rv64): one machine for every board example, booted from one snapshot
+const RV64_MACHINE = { top: 'Rv64Soc', reset: { port: 'i_rst', active: 0, cycles: 2 },
+      uart: { tx_valid: 'o_tx_valid', tx_data: 'o_tx_data', rx_valid: 'i_rx_valid', rx_data: 'i_rx_data', rx_ready: 'o_rx_ready' },
+      finish: { valid: 'o_finish', code: 'o_finish_code', pass: 0x5555 }, ram: { array: 'mem', base: '0x80000000' }, load: [{ image: 'linux' }],
+      gpio: { out: 'o_gpio', oe: 'o_gpio_oe', in: 'i_gpio', n: 16 }, board: 'pi', snapshot: 'linux', prompt: 'rv64:~$ ', files: { addr: '0x8F000000', size: 16777216 }, fb: { addr: '0x8EF00000', width: 320, height: 240 }, riscv: true };
+const RV64_HW = ['veryl/examples/rv64/src/rv64core.veryl', 'veryl/examples/rv64/src/rv64soc.veryl'];
+/** a breadboard for the board: LEDs [gpio, color] in the top half (each with its resistor), then buttons on gpio pins (each with a pull-down) */
+function piBB(leds, buttons) {
+  const parts = [{ kind: 'wire', a: 'gnd', b: 'r:top-:1', color: '#3e63dd' }, { kind: 'wire', a: 'vcc', b: 'r:top+:30', color: '#e5484d' }];
+  leds.forEach(([g, color], k) => {
+    const c = 2 + 3 * k;
+    parts.push({ kind: 'wire', a: `p:${g}`, b: `h:${c}:a`, color: '#f76b15' }, { kind: 'led', a: `h:${c}:c`, b: `h:${c + 1}:c`, color }, { kind: 'res', a: `h:${c + 1}:e`, b: `r:top-:${c + 1}` });
+  });
+  buttons.forEach((g, k) => {
+    const c = (leds.length ? 3 * leds.length + 2 : 3) + 3 * k;
+    parts.push({ kind: 'btn', a: `r:top+:${c}`, b: `h:${c}:b` }, { kind: 'wire', a: `h:${c}:a`, b: `p:${g}`, color: '#8e4ec6' }, { kind: 'res', a: `h:${c}:e`, b: `r:top-:${c + 1}` });
+  });
+  return parts.map((p, i) => ({ id: i + 1, ...p }));
+}
+const LED_COLORS = ['#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2', '#ff2d55'];
+/** an example on the RV64 board: its programs (examples/rv64/apps/DIR/...), the board's hardware, the shared machine; a breadboard of its own (default: pi.ts's) */
+const piEx = (id, dir, files, title, title_en, note, note_en, piBoard) => ({
+  id, group: 'RV64 開發板', title, title_en, note, note_en, files: [...files.map((f) => `veryl/examples/rv64/apps/${dir}/${f}`), ...RV64_HW],
+  synth: 'Rv64Core', asic: false, emu: true, same_hw: 'rv64_linux', machine: RV64_MACHINE, ...(piBoard ? { piBoard } : {}),
+});
+
+const EX = [
+  { id: 'tut_blinky', group: '教學', title: '第 1 課 Blinky 閃爍 LED', files: ['veryl/tutorial/src/blinky.veryl'], synth: 'Blinky', pcf: 'veryl/tutorial/icebreaker.pcf',
+    note: 'veryl/tutorial/README.tw.md 第 1 課：計數器讓 LED 閃爍；iCEBreaker 腳位（板上與擴充板 LED）' },
+  { id: 'tut_knight', group: '教學', title: '第 2 課 跑馬燈', files: ['veryl/tutorial/src/knight.veryl'], synth: 'KnightRider', pcf: 'veryl/tutorial/icebreaker.pcf',
+    note: '教學第 2 課：除頻 tick、按鈕同步器；按住 BTN1 暫停' },
+  { id: 'tut_uart', group: '教學', title: '第 3 課 UART 回聲', files: ['veryl/tutorial/src/uart.veryl'], synth: 'UartEcho', pcf: 'veryl/tutorial/icebreaker.pcf',
+    note: '教學第 3 課：用 USB 序列埠和電腦說話（腳 9 / 6，115200 鮑）：先說 Hi!，收到字元就大小寫互換送回', board: { uart: true, baud: 115200, pmod1a: '', pmod1b: '' } },
+  { id: 'lab_gates', group: '實驗', title: '麵包板實驗：邏輯閘', files: ['veryl/examples/src/gates.veryl'], synth: 'Gates', pcf: 'veryl/examples/gates.pcf',
+    note: '兩個開關（PMOD1B，各有下拉電阻）→ AND、OR、XOR、NOT 四顆 LED（PMOD1A，各有限流電阻）；麵包板已接好', board: {"uart": false, "baud": 115200, "pmod1a": "", "pmod1b": "", "breadboard": true, "bb": [{"id": 1, "kind": "wire", "a": "gnd", "b": "r:top-:1", "color": "#3e63dd"}, {"id": 2, "kind": "wire", "a": "vcc", "b": "r:top+:30", "color": "#e5484d"}, {"id": 3, "kind": "wire", "a": "p:4", "b": "h:2:a", "color": "#f76b15"}, {"id": 4, "kind": "led", "a": "h:2:c", "b": "h:3:c", "color": "#ff3b30"}, {"id": 5, "kind": "res", "a": "h:3:e", "b": "r:top-:3"}, {"id": 6, "kind": "wire", "a": "p:2", "b": "h:6:a", "color": "#f76b15"}, {"id": 7, "kind": "led", "a": "h:6:c", "b": "h:7:c", "color": "#34c759"}, {"id": 8, "kind": "res", "a": "h:7:e", "b": "r:top-:7"}, {"id": 9, "kind": "wire", "a": "p:47", "b": "h:10:a", "color": "#f76b15"}, {"id": 10, "kind": "led", "a": "h:10:c", "b": "h:11:c", "color": "#ffcc00"}, {"id": 11, "kind": "res", "a": "h:11:e", "b": "r:top-:11"}, {"id": 12, "kind": "wire", "a": "p:45", "b": "h:14:a", "color": "#f76b15"}, {"id": 13, "kind": "led", "a": "h:14:c", "b": "h:15:c", "color": "#0a84ff"}, {"id": 14, "kind": "res", "a": "h:15:e", "b": "r:top-:15"}, {"id": 15, "kind": "sw", "a": "r:top+:22", "b": "h:22:a", "on": false}, {"id": 16, "kind": "wire", "a": "h:22:b", "b": "p:43", "color": "#8e4ec6"}, {"id": 17, "kind": "res", "a": "h:22:e", "b": "r:top-:23"}, {"id": 18, "kind": "sw", "a": "r:top+:26", "b": "h:26:a", "on": false}, {"id": 19, "kind": "wire", "a": "h:26:b", "b": "p:38", "color": "#8e4ec6"}, {"id": 20, "kind": "res", "a": "h:26:e", "b": "r:top-:27"}]} },
+  { id: 'lab_counter', group: '實驗', title: '實驗：按一下加一', files: ['veryl/examples/src/button_counter.veryl'], synth: 'ButtonCounter', pcf: 'veryl/examples/button_counter.pcf',
+    note: 'BTN1 每按一下加一（同步器 + 抓上升緣），8 位元計數顯示在 PMOD1A 的 LED 模組；BTN2 歸零', board: { uart: false, baud: 115200, pmod1a: 'led8', pmod1b: '' } },
+  { id: 'lab_traffic', group: '實驗', title: '實驗：紅綠燈狀態機', files: ['veryl/examples/src/traffic.veryl'], synth: 'TrafficLight', pcf: 'veryl/examples/traffic.pcf',
+    note: '綠 5 秒 → 黃 1 秒 → 紅 4 秒；綠燈時按 BTN1（行人按鈕）綠燈只再亮 1 秒；三顆 LED 在麵包板上（PMOD1A 腳 1–3，各串電阻）', board: {"uart": false, "baud": 115200, "pmod1a": "", "pmod1b": "", "breadboard": true, "bb": [{"id": 1, "kind": "wire", "a": "gnd", "b": "r:top-:1", "color": "#3e63dd"}, {"id": 3, "kind": "wire", "a": "p:4", "b": "h:2:a", "color": "#f76b15"}, {"id": 4, "kind": "led", "a": "h:2:c", "b": "h:3:c", "color": "#ff3b30"}, {"id": 5, "kind": "res", "a": "h:3:e", "b": "r:top-:3"}, {"id": 7, "kind": "wire", "a": "p:2", "b": "h:6:a", "color": "#f76b15"}, {"id": 8, "kind": "led", "a": "h:6:c", "b": "h:7:c", "color": "#ffcc00"}, {"id": 9, "kind": "res", "a": "h:7:e", "b": "r:top-:7"}, {"id": 11, "kind": "wire", "a": "p:47", "b": "h:10:a", "color": "#f76b15"}, {"id": 12, "kind": "led", "a": "h:10:c", "b": "h:11:c", "color": "#34c759"}, {"id": 13, "kind": "res", "a": "h:11:e", "b": "r:top-:11"}]} },
+  ...[
+    ['c_hello', 'hello', 'C：Hello（序列埠、LED）', '在你用 Veryl 做的 RISC-V SoC 上跑 C 程式：⚡ 虛擬板會編譯它並放進 block RAM；在 USB 終端機打招呼、LED 計數、把收到的字轉成大寫送回', { uart: true, pmod1a: 'led8', pmod1b: '' }],
+    ['c_knight', 'knight', 'C：跑馬燈', '教學第 2 課的跑馬燈改用軟體做；BTN1 加快、BTN2 變慢（在 C 裡偵測上升緣）', { uart: false, pmod1a: 'led8', pmod1b: '' }],
+    ['c_guess', 'guess', 'C：猜數字', '在 USB 終端機上玩的遊戲：read_line、atoi，用按 Enter 花的時間當亂數種子', { uart: true, pmod1a: 'led8', pmod1b: '' }],
+    ['c_sevenseg', 'sevenseg', 'C：七段顯示器', '00–99 顯示在七段模組（PMOD1A），用軟體多工掃描；BTN1 歸零', { uart: false, pmod1a: 'seg7', pmod1b: '' }],
+    ['c_music', 'music', 'C：蜂鳴器音樂', 'PMOD1A 腳 1 的方波（蜂鳴器模組）：小星星', { uart: true, pmod1a: 'buzzer', pmod1b: '' }],
+    ['c_switches', 'switches', 'C：開關', 'PMOD1B 的 8 個開關顯示在 PMOD1A 的 8 顆 LED，並在終端機印出二進位 / 十六進位', { uart: true, pmod1a: 'led8', pmod1b: 'sw8' }],
+    ['c_threads', 'threads', 'C：多執行緒（搶佔式核心）', '計時器中斷每 10 ms 切換執行緒（mtvec、mepc、mret）；ecall 做 yield / sleep，amoswap 做互斥鎖。LED 0、1 是兩個閃爍的執行緒，LED 7 是不讓出 CPU 的質數計算', { uart: true, pmod1a: 'led8', pmod1b: '' }],
+  ].map(([id, f, title, note, b], i) => ({
+    id, group: 'C 程式', title, note, synth: 'RvBoard', pcf: 'veryl/examples/rvsoc.pcf', board: { baud: 115200, mode: 'cpu', ...b },
+    files: ['veryl/examples/c/' + f + '.c', 'veryl/examples/src/rvsoc.veryl', 'veryl/examples/src/rv32i.veryl', 'veryl/examples/src/sync_ram.veryl', 'veryl/examples/src/uart.veryl', 'veryl/examples/src/rvsoc_rom.veryl', 'veryl/examples/src/rv32i_rom.veryl'],
+    // the C examples share one SoC: the hardware checks of npm test run on the first
+    ...(i ? { same_hw: 'c_hello' } : {}),
+    asic: false,
+  })),
+  { id: 'c_vga', group: 'C 程式', title: 'C：VGA 文字模式', note: 'RvVgaBoard：SoC 加上 40 × 30 字元的 VGA 畫面（VgaText，字型和字元都在 block RAM）；顯示開機時間、按鈕和在終端機打的字',
+    synth: 'RvVgaBoard', pcf: 'veryl/examples/rvvga.pcf', asic: false, board: { uart: true, baud: 115200, pmod1a: 'vga', pmod1b: '', mode: 'cpu' },
+    files: ['veryl/examples/c/vga.c', 'veryl/examples/src/rvvga.veryl', 'veryl/examples/src/vga.veryl', 'veryl/examples/src/rvsoc.veryl', 'veryl/examples/src/rv32i.veryl', 'veryl/examples/src/sync_ram.veryl', 'veryl/examples/src/uart.veryl', 'veryl/examples/src/rvsoc_rom.veryl', 'veryl/examples/src/rv32i_rom.veryl'] },
+  { id: 'adder', group: '基礎', title: 'Adder 加法器', files: ['veryl/examples/src/adder.veryl'], synth: 'Adder' },
+  { id: 'max3', group: '基礎', title: 'Max3 function', files: ['veryl/examples/src/max3.veryl'], synth: 'Max3' },
+  { id: 'alu_pkg', group: '基礎', title: 'AluUnit package + enum', files: ['veryl/examples/src/alu_pkg.veryl'], synth: 'AluUnit' },
+  { id: 'gen_rev', group: '基礎', title: 'BitRev / GrayConv generate', files: ['veryl/examples/src/gen_rev.veryl'], synth: 'GrayConv' },
+  { id: 'seq101', group: '時序', title: 'Seq101 狀態機', files: ['veryl/examples/src/seq101.veryl'], synth: 'Seq101' },
+  { id: 'pkt_reg', group: '時序', title: 'PktReg struct 暫存器', files: ['veryl/examples/src/pkt_reg.veryl'], synth: 'PktReg' },
+  { id: 'ram', group: '時序', title: 'Ram 16×8', files: ['veryl/examples/src/ram.veryl'], synth: 'Ram' },
+  { id: 'sync_ram', group: '時序', title: 'SyncRam 同步讀取 RAM → block RAM', files: ['veryl/examples/src/sync_ram.veryl'], synth: 'SyncRam' },
+  { id: 'fifo', group: '時序', title: 'FIFO 256×8（block RAM）', files: ['veryl/examples/src/fifo.veryl'], synth: 'Fifo', note: '同步讀取的記憶體 → 一塊 SB_RAM40_4K / 一個 SRAM 巨集' },
+  { id: 'sevenseg', group: '時序', title: '七段顯示器計數 00–99', files: ['veryl/examples/src/sevenseg.veryl'], synth: 'SevenSeg', pcf: 'veryl/examples/sevenseg.pcf',
+    note: '兩位數多工掃描，接在 PMOD1A 的虛擬七段模組；BTN1 歸零', board: { uart: false, baud: 115200, pmod1a: 'seg7', pmod1b: '' } },
+  { id: 'counter', group: '時序', title: 'Counter（veryl-sim 範例）', files: ['veryl/sim/examples/counter.veryl'], synth: 'Counter' },
+  { id: 'features', group: '綜合', title: 'features：移位/函式/範圍/計數器', files: ['veryl/synth/examples/features.veryl'], synth: 'Top' },
+  { id: 'bram', group: '綜合', title: 'BramMix：4 個 block RAM + 邏輯', files: ['veryl/examples/src/sync_ram.veryl', 'veryl/synth/examples/bram_tests.veryl'], synth: 'BramMix' },
+  { id: 'lang', group: '綜合', title: 'lang：除法、interface、200 位元、雙時脈', files: ['veryl/synth/examples/lang.veryl'], synth: 'HsTop' },
+  { id: 'acc', group: '綜合', title: 'AccTest 32-bit 進位鏈', files: ['veryl/synth/examples/pnr_tests.veryl'], synth: 'AccTest' },
+  { id: 'uart', group: '周邊', title: 'UART 收發器（迴路測試）', files: ['veryl/examples/src/uart.veryl'], synth: 'UartLoop', note: 'UartTx → UartRx 迴路，8N1，每位元 8 個時脈' },
+  { id: 'vga', group: '周邊', title: 'VGA 640×480 時序 + 色條', files: ['veryl/examples/src/vga.veryl'], synth: 'VgaDemo', pcf: 'veryl/examples/vga.pcf',
+    note: '測試用縮小的 24×12 畫面；合成用預設的 800×525；虛擬板上接 PMOD1A+1B 的 VGA 螢幕', board: { uart: false, baud: 115200, pmod1a: 'vga', pmod1b: '' } },
+  { id: 'rv64_linux', group: 'RV64 開發板', title: 'RV64 開發板：Linux + MicroPython + C + 螢幕（模擬機）', files: ['veryl/examples/rv64/src/rv64core.veryl', 'veryl/examples/rv64/src/rv64soc.veryl', 'veryl/examples/rv64/board/main.py', 'veryl/examples/rv64/board/button.py', 'veryl/examples/rv64/board/traffic.py', 'veryl/examples/rv64/board/clock.py', 'veryl/examples/rv64/board/blink.c', 'veryl/examples/rv64/board/count.c', 'veryl/examples/rv64/board/lights.c', 'veryl/examples/rv64/board/shapes.c', 'veryl/examples/rv64/board/blink.sh', 'veryl/examples/rv64/board/button.sh'], synth: 'Rv64Core', asic: false, emu: true,
+    machine: RV64_MACHINE,
+    note: '像樹莓派的開發板：Rv64Core（RV64IMAC、M / S / U、SV39）放在有 256 MB RAM 與 16 支腳 GPIO 的 Rv64Soc 裡，用模擬機（🖥）跑：veryl-emu 把它編成 WebAssembly，開 OpenSBI + Linux 6.12 + busybox；板上 ACT / USER LED（GPIO 0、1）、按鈕（GPIO 2），排針與麵包板上是 GPIO 3–15（和樹莓派同樣的 BCM 編號）。打開 main.py 按「▶ 執行」：專案的檔案放進 /root，MicroPython 用 pi 模組（LED、Button、Pin）跑它；button.py 數按鈕次數，traffic.py 是麵包板上的紅綠燈；blink.c、count.c、lights.c 是 C 版（▶ 執行時在瀏覽器裡編譯）；clock.py、shapes.c 在 320 × 240 的螢幕上畫圖；打 micropython 進 REPL，sh blink.sh 是 shell 版；板子上打 savefiles 送回專案' },
+  piEx('pi_chaser', 'chaser', ['chaser.py', 'chaser.c'], '開發板：8 顆 LED 跑馬燈', 'Board: 8-LED chaser',
+    '麵包板上 8 顆 LED（GPIO 3、4、5、7–11）輪流亮；GPIO 6 的按鈕換速度、GPIO 13 換方向。打開 chaser.py 或 chaser.c 按「▶ 執行」（同一個程式的 MicroPython 版與 C 版）',
+    'Eight LEDs on the breadboard (GPIO 3, 4, 5, 7-11) light in turn; the button on GPIO 6 changes the speed, GPIO 13 the direction. Open chaser.py or chaser.c and press ▶ Run (the same program in MicroPython and in C)',
+    piBB([[3, LED_COLORS[0]], [4, LED_COLORS[1]], [5, LED_COLORS[2]], [7, LED_COLORS[3]], [8, LED_COLORS[4]], [9, LED_COLORS[5]], [10, LED_COLORS[6]], [11, LED_COLORS[7]]], [6, 13])),
+  piEx('pi_reaction', 'reaction', ['reaction.py'], '開發板：反應時間遊戲', 'Board: reaction time game',
+    '紅燈（GPIO 5）亮時等，綠燈（GPIO 13）一亮就按麵包板上的按鈕（GPIO 6），量幾毫秒；太早按黃燈（GPIO 12）亮。最佳成績存在 best.txt，在板子上打 savefiles 送回專案',
+    'Wait while red (GPIO 5) is on; when green (GPIO 13) lights, press the breadboard button (GPIO 6): the time in milliseconds; too early lights yellow (GPIO 12). The best time is kept in best.txt; type savefiles on the board to send it to the project'),
+  piEx('pi_breathe', 'breathe', ['breathe.c'], '開發板：呼吸燈（軟體 PWM）', 'Board: breathing LEDs (software PWM)',
+    '用 C 快速開關 LED：開著的時間比例（工作週期）決定亮度，紅、黃、綠三顆輪流慢慢變亮又變暗；開發板依工作週期畫出 LED 的亮度。試著改 LEVELS、SLICE、HOLD',
+    'C switches the LEDs on and off quickly: the share of time on (the duty cycle) sets the brightness, and red, yellow and green slowly brighten and dim in turn; the board draws each LED by its duty cycle. Try changing LEVELS, SLICE and HOLD'),
+  piEx('pi_snake', 'snake', ['snake.c'], '開發板：貪食蛇（螢幕遊戲）', 'Board: snake (a screen game)',
+    'C 寫的螢幕遊戲：蛇自己往前走，麵包板上的兩個按鈕讓它左轉（GPIO 6）或右轉（GPIO 13），吃紅點變長；撞牆或撞到自己就結束，按任一個按鈕重來',
+    'A screen game in C: the snake moves by itself, the two breadboard buttons turn it left (GPIO 6) or right (GPIO 13); eat the red dots to grow; hitting a wall or itself ends the game, a button starts again',
+    piBB([], [6, 13])),
+  piEx('pi_tetris', 'tetris', ['tetris.c'], '開發板：俄羅斯方塊（螢幕遊戲）', 'Board: Tetris (a screen game)',
+    'C 寫的俄羅斯方塊：麵包板上四個按鈕左移（GPIO 6）、右移（GPIO 13）、旋轉（GPIO 5）、加速落下（GPIO 12）；點一下板子後也可以用 ← → ↑ ↓。消掉整列得分，每 10 列加快一級',
+    'Tetris in C: the four breadboard buttons move left (GPIO 6), right (GPIO 13), rotate (GPIO 5) and drop faster (GPIO 12); after a click on the board ← → ↑ ↓ do the same. Full rows score; every 10 rows it gets faster',
+    piBB([], [6, 13, 5, 12])),
+  piEx('pi_sysmon', 'sysmon', ['sysmon.py'], '開發板：系統監視器', 'Board: system monitor',
+    'MicroPython 讀 Linux 的 /proc，在螢幕上即時顯示 CPU 使用率（含歷史圖）、記憶體、負載、開機時間與行程數；在 shell 裡同時跑別的程式看 CPU 變化',
+    'MicroPython reads Linux\'s /proc and shows CPU use (with a history graph), memory, the load, the uptime and the number of processes on the screen; run another program in the shell at the same time and watch the CPU'),
+  piEx('pi_linux', 'linux', ['exercises.txt', 'hello.sh', 'count.sh', 'fruits.txt'], '開發板：Linux 指令入門', 'Board: Linux command line',
+    '不碰硬體，練習 Linux 的終端機：檔案與目錄、看文字檔、管線 |、排序與統計、背景行程（&、jobs、kill）、/proc 與 /sys。照 exercises.txt 一題一題在模擬機的終端機打指令；hello.sh 按「▶ 執行」',
+    'No hardware, just the Linux command line: files and directories, text files, pipes |, sorting and counting, background processes (&, jobs, kill), /proc and /sys. Follow exercises.txt in the emulator\'s terminal; press ▶ Run on hello.sh'),
+  { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['veryl/examples/src/rv32i.veryl', 'veryl/examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
+    note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
+  { id: 'soc', group: 'RISC-V', title: 'RISC-V SoC（FPGA）', files: ['veryl/examples/src/rv32i.veryl', 'veryl/examples/src/rv32i_rom.veryl', 'veryl/synth/examples/soc.veryl'],
+    synth: 'RiscvSoc', pcf: 'veryl/synth/examples/icebreaker.pcf', note: 'Fibonacci(10) = 55 → LED；iCEBreaker 腳位（LED 在 PMOD1A）', board: { uart: false, baud: 115200, pmod1a: 'led8', pmod1b: '' } },
+  { id: 'alu_fail', group: '其他', title: 'Alu（含一個故意失敗的斷言）', files: ['veryl/sim/examples/alu.veryl'], synth: 'Alu',
+    note: '示範斷言失敗的樣子：tb_alu 有一個 "should fail on purpose" 的斷言' },
+].map((e) => ({ ...e, ...EN[e.id], group_en: GROUP_EN[e.group], pcf: e.pcf ? fs.readFileSync(path.join(root, e.pcf), 'utf8') : undefined, machine: undefined,
+  files: [...e.files.map(rd), ...(e.machine ? [{ name: 'machine.json', src: JSON.stringify(e.machine, null, 2) + '\n' }] : [])] }));
+fs.writeFileSync(path.join(dist, 'examples.js'), `var VERYL_EXAMPLES = ${JSON.stringify(EX)};\n`);
+console.log(`examples.js  ${EX.length} projects`);
+
+// ---- the emulator's Linux image (examples/rv64/linux/build.sh) ----
+{
+  const img = path.join(root, 'veryl/examples/rv64/linux/build/opensbi/platform/generic/firmware/fw_payload.bin');
+  if (fs.existsSync(img)) {
+    const { gzipSync } = await import('node:zlib');
+    const gz = gzipSync(fs.readFileSync(img), { level: 9 });
+    fs.writeFileSync(path.join(dist, 'img_linux.js'), `// OpenSBI (BSD-2-Clause) + Linux 6.12 (GPL-2.0) + busybox 1.36 (GPL-2.0) + musl (MIT) for Rv64Soc, built by examples/rv64/linux/build.sh; gzip + base64\nvar VERYL_IMAGES = typeof VERYL_IMAGES === 'undefined' ? {} : VERYL_IMAGES;\nVERYL_IMAGES.linux = "${gz.toString('base64')}";\n`);
+    console.log(`img_linux.js ${(gz.length / 1e6).toFixed(1)} MB gzip`);
+  } else if (!fs.existsSync(path.join(dist, 'img_linux.js'))) {
+    console.warn('veryl/examples/rv64/linux/build: no Linux image (run examples/rv64/linux/build.sh): the RV64 example cannot boot in the emulator');
+  }
+}
+
+// ---- IceStorm chip database for place and route (gzip, base64) ----
+const chipdbCands = [process.env.VERYL_EDA_CHIPDB, '/usr/local/share/icebox/chipdb-5k.txt', '/usr/share/icebox/chipdb-5k.txt',
+  '/Users/Shared/ccc/oss-cad-suite/share/icebox/chipdb-5k.txt', path.join(process.env.HOME ?? '', 'oss-cad-suite/share/icebox/chipdb-5k.txt')].filter(Boolean);
+const chipdbPath = chipdbCands.find((p) => fs.existsSync(p));
+if (chipdbPath) {
+  const { gzipSync } = await import('node:zlib');
+  const gz = gzipSync(fs.readFileSync(chipdbPath), { level: 9 });
+  fs.writeFileSync(path.join(dist, 'chipdb.js'), `// IceStorm chip database (chipdb-5k.txt, ISC license, https://github.com/YosysHQ/icestorm), gzip + base64\nvar VERYL_CHIPDB_GZ_B64 = "${gz.toString('base64')}";\n`);
+  console.log(`chipdb.js    ${(gz.length / 1e6).toFixed(1)} MB gzip (${chipdbPath})`);
+} else if (!fs.existsSync(path.join(dist, 'chipdb.js'))) {
+  console.warn('chipdb-5k.txt not found (set VERYL_EDA_CHIPDB): place & route will be unavailable');
+}
+
+// ---- TypeScript ----
+const worker = await esbuild.build({ entryPoints: [path.join(here, 'src/worker.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
+const workerSrc = worker.outputFiles[0].text;
+const emuWorker = await esbuild.build({ entryPoints: [path.join(here, 'src/emu_worker.ts')], bundle: true, format: 'iife', target: 'es2020', write: false, logLevel: 'warning' });
+const emuWorkerSrc = emuWorker.outputFiles[0].text;
+await esbuild.build({ entryPoints: [path.join(here, 'src/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'app.js'), logLevel: 'warning',
+  define: { WORKER_SRC: JSON.stringify(workerSrc) } });
+await esbuild.build({ entryPoints: [path.join(here, 'src/ide/main.ts')], bundle: true, format: 'iife', target: 'es2020', outfile: path.join(dist, 'ide.js'), logLevel: 'warning',
+  define: { WORKER_SRC: JSON.stringify(workerSrc), EMU_WORKER_SRC: JSON.stringify(emuWorkerSrc) } });
+// the emulator's machine for the Node tests
+await esbuild.build({ entryPoints: [path.join(here, 'src/emu_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'emu_machine.cjs'), logLevel: 'warning' });
+await esbuild.build({ entryPoints: [path.join(here, 'src/rv_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'rv_machine.cjs'), logLevel: 'warning' });
+await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
+for (const f of ['index.html', 'ide.css', 'demo.html', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
+console.log('app.js, ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, demo.html, style.css, ide.html (redirect)');
+
+// ---- the emulator's snapshots (needs dist/: after everything above) ----
+if (!process.argv.includes('--skip-snapshot')) execFileSync('node', [path.join(here, 'snapshot.mjs')], { cwd: here, stdio: 'inherit' });

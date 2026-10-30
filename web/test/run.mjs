@@ -1,0 +1,791 @@
+// Node test: load the built dist/ exactly as the page does and run every
+// example's testbenches through the WebAssembly core.
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+import { execFileSync, spawnSync } from 'node:child_process';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+const ctx = {};
+vm.createContext(ctx);
+for (const f of ['wasm.js', 'examples.js', 'chipdb.js']) vm.runInContext(fs.readFileSync(path.join(dist, f), 'utf8'), ctx);
+const { Veryl, fromBase64, gunzip } = createRequire(import.meta.url)(path.join(dist, 'api.cjs'));
+const core = await Veryl.load(fromBase64(ctx.VERYL_WASM_B64));
+
+let bad = 0;
+const expectFail = new Set(['alu_fail']);
+// the Veryl files of an example (the C examples also have a .c program); examples on
+// the same hardware as another one (same_hw) are checked as programs, below
+const vfiles = (ex) => ex.files.filter((f) => f.name.endsWith('.veryl'));
+// (emulator examples, machine.json, run in the emulator only: checked below)
+const HW = ctx.VERYL_EXAMPLES.filter((ex) => !ex.same_hw && !ex.emu).map((ex) => ({ ...ex, files: vfiles(ex) }));
+for (const ex of HW) {
+  const t0 = Date.now();
+  let line;
+  try {
+    const r = core.simulate(ex.files, undefined, { vcd: true });
+    if (r.vcd.length !== r.tops.length || !r.vcd.every((v) => v.text.includes('$enddefinitions'))) throw new Error('missing VCD');
+    const fails = r.tops.reduce((a, t) => a + t.fails, 0);
+    const ok = expectFail.has(ex.id) ? fails > 0 : fails === 0 && r.tops.length > 0;
+    if (!ok) bad++;
+    line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} simulate ${r.tops.map((t) => `${t.name}:${t.fails ? t.fails + ' fail' : 'PASS'}`).join(' ')}`;
+  } catch (e) {
+    bad++;
+    line = `FAIL ${ex.id.padEnd(9)} ${e.message}`;
+  }
+  console.log(`${line}  (${Date.now() - t0} ms)`);
+}
+// post-synthesis simulation: the same testbenches with the design module
+// replaced by its generic / iCE40 / standard-cell netlist give the RTL result
+for (const ex of HW) {
+  if (!ex.synth) continue;
+  const rtl = core.simulate(ex.files).tops.map((t) => `${t.name}:${t.fails}`).join(' ');
+  for (const gate of ['opt', 'ice40', 'asic']) {
+    const t0 = Date.now();
+    try {
+      const r = core.call({ cmd: 'simulate', files: ex.files, top: null, max_time: 1_000_000, vcd: false, gate, synth: ex.synth });
+      const got = r.tops.map((t) => `${t.name}:${t.fails}`).join(' ');
+      const ok = got === rtl;
+      if (!ok) bad++;
+      console.log(`${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} gate-level ${gate.padEnd(5)} ${r.gate.cells} cells: ${got}${ok ? ' = RTL' : ` (RTL ${rtl})`}  (${Date.now() - t0} ms)`);
+    } catch (e) {
+      bad++;
+      console.log(`FAIL ${ex.id.padEnd(9)} gate-level ${gate} ${e.message}`);
+    }
+  }
+}
+
+// synthesis stages: every example's design module; cell counts must equal the CLI's
+const cli = path.join(dist, '../../target/release/reda');
+const haveCli = fs.existsSync(cli);
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rueda-'));
+for (const ex of HW) {
+  if (!ex.synth) continue;
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'synth', files: ex.files, top: ex.synth });
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const count = (args) => +/cells: (\d+)/.exec(execFileSync(cli, ['synth', '--top', ex.synth, ...args, ...paths], { encoding: 'utf8' }))[1];
+      const [o, m] = [count([]), count(['--ice40'])];
+      if (o !== (r.opt.n ?? r.opt.cells.length) || m !== r.map.cells.length) { bad++; note = ` MISMATCH cli opt ${o} map ${m}`; }
+      else note = ' = CLI';
+    }
+    console.log(`${note.includes('MISMATCH') ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} synth ${r.top}: gates ${r.raw.n ?? r.raw.cells.length} -> ${r.opt.n ?? r.opt.cells.length}${r.opt.n ? ' (not sent: too big to draw)' : ''}, iCE40 cells ${r.map.cells.length}${note}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL ${ex.id.padEnd(9)} synth ${e.message}`);
+  }
+}
+
+// FPGA place and route in wasm: the bitstream (.asc) must equal the CLI's
+{
+  const t0 = Date.now();
+  core.loadChipdb(await gunzip(fromBase64(ctx.VERYL_CHIPDB_GZ_B64)));
+  console.log(`ok   chipdb loaded (${Date.now() - t0} ms)`);
+}
+for (const ex of HW) {
+  if (!ex.synth) continue;
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'pnr', files: ex.files, top: ex.synth, pcf: ex.pcf ?? null, seed: 1 });
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const asc = path.join(tmp, ex.id + '.asc');
+      const extra = ex.pcf ? ['--pcf', path.join(tmp, ex.id + '.pcf')] : [];
+      if (ex.pcf) fs.writeFileSync(extra[1], ex.pcf);
+      execFileSync(cli, ['synth', '--top', ex.synth, '--ice40', '--pnr', 'veryl', ...extra, '--asc', asc, ...paths]);
+      if (fs.readFileSync(asc, 'utf8') !== r.asc) { bad++; note = ' .asc DIFFERS from CLI'; } else note = ', .asc = CLI';
+      try {
+        execFileSync('icepack', [asc, asc + '.bin']);
+        if (!fs.readFileSync(asc + '.bin').equals(Buffer.from(r.bin, 'base64'))) { bad++; note += ' .bin DIFFERS from icepack'; }
+        else note += ', .bin = icepack';
+      } catch { /* icepack not installed */ }
+    }
+    console.log(`${note.includes('DIFFERS') ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} pnr ${r.top}: ${r.lcs.length} LCs, ${r.pips} pips, Fmax ${r.timing.fmax.toFixed(1)} MHz, route ${r.route_iters.join('>')}${note}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    // the bare RV32I core is too big for the UP5K (and has 160 IO bits for 39 pins)
+    const expected = ex.id === 'rv32i' && /does not fit/.test(e.message);
+    if (!expected) bad++;
+    console.log(`${expected ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} pnr ${e.message}${expected ? '  (expected)' : ''}`);
+  }
+}
+
+// ASIC flow in wasm: same cells, wirelength and Fmax as the CLI; legal rows; no overflow
+// (not for the SoC with 8 KB of SRAM macros: detailed routing around big macros is still slow)
+for (const ex of HW) {
+  if (!ex.synth || ex.asic === false) continue;
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'asic', files: ex.files, top: ex.synth, seed: 1 });
+    const problems = [];
+    const occ = new Set();
+    r.cells.forEach(([row, site, w], i) => {
+      if (row >= r.die.rows || site + w > r.die.sites) problems.push(`cell ${i} outside`);
+      for (let k = site; k < site + w; k++) { const key = row * 1e6 + k; if (occ.has(key)) problems.push(`overlap at ${row}/${k}`); occ.add(key); }
+    });
+    if (r.route.overflow) problems.push(`overflow ${r.route.overflow}`);
+    if (!r.def.includes('END DESIGN') || !r.verilog.includes('module DFF')) problems.push('missing DEF / Verilog');
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const out = execFileSync(cli, ['synth', '--top', ex.synth, '--asic', ...paths], { encoding: 'utf8' });
+      const cells = +/cells: (\d+)/.exec(out)[1];
+      const wl = +/wirelength (\d+)/.exec(out)[1];
+      const fmax = /Fmax ([\d.]+)/.exec(out)[1];
+      if (cells !== r.map.cells.length || wl !== Math.round(r.route.wirelength) || fmax !== r.timing.fmax.toFixed(1)) problems.push(`CLI: ${cells} cells, ${wl} µm, ${fmax} MHz`);
+      else note = ' = CLI';
+    }
+    if (problems.length) bad++;
+    console.log(`${problems.length ? 'FAIL' : 'ok  '} ${ex.id.padEnd(9)} asic ${r.top}: ${r.map.cells.length} cells, ${r.area.toFixed(0)} µm², ${(r.route.wirelength / 1000).toFixed(2)} mm, Fmax ${r.timing.fmax.toFixed(1)} MHz${note}${problems.length ? ' ' + problems.slice(0, 3).join('; ') : ''}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL ${ex.id.padEnd(9)} asic ${e.message}`);
+  }
+}
+
+// the ASIC flow on SkyWater SKY130 (pdk: 'sky130'): library cell names, a clean DRC, the GDS
+// (asic_gds) with its header and the same counts as the CLI's --gds
+for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
+  const ex = ctx.VERYL_EXAMPLES.find((e) => e.id === id);
+  const t0 = Date.now();
+  try {
+    const r = core.call({ cmd: 'asic', files: ex.files, top: ex.synth, seed: 1, pdk: 'sky130' });
+    const problems = [];
+    const d = r.drc;
+    if (r.pdk !== 'sky130_fd_sc_hd' || r.layers[0] !== 'met1') problems.push(`pdk ${r.pdk} ${r.layers}`);
+    if (!d || d.shorts + d.spacing + d.area + d.opens) problems.push(`DRC ${JSON.stringify(d)}`);
+    if (!r.verilog.includes('sky130_fd_sc_hd__dfrtp_1') && !r.verilog.includes('sky130_fd_sc_hd__dfxtp_1')) problems.push('no SKY130 flip-flop in the Verilog');
+    if (!r.def.includes('unithd') || !r.def.includes('L1M1_PR')) problems.push('DEF without unithd / L1M1_PR');
+    const g = core.call({ cmd: 'asic_gds' });
+    const bytes = Buffer.from(g.gds, 'base64');
+    if (bytes.length !== d.gds_bytes || bytes.readUInt16BE(2) !== 0x0002) problems.push(`GDS ${bytes.length} bytes`);
+    let note = '';
+    if (haveCli) {
+      const paths = ex.files.map((f) => { const p = path.join(tmp, f.name); fs.writeFileSync(p, f.src); return p; });
+      const gp = path.join(tmp, 'x.gds');
+      const out = execFileSync(cli, ['synth', '--top', ex.synth, '--asic', '--pdk', 'sky130', '--gds', gp, ...paths], { encoding: 'utf8' });
+      const m = /wrote .*\((\d+) bytes: (\d+) cell instances/.exec(out);
+      if (!m || +m[1] !== bytes.length || +m[2] !== d.instances || !fs.readFileSync(gp).equals(bytes)) problems.push(`CLI: ${m && m[0]}`);
+      else note = ' = CLI';
+    }
+    if (problems.length) bad++;
+    console.log(`${problems.length ? 'FAIL' : 'ok  '} ${id.padEnd(9)} sky130 ${r.top}: ${r.map.cells.length} cells, DRC ${d ? d.shorts + d.spacing + d.area + d.opens : '?'}, GDS ${bytes.length} bytes${note}${problems.length ? ' ' + problems.slice(0, 3).join('; ') : ''}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL ${id.padEnd(9)} sky130 ${e.message}`);
+  }
+}
+
+// virtual board (board_load / board_run / board_reset): the tutorial designs
+// on the iCEBreaker's pins and the RISC-V SoC's LEDs on PMOD1A
+{
+  const t0 = Date.now();
+  const problems = [];
+  const ex = (id) => ctx.VERYL_EXAMPLES.find((e) => e.id === id);
+  const duty = (r) => Object.fromEntries(r.duty);
+  // lesson 1: over whole turns of the 24-bit counter the top bit (LED5, pin 21) is high half the time
+  let b = ex('tut_blinky');
+  let info = core.call({ cmd: 'board_load', files: b.files, top: 'Blinky', pcf: b.pcf });
+  if (info.warnings.length) problems.push('Blinky warnings ' + info.warnings.join('; '));
+  let r = core.call({ cmd: 'board_run', cycles: 1 << 24, inputs: [] });
+  let d = duty(r);
+  if (Math.abs(d[21] - 0.5) > 1e-6 || Math.abs(d[11] - 0.5) > 1e-6) problems.push(`Blinky duty LED5 ${d[21]}, LEDR_N ${d[11]}`);
+  // holding BTN_N (pin 10, pressed = 0) keeps the counter at 0: LEDs dark, LEDR_N high (dark), LEDG_N low (lit)
+  r = core.call({ cmd: 'board_run', cycles: 1000, inputs: [[10, 0]] });
+  d = duty(r);
+  if (d[26] !== 0 || d[21] !== 0 || d[11] !== 1 || d[37] !== 0) problems.push('Blinky reset ' + JSON.stringify(d));
+  core.call({ cmd: 'board_run', cycles: 0, inputs: [[10, 1]] });
+  // lesson 2: one light, frozen while BTN1 (pin 20) is held
+  b = ex('tut_knight');
+  core.call({ cmd: 'board_load', files: b.files, top: 'KnightRider', pcf: b.pcf });
+  const pos = () => [26, 27, 25, 23, 21].map((p) => duty(core.call({ cmd: 'board_run', cycles: 0, inputs: [] }))[p]);
+  core.call({ cmd: 'board_run', cycles: 3_000_000, inputs: [] });
+  const moving = pos();
+  if (moving.filter((x) => x === 1).length !== 1) problems.push('KnightRider lights ' + moving);
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[20, 1]] });
+  const held = pos().join();
+  core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
+  if (pos().join() !== held) problems.push('KnightRider moved while BTN1 was held');
+  core.call({ cmd: 'board_run', cycles: 1_600_000, inputs: [[20, 0]] });
+  if (pos().join() === held) problems.push('KnightRider did not move after BTN1');
+  // the SoC: Fibonacci(10) = 55 on o_led (PMOD1A), and again after a power cycle
+  b = ex('soc');
+  core.call({ cmd: 'board_load', files: b.files, top: 'RiscvSoc', pcf: b.pcf });
+  const led = () => { const x = duty(core.call({ cmd: 'board_run', cycles: 0, inputs: [] })); return [4, 2, 47, 45, 3, 48, 46, 44].reduce((a, p, i) => a | (x[p] << i), 0); };
+  core.call({ cmd: 'board_run', cycles: 200, inputs: [] });
+  const first = led();
+  core.call({ cmd: 'board_reset' });
+  const after = led();
+  core.call({ cmd: 'board_run', cycles: 200, inputs: [] });
+  if (first !== 55 || after !== 0 || led() !== 55) problems.push(`SoC LEDs ${first}, after power cycle ${after} -> ${led()}`);
+  // M13: the real bitstream (synthesis, own place and route, .bin, decoded) and the same .bin uploaded
+  b = ex('tut_blinky');
+  const fl = core.call({ cmd: 'board_flash', files: b.files, top: 'Blinky', pcf: b.pcf });
+  if (fl.mode !== 'bitstream' || !(fl.fmax > 12) || !fl.bin || fl.warnings.length) problems.push(`Blinky flash: ${fl.mode}, Fmax ${fl.fmax}, ${fl.warnings.join('; ')}`);
+  d = duty(core.call({ cmd: 'board_run', cycles: 1 << 24, inputs: [] }));
+  if (Math.abs(d[21] - 0.5) > 1e-6 || Math.abs(d[11] - 0.5) > 1e-6) problems.push(`Blinky bitstream duty LED5 ${d[21]}, LEDR_N ${d[11]}`);
+  const up = core.call({ cmd: 'board_load_bin', bin: fl.bin, name: 'Blinky.bin' });
+  if (up.mode !== 'bin' || up.cells.lc !== fl.cells.lc) problems.push(`uploaded .bin: ${up.cells.lc} LCs vs ${fl.cells.lc}`);
+  d = duty(core.call({ cmd: 'board_run', cycles: 1 << 24, inputs: [] }));
+  if (Math.abs(d[21] - 0.5) > 1e-6) problems.push(`uploaded Blinky duty ${d[21]}`);
+  b = ex('tut_knight');
+  core.call({ cmd: 'board_flash', files: b.files, top: 'KnightRider', pcf: b.pcf });
+  core.call({ cmd: 'board_run', cycles: 3_000_000, inputs: [] });
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[20, 1]] });
+  const held2 = pos().join();
+  core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
+  if (pos().join() !== held2 || pos().filter((x) => x === 1).length !== 1) problems.push('KnightRider bitstream: BTN1 does not hold the light');
+  // M14 peripherals: the USB terminal (lesson 3), the seven-segment module, the VGA monitor
+  b = ex('tut_uart');
+  core.call({ cmd: 'board_load', files: b.files, top: 'UartEcho', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 12e6 / 115200 } });
+  let txt = '';
+  const term = (r) => { txt += String.fromCharCode(...r.uart.rx); return r; };
+  term(core.call({ cmd: 'board_run', cycles: 10000, inputs: [] }));
+  term(core.call({ cmd: 'board_run', cycles: 20000, inputs: [], uart_send: 'Veryl!' }));
+  if (txt !== 'Hi!\r\nvERYL!') problems.push('UART terminal: ' + JSON.stringify(txt));
+  b = ex('sevenseg');
+  core.call({ cmd: 'board_load', files: b.files, top: 'SevenSeg', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', seg: [{ segs: [4, 2, 47, 45, 3, 48, 46, null], sels: [[44, 0], [44, 1]], on: 1 }] });
+  core.call({ cmd: 'board_run', cycles: 3_000_000 * 12 + 1000, inputs: [] }); // 12 ticks of 0.25 s
+  const sg = core.call({ cmd: 'board_run', cycles: 100_000, inputs: [] }).segs[0];
+  const digits = sg.map((d) => d.slice(0, 7).map((x) => (x > 0.2 ? 1 : 0)).reverse().join(''));
+  if (digits.join() !== '1011011,0000110') problems.push('7-segment shows ' + digits.join());
+  b = ex('vga');
+  core.call({ cmd: 'board_load', files: b.files, top: 'VgaDemo', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', vga: { hs: 42, vs: 36, r: [45, 47, 2, 4], g: [31, 34, 38, 43], b: [44, 46, 48, 3] } });
+  const vr = core.call({ cmd: 'board_run', cycles: 800 * 525 * 2 + 100, inputs: [], vga_seen: 0 }).vga;
+  if (!vr.rle || vr.w !== 800 || vr.h !== 525) problems.push(`VGA frame ${vr.w}x${vr.h}`);
+  else {
+    const raw = Buffer.from(vr.rle, 'base64');
+    const px = [];
+    for (let i = 0; i + 3 < raw.length; i += 4) for (let k = 0; k < raw.readUInt16LE(i + 2); k++) px.push(raw.readUInt16LE(i));
+    for (const x of [10, 100, 300, 600]) {
+      const rgb = ((x >> 7) ^ ((x >> 6) & 1)) & 7;
+      const want = (rgb & 4 ? 0xf00 : 0) | (rgb & 2 ? 0x0f0 : 0) | (rgb & 1 ? 0x00f : 0);
+      const got = px[((240 + 35) % 525) * 800 + ((x + 144) % 800)];
+      if (got !== want) problems.push(`VGA pixel x ${x}: ${got} != ${want}`);
+    }
+  }
+  // M16 labs: one press adds one (BTN1 = 20, BTN2 = 19 clears); the traffic light's pedestrian button
+  b = ex('lab_counter');
+  core.call({ cmd: 'board_load', files: b.files, top: 'ButtonCounter', pcf: b.pcf });
+  for (let i = 0; i < 3; i++) { core.call({ cmd: 'board_run', cycles: 1000, inputs: [[20, 1]] }); core.call({ cmd: 'board_run', cycles: 1000, inputs: [[20, 0]] }); }
+  const presses = led();
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[19, 1]] });
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [[19, 0]] });
+  if (presses !== 3 || led() !== 0) problems.push(`button counter ${presses}, cleared ${led()}`);
+  b = ex('lab_traffic');
+  core.call({ cmd: 'board_load', files: b.files, top: 'TrafficLight', pcf: b.pcf });
+  const rgy = () => { const x = duty(core.call({ cmd: 'board_run', cycles: 0, inputs: [] })); return [4, 2, 47].map((p) => x[p]).join(''); };
+  const green = rgy();
+  core.call({ cmd: 'board_run', cycles: 1000, inputs: [[20, 1]] });
+  core.call({ cmd: 'board_run', cycles: 12_000_000, inputs: [[20, 0]] });
+  if (green !== '001' || rgy() !== '010') problems.push(`traffic light ${green} -> ${rgy()} (want 001 -> 010)`);
+  if (problems.length) bad++;
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} board    terminal (Hi!, echo), 7-segment 12, VGA color bars, labs (button counter, traffic light); bitstream: Blinky (Fmax ${fl.fmax?.toFixed(1)} MHz) and its uploaded .bin, KnightRider + BTN1; netlist: Blinky duty, KnightRider + BTN1, RiscvSoc LED = 55 (and after a power cycle)${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+}
+
+// project export: the .zip (stored, CRC-32) must unpack, and with the
+// official veryl CLI the unpacked project must check and pass its tests
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/templates.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const tpl = path.join(tmp, 'templates.cjs');
+  fs.writeFileSync(tpl, js);
+  const { projectZip, newModule } = createRequire(import.meta.url)(tpl);
+  const ex = ctx.VERYL_EXAMPLES.find((e) => e.id === 'uart');
+  const files = [...ex.files, { name: 'blinky.veryl', src: newModule('Blinky') }];
+  const zipPath = path.join(tmp, 'uart project.zip');
+  fs.writeFileSync(zipPath, projectZip('uart project', files));
+  const t0 = Date.now();
+  try {
+    const out = path.join(tmp, 'unzipped');
+    execFileSync('unzip', ['-q', '-o', zipPath, '-d', out]);
+    const dir = path.join(out, 'uart_project');
+    const got = fs.readdirSync(path.join(dir, 'src')).sort().join(' ');
+    if (got !== 'blinky.veryl uart.veryl') throw new Error(`zip contents: ${got}`);
+    let note = 'unzip ok';
+    let veryl = null;
+    try { veryl = execFileSync('which', ['veryl'], { encoding: 'utf8' }).trim(); } catch { /* not installed */ }
+    if (veryl) {
+      execFileSync(veryl, ['check'], { cwd: dir, stdio: 'pipe' });
+      // veryl logs to stderr
+      const t = spawnSync(veryl, ['test'], { cwd: dir, encoding: 'utf8' });
+      const ok = ((t.stdout + t.stderr).match(/Succeeded test/g) ?? []).length;
+      if (ok !== 2) throw new Error(`veryl test: ${ok} of 2 tests succeeded`);
+      note += ', veryl check + veryl test (2 tests) ok';
+    }
+    console.log(`ok   export   .zip of uart + a new-file template: ${note}  (${Date.now() - t0} ms)`);
+  } catch (e) {
+    bad++;
+    console.log(`FAIL export   ${e.message}`);
+  }
+}
+
+// C programs (src/rv): every C example compiles and runs on the instruction-set simulator; on
+// the virtual board RvBoard runs them from its block RAM: c_hello greets and echoes, then the
+// switches program replaces it without synthesis (board_program), as a netlist and in the bitstream
+{
+  const t0 = Date.now();
+  const problems = [];
+  const ex = (id) => ctx.VERYL_EXAMPLES.find((e) => e.id === id);
+  const cOf = (e) => e.files.find((f) => f.name.endsWith('.c'));
+  const sizes = [];
+  for (const e of ctx.VERYL_EXAMPLES.filter((x) => cOf(x))) {
+    // the RV64 board's programs: compiled for its Linux (they run in the emulator test)
+    if (e.emu) {
+      for (const c of e.files.filter((f) => f.name.endsWith('.c'))) {
+        const r = core.call({ cmd: 'cc', src: c.src, name: c.name, linux: true });
+        if (!r.compiled || !r.elf) problems.push(`${e.id}: ${c.name}: ${r.errors.map((x) => x.line + ': ' + x.msg).join('; ')}`);
+        else sizes.push(`${c.name} ${Math.round(r.elf.length * 0.75)} (Linux)`);
+      }
+      continue;
+    }
+    const c = cOf(e);
+    const r = core.call({ cmd: 'cc', src: c.src, name: c.name, run: 300000 });
+    if (!r.compiled) { problems.push(`${e.id}: ${r.errors.map((x) => x.line + ': ' + x.msg).join('; ')}`); continue; }
+    sizes.push(`${c.name} ${r.size}`);
+    if (r.run.error) problems.push(`${e.id}: ${r.run.error}`);
+  }
+  const prog = (id) => { const c = cOf(ex(id)); return core.call({ cmd: 'cc', src: c.src, name: c.name, run: 200000 }); };
+  const hello = prog('c_hello');
+  const sw = prog('c_switches');
+  if (!hello.run.tx.startsWith('Hello from C')) problems.push('hello on the ISS: ' + JSON.stringify(hello.run.tx.slice(0, 40)));
+  const badc = core.call({ cmd: 'cc', src: 'int main(void) {\n  x = 1;\n}\n', name: 'bad.c' });
+  if (badc.compiled || badc.errors[0]?.line !== 2) problems.push('compile error ' + JSON.stringify(badc.errors));
+  const b = ex('c_hello');
+  const vf = b.files.filter((f) => f.name.endsWith('.veryl'));
+  const SW = [43, 38, 34, 31, 42, 36, 32, 28];
+  const onBoard = (what, info) => {
+    if (!info.program_mem || info.program !== hello.size) problems.push(`${what}: program_mem ${info.program_mem}, program ${info.program}`);
+    core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 104 } });
+    let txt = '';
+    const run = (cycles, extra = {}) => { const r = core.call({ cmd: 'board_run', cycles, inputs: [], ...extra }); txt += String.fromCharCode(...r.uart.rx); return r; };
+    run(150000);
+    run(60000, { uart_send: 'ab' });
+    if (!txt.startsWith('Hello from C') || !txt.includes('AB')) problems.push(`${what} hello: ${JSON.stringify(txt.slice(0, 30))}...${JSON.stringify(txt.slice(-20))}`);
+    const p = core.call({ cmd: 'board_program', program: sw.bin });
+    if (p.bytes !== sw.size || (what === 'bitstream') !== !!p.bin) problems.push(`${what} board_program ${p.bytes} bytes, bin ${!!p.bin}`);
+    core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 104 } });
+    txt = '';
+    run(100000, { inputs: SW.map((pin, i) => [pin, i === 0 || i === 7 ? 1 : 0]) });
+    const d = Object.fromEntries(run(1000).duty);
+    if (!txt.includes('switches 10000001 = 0x81 = 129') || d[4] !== 1 || d[44] !== 1 || d[2] !== 0) problems.push(`${what} switches: ${JSON.stringify(txt)} LED ${d[4]} ${d[44]} ${d[2]}`);
+  };
+  onBoard('netlist', core.call({ cmd: 'board_load', files: vf, top: 'RvBoard', pcf: b.pcf, program: hello.bin }));
+  const tb = Date.now();
+  const fl = core.call({ cmd: 'board_flash', files: vf, top: 'RvBoard', pcf: b.pcf, program: hello.bin });
+  if (fl.mode !== 'bitstream' || fl.cells.ram !== 20) problems.push(`flash ${fl.mode}, ${fl.cells.ram} RAMs`);
+  onBoard('bitstream', fl);
+  onBoard('cpu', core.call({ cmd: 'board_load_cpu', program: hello.bin, pcf: b.pcf, top: 'RvBoard' }));
+  // VGA text mode in the CPU mode: the title in yellow on dark blue
+  const v = ex('c_vga');
+  core.call({ cmd: 'board_load_cpu', program: prog('c_vga').bin, pcf: v.pcf, top: 'RvVgaBoard' });
+  core.call({ cmd: 'board_periph', uart: { tx: 9, rx: 6, cpb: 104 }, vga: { hs: 42, vs: 36, r: [45, 47, 2, 4], g: [31, 34, 38, 43], b: [44, 46, 48, 3] } });
+  const vf2 = core.call({ cmd: 'board_run', cycles: 1_400_000, inputs: [], vga_seen: 0 }).vga;
+  let yellow = 0;
+  if (vf2?.rle) { const raw = Buffer.from(vf2.rle, 'base64'); for (let i = 0; i + 3 < raw.length; i += 4) if (raw.readUInt16LE(i) === 0xff0) yellow += raw.readUInt16LE(i + 2); }
+  if (vf2?.w !== 800 || vf2?.h !== 525 || yellow < 2000) problems.push(`VGA text: ${vf2?.w}x${vf2?.h}, ${yellow} yellow pixels`);
+  // the CPU board's speed (the instruction-set simulator): virtual seconds per second
+  core.call({ cmd: 'board_load_cpu', program: prog('c_knight').bin, pcf: b.pcf, top: 'RvBoard' });
+  const tc = Date.now();
+  core.call({ cmd: 'board_run', cycles: 6_000_000, inputs: [] });
+  const cpuSpeed = 0.5 / ((Date.now() - tc) / 1000);
+  if (problems.length) bad++;
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} c        ${sizes.join(', ')} bytes; ISS; RvBoard netlist + bitstream (Fmax ${fl.fmax?.toFixed(1)} MHz, ${((Date.now() - tb) / 1000).toFixed(0)} s) + CPU mode (${cpuSpeed.toFixed(1)}x real time): hello + echo, program swapped to switches; VGA text mode${problems.length ? ': ' + problems.join(' | ') : ''}  (${Date.now() - t0} ms)`);
+}
+
+// breadboard model (src/ide/bbmodel.ts): LEDs, resistors, pull-downs, floating inputs, shorts, buttons
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/bbmodel.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const bp = path.join(tmp, 'bbmodel.cjs');
+  fs.writeFileSync(bp, js);
+  const { solve } = createRequire(import.meta.url)(bp);
+  const problems = [];
+  const P = (id, kind, a, b, extra = {}) => ({ id, kind, a, b, ...extra });
+  // pin 4 (duty 0.5) -> LED -> resistor -> GND rail -> GND
+  let parts = [P(1, 'wire', 'p:4', 'h:2:a'), P(2, 'led', 'h:2:c', 'h:3:c'), P(3, 'res', 'h:3:e', 'r:top-:3'), P(4, 'wire', 'gnd', 'r:top-:1')];
+  let r = solve(parts, new Map([[4, 0.5]]), new Set(), new Set());
+  if (Math.abs(r.led.get(2) - 0.5) > 1e-9 || r.warnings.length) problems.push(`LED with resistor: ${r.led.get(2)} ${r.warnings}`);
+  // the same LED straight to GND: lit, but no current limit
+  r = solve([P(1, 'wire', 'p:4', 'h:2:a'), P(2, 'led', 'h:2:c', 'h:3:c'), P(3, 'wire', 'h:3:e', 'gnd')], new Map([[4, 1]]), new Set(), new Set());
+  if (r.led.get(2) !== 1 || !r.warnings.some((w) => w.includes('LED'))) problems.push('LED without resistor: ' + r.warnings);
+  // switch from 3V3 to input pin 43 with a pull-down
+  const sw = (on, pulldown) => [P(1, 'wire', 'vcc', 'r:top+:30'), P(2, 'sw', 'r:top+:20', 'h:20:a', { on }), P(3, 'wire', 'h:20:b', 'p:43'),
+    ...(pulldown ? [P(4, 'res', 'h:20:e', 'r:top-:21'), P(5, 'wire', 'gnd', 'r:top-:1')] : [])];
+  for (const [on, want] of [[false, 0], [true, 1]]) {
+    r = solve(sw(on, true), new Map(), new Set([43]), new Set());
+    if (r.inputs.get(43) !== want || r.warnings.length) problems.push(`switch ${on}: ${r.inputs.get(43)} ${r.warnings}`);
+  }
+  r = solve(sw(false, false), new Map(), new Set([43]), new Set());
+  if (!r.warnings.some((w) => w.includes('43'))) problems.push('floating input not reported');
+  // a short: output pin 4 wired to GND
+  r = solve([P(1, 'wire', 'p:4', 'h:5:a'), P(2, 'wire', 'h:5:b', 'gnd')], new Map([[4, 1]]), new Set(), new Set());
+  if (!r.warnings.some((w) => /短路|Short/.test(w))) problems.push('short not reported');
+  // a button pulls input 38 up only while it is held
+  const btn = [P(1, 'wire', 'vcc', 'h:8:a'), P(2, 'btn', 'h:8:b', 'h:10:b'), P(3, 'wire', 'h:10:a', 'p:38'), P(4, 'res', 'h:10:e', 'gnd')];
+  if (solve(btn, new Map(), new Set([38]), new Set()).inputs.get(38) !== 0 || solve(btn, new Map(), new Set([38]), new Set([2])).inputs.get(38) !== 1) problems.push('button');
+  // the lab examples come wired without warnings; the traffic light's yellow LED follows pin 2
+  for (const id of ['lab_gates', 'lab_traffic']) {
+    const e = ctx.VERYL_EXAMPLES.find((x) => x.id === id);
+    r = solve(e.board.bb, new Map([[4, 0], [2, 1], [47, 0], [45, 0]]), new Set([43, 38]), new Set());
+    if (r.warnings.length) problems.push(`${id}: ${r.warnings}`);
+    if (id === 'lab_traffic' && [4, 8, 12].map((k) => r.led.get(k)).join() !== '0,1,0') problems.push('traffic LEDs ' + [...r.led]);
+  }
+  if (problems.length) bad++;
+  console.log(`${problems.length ? 'FAIL' : 'ok  '} bb       LED + resistor, missing resistor, pull-down switch, floating input, short, button, lab wiring${problems.length ? ': ' + problems.join(' | ') : ''}`);
+}
+
+// IDE highlighter: lossless (tags removed = source) on every example, and
+// keywords / numbers / comments tagged
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/highlight.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const hp = path.join(tmp, 'highlight.cjs');
+  fs.writeFileSync(hp, js);
+  const { highlight, langOf } = createRequire(import.meta.url)(hp);
+  const unesc = (h) => h.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  let n = 0, lossy = '';
+  for (const ex of ctx.VERYL_EXAMPLES) for (const f of ex.files) {
+    n++;
+    if (unesc(highlight(f.src, langOf(f.name)).join('\n')) !== f.src) lossy ||= `${ex.id}/${f.name}`;
+  }
+  // C and assembly
+  const hc = highlight('#define LED 1\nint main(void) { /* c */ return 0x1F; } // x', 'c').join('\n');
+  const ha = highlight('loop:\n    addi a0, a0, -1   # count\n    .word 5', 'asm').join('\n');
+  const taggedC = ['t-attr">#define', 't-type">int', 't-kw">return', 't-num">0x1F', 't-com">// x', 't-name">LED'].every((t) => hc.includes(t))
+    && ['t-name">loop:', 't-kw">addi', 't-type">a0', 't-num">-1', 't-com"># count', 't-attr">.word'].every((t) => ha.includes(t));
+  const h = highlight("module M { // c\n  var a: logic<8> = 8'hFF; /* x\n y */ $assert(a); }").join('\n');
+  const tagged = ['t-kw">module', 't-type">logic', "t-num\">8'hFF", 't-com">// c', 't-com"> y */', 't-sys">$assert', 't-name">M'].every((t) => h.includes(t));
+  if (lossy || !tagged || !taggedC) bad++;
+  console.log(`${lossy || !tagged || !taggedC ? 'FAIL' : 'ok  '} ide       highlighter on ${n} files (Veryl, C, assembly)${lossy ? ': changes ' + lossy : ''}${tagged && taggedC ? '' : ': tokens not tagged'}`);
+}
+
+// timing constraints (sdc): with one clock and no IO delays the worst slack is the target period minus the
+// critical path (ASIC), and P&R reports the target; a broken .sdc is an error
+{
+  const ex = vfiles(ctx.VERYL_EXAMPLES.find((e) => e.id === 'counter'));
+  const sdc = 'create_clock -name clk -period 2 [get_ports i_clk]\n';
+  const a = core.call({ cmd: 'asic', files: ex, top: 'Counter', seed: 1, sdc });
+  const s = a.timing.slack;
+  const p = core.call({ cmd: 'pnr', files: ex, top: 'Counter', pcf: null, seed: 1, sdc });
+  const plain = core.call({ cmd: 'asic', files: ex, top: 'Counter', seed: 1 });
+  let err = '';
+  try { core.call({ cmd: 'asic', files: ex, top: 'Counter', seed: 1, sdc: 'set_max_delay 1' }); } catch (e) { err = String(e.message ?? e); }
+  const ok = s && Math.abs(s.wns - (2 - a.timing.period)) < 1e-9 && s.checked === a.timing.endpoints && s.clocks[0]?.name === 'clk'
+    && p.timing.target === 2 && plain.timing.slack == null && /not supported/.test(err);
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} sdc      Counter at 500 MHz: WNS ${s?.wns.toFixed(3)} ns (critical path ${a.timing.period.toFixed(3)} ns), ${s?.failing} of ${s?.checked} failing; P&R target ${p.timing.target} ns, Fmax ${p.timing.fmax.toFixed(1)} MHz${err ? '' : '; a broken .sdc was accepted'}`);
+}
+
+// interface languages: every tr('繁體', 'English') pair in the sources has
+// Chinese-free English, and its Simplified form keeps no Traditional-only character
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/i18n.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const ip = path.join(tmp, 'i18n.cjs');
+  fs.writeFileSync(ip, js);
+  const { hans } = createRequire(import.meta.url)(ip);
+  const srcDir = path.join(dist, '../src');
+  const files = ['synth/overlay.ts', 'synth/compare.ts', 'synth/layouts.ts', 'wave.ts', 'client.ts', 'ide/main.ts', 'ide/board.ts', 'ide/breadboard.ts', 'ide/bbmodel.ts', 'ide/emu.ts', 'ide/pi.ts', 'ide/caps.ts'];
+  const han = /[\u3400-\u9fff]/;
+  const trad = new Set('極製複貼麵學擊繼虛鈕鎖並佈佔來個側傳價優內兩別則動問啟單圖執塊實寫專對層帶庫後從態應換擁數斷時會條標樣機檔檢歡決沒測準滿為無熱狀現產畫發碼種稱節範簡約紅級細終組結給統經綠網線編緩縮總繞續腳與藍號術補裡規視計訊記設註試該語說調請證讀變讓負資軌較載輪輸轉這連週進過達違選還邊邏錄錯鍵鏈長閉開間閘關階際隨雙離電靜頁頂項順須預題顏類顯餘驅驗體鬆黃點');
+  let pairs = 0, badEn = [], badHans = [];
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(srcDir, f), 'utf8');
+    for (const m of src.matchAll(/tr\((['`])((?:(?!\1)[^\\]|\\.)*)\1,\s*(['`])((?:(?!\3)[^\\]|\\.)*)\3\)/g)) {
+      pairs++;
+      if (han.test(m[4])) badEn.push(m[4].slice(0, 40));
+      const h = hans(m[2]);
+      if ([...h].some((c) => trad.has(c))) badHans.push(h.slice(0, 40));
+    }
+  }
+  const ok = pairs > 150 && !badEn.length && !badHans.length;
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} i18n     ${pairs} tr() pairs${badEn.length ? '; Chinese in English: ' + badEn.slice(0, 3).join(' | ') : ''}${badHans.length ? '; not simplified: ' + badHans.slice(0, 3).join(' | ') : ''}; ${hans('檔案總管：模擬退火後繞線')}`);
+}
+
+// what each example can do (ide/caps.ts): the title bar's actions, the first step, the badges
+{
+  const esbuild = await import('esbuild');
+  const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/caps.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
+  const cp = path.join(tmp, 'caps.cjs');
+  fs.writeFileSync(cp, js);
+  const { caps, start, steps, badges } = createRequire(import.meta.url)(cp);
+  const errs = [];
+  const firsts = {};
+  for (const ex of ctx.VERYL_EXAMPLES) {
+    const files = [...ex.files, ...(ex.pcf ? [{ name: 'pins.pcf', src: ex.pcf }] : [])];
+    const i = { files, mods: null, top: ex.synth ?? '' };
+    const c = caps(i), s = start(i);
+    firsts[s] = (firsts[s] ?? 0) + 1;
+    const want = ex.emu ? 'emu' : ex.pcf ? 'board' : 'test';
+    if (s !== want) errs.push(`${ex.id}: first step ${s}, expected ${want}`);
+    if (steps(i)[0] !== s) errs.push(`${ex.id}: steps do not start with ${s}`);
+    if (!badges(i).some((b) => b.act === s)) errs.push(`${ex.id}: no badge for its first step`);
+    for (const [a, v] of Object.entries(c)) if (!v.on && !v.why) errs.push(`${ex.id}: ${a} off without a reason`);
+    if (ex.emu) {
+      if (c.test.on || c.board.on || c.verify.on) errs.push(`${ex.id}: a machine offers test / board`);
+      const prog = files.find((f) => /\.(py|sh|c)$/.test(f.name))?.name;
+      if (!prog || !caps({ ...i, active: prog }).test.on) errs.push(`${ex.id}: ▶ is off with ${prog} open`);
+    } else if (!c.test.on || !c.verify.on || c.emu.on) errs.push(`${ex.id}: test ${c.test.on} verify ${c.verify.on} emu ${c.emu.on}`);
+    if (!ex.emu && !ex.pcf && (c.board.on || !c.board.fix?.includes('addPcf'))) errs.push(`${ex.id}: no pins, but the board is ${c.board.on ? 'on' : 'off without "add pins.pcf"'}`);
+  }
+  // the welcome page's starting points open these examples
+  const main = fs.readFileSync(path.join(dist, '../src/ide/main.ts'), 'utf8');
+  const goals = main.slice(main.indexOf('const goals = ')).split('\n];')[0];
+  for (const [, id] of goals.matchAll(/ex: '([\w-]+)'/g)) if (!ctx.VERYL_EXAMPLES.some((e) => e.id === id)) errs.push(`welcome: no example ${id}`);
+  if ([...goals.matchAll(/ex: '/g)].length !== 4) errs.push('welcome: not four starting points');
+  const ok = !errs.length;
+  if (!ok) bad++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} caps     ${ctx.VERYL_EXAMPLES.length} examples, first steps ${JSON.stringify(firsts)}${errs.length ? ': ' + errs.slice(0, 4).join('; ') : ''}`);
+}
+
+// the emulator: every emu example compiles with veryl-emu (emu_compile) and its machine
+// (emu_machine.ts, as in the page's worker) boots its image far enough to print; the
+// development board also: GPIO from the shell, the snapshot, files in and out, MicroPython, C, the screen
+{
+  const { Machine, machineStops, fingerprint } = createRequire(import.meta.url)(path.join(dist, 'emu_machine.cjs'));
+  // the breadboard model and the development board's default breadboard (bundled for Node)
+  const esb = await import('esbuild');
+  const bbPath = path.join(tmp, 'bbmodel.cjs');
+  const tarPath = path.join(tmp, 'tar.cjs');
+  fs.writeFileSync(tarPath, esb.buildSync({ entryPoints: [path.join(dist, '../src/tar.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text);
+  fs.writeFileSync(bbPath, esb.buildSync({ entryPoints: [path.join(dist, '../src/ide/bbmodel.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text);
+  ctx.PI_PARTS = [
+    { id: 3, kind: 'wire', a: 'p:5', b: 'h:3:a' }, { id: 4, kind: 'led', a: 'h:3:c', b: 'h:4:c' }, { id: 5, kind: 'res', a: 'h:4:e', b: 'r:top-:4' },
+    { id: 1, kind: 'wire', a: 'gnd', b: 'r:top-:1' },
+  ];
+  if (fs.existsSync(path.join(dist, 'img_linux.js'))) vm.runInContext(fs.readFileSync(path.join(dist, 'img_linux.js'), 'utf8'), ctx);
+  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw)) {
+    const t0 = Date.now();
+    let line;
+    try {
+      const cfg = JSON.parse(ex.files.find((f) => f.name === 'machine.json').src);
+      const r = core.call({ cmd: 'emu_compile', files: vfiles(ex), top: cfg.top, stops: machineStops(cfg) });
+      const m = await Machine.create(fromBase64(r.wasm), r.meta, cfg);
+      for (const l of cfg.load ?? []) {
+        if (!ctx.VERYL_IMAGES?.[l.image]) throw new Error(`no image ${l.image} (img_${l.image}.js)`);
+        m.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+      }
+      m.reset();
+      // OpenSBI's banner names the platform after a few million cycles
+      let out = '';
+      while (m.cycle < 30_000_000 && !/Platform Name\s*: veryl2chip Rv64Soc/.test(out)) out += String.fromCharCode(...m.step(1_000_000).out);
+      let ok = /Platform Name\s*: veryl2chip Rv64Soc/.test(out);
+      let what = `OpenSBI banner after ${(m.cycle / 1e6).toFixed(1)} M cycles`;
+      // the development board: boot to the shell, light GPIO 5 from the shell, the breadboard's LED on it lights
+      if (ok && cfg.gpio) {
+        while (m.cycle < 600_000_000 && !out.includes('rv64:~$ ')) out += String.fromCharCode(...m.step(2_000_000).out);
+        const cmd = 'B=$(cat /sys/class/gpio/gpiochip*/base); echo $((B+5)) > /sys/class/gpio/export; echo out > /sys/class/gpio/gpio$((B+5))/direction; echo 1 > /sys/class/gpio/gpio$((B+5))/value; echo D$((40+2))NE\r';
+        m.input([...cmd].map((c) => c.charCodeAt(0)));
+        let r2 = null;
+        while (m.cycle < 900_000_000 && !out.includes('D42NE')) { r2 = m.step(2_000_000); out += String.fromCharCode(...r2.out); }
+        r2 = m.step(100_000);
+        const { solve } = createRequire(import.meta.url)(bbPath);
+        const led = solve(ctx.PI_PARTS, new Map([[5, r2.duty[5]]]), new Set(), new Set()).led.get(4);
+        ok = (r2.oe >> 5 & 1) === 1 && r2.duty[5] > 0.99 && led > 0.99;
+        what = `shell after ${(m.cycle / 1e6).toFixed(0)} M cycles; GPIO 5 ${ok ? 'lights the breadboard LED' : `oe ${r2.oe.toString(16)} duty ${r2.duty[5]} led ${led}`}`;
+        // the bundled snapshot: the same commands give the same output as on the cold-booted machine
+        if (ok && cfg.snapshot) {
+          vm.runInContext(fs.readFileSync(path.join(dist, `img_snap_${cfg.snapshot}.js`), 'utf8'), ctx);
+          const sn = ctx.VERYL_IMAGES[`snap_${cfg.snapshot}`];
+          const cmd2 = 'uname -a; echo $((6*7)); grep isa /proc/cpuinfo; echo E$((1+1))ND\r';
+          const run = (mm) => { let o = ''; mm.input([...cmd2].map((c) => c.charCodeAt(0))); while (!o.includes('E2ND')) o += String.fromCharCode(...mm.step(2_000_000).out); return o; };
+          const cold = run(m);
+          const m2 = await Machine.create(fromBase64(r.wasm), r.meta, cfg);
+          const fpOk = sn.fingerprint === fingerprint(r.meta);
+          m2.restore(await gunzip(fromBase64(sn.data)), sn.cycle);
+          const t1 = Date.now();
+          const warm = run(m2);
+          const same = cold.trim() === warm.trim();
+          ok = fpOk && same;
+          what += `; snapshot (${(sn.data.length * 0.75 / 1e6).toFixed(1)} MB) ${fpOk ? '' : 'fingerprint differs, '}${same ? 'gives the same output' : 'differs: ' + JSON.stringify([cold, warm])} in ${Date.now() - t1} ms`;
+          // files: into /root (getfiles), changed on the board, back (savefiles)
+          if (ok && cfg.files) {
+            const T = createRequire(import.meta.url)(tarPath);
+            m2.writeArea(T.exchangeArea(T.tarFiles([{ name: 'hello.txt', src: 'hi from the IDE\n' }])));
+            const cmd3 = 'getfiles; cat /root/hello.txt; echo made-here > /root/new.txt; savefiles; echo F$((2+2))IN\r';
+            let o = '';
+            m2.input([...cmd3].map((c) => c.charCodeAt(0)));
+            while (!o.includes('F4IN')) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const back = T.untarFiles(T.readExchangeArea(m2.readArea()));
+            const fOk = o.includes('hi from the IDE') && o.includes('\x1b]1337;veryl-save\x07') && back.some((f) => f.name === 'new.txt' && f.src === 'made-here\n') && back.some((f) => f.name === 'hello.txt');
+            ok = fOk;
+            what += `; files ${fOk ? 'in and back' : 'FAILED ' + JSON.stringify(o.slice(-300))}`;
+          }
+          // MicroPython and its pi module: GPIO 13 (the breadboard's green LED) on
+          if (ok) {
+            const cmd4 = 'micropython -c "from pi import LED; LED(13).on(); print(\'MP\', sum(range(10)) * 2 ** 64)"\r';
+            let o = '';
+            m2.input([...cmd4].map((c) => c.charCodeAt(0)));
+            const t2 = Date.now();
+            while (m2.cycle < 2_000_000_000 && !/MP \d+[\s\S]*\$ $/.test(o)) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const r4 = m2.step(100_000);
+            const mOk = o.includes('MP ' + (45n * 2n ** 64n)) && (r4.oe >> 13 & 1) === 1 && r4.duty[13] > 0.99;
+            ok = mOk;
+            what += `; MicroPython ${mOk ? `lights GPIO 13 (${Date.now() - t2} ms)` : 'FAILED ' + JSON.stringify(o.slice(-300))}`;
+          }
+          // a C program compiled for the board's Linux (cc with linux), put into /root and run
+          if (ok) {
+            const T = createRequire(import.meta.url)(tarPath);
+            const c = core.call({ cmd: 'cc', name: 'ct.c', linux: true, src: 'int main(void) { gpio_write(12, 1); printf("C %d %u\\n", gpio_read(13), 0xffffffffu / 3); return 5; }\n' });
+            m2.writeArea(T.exchangeArea(T.tarFiles([{ name: 'ct', src: fromBase64(c.elf), mode: 0o755 }])));
+            const cmd5 = 'getfiles > /dev/null; ./ct; echo "C exit $?"\r';
+            let o = '';
+            m2.input([...cmd5].map((ch) => ch.charCodeAt(0)));
+            while (m2.cycle < 3_000_000_000 && !/C exit \d+/.test(o)) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const r5 = m2.step(100_000);
+            const cOk = c.compiled && o.includes('C 1 1431655765') && o.includes('C exit 5') && r5.duty[12] > 0.99;
+            ok = cOk;
+            what += `; C (${c.elf ? Math.round(c.elf.length * 0.75) : 0} bytes) ${cOk ? 'runs and lights GPIO 12' : 'FAILED ' + JSON.stringify(c.compiled ? o.slice(-300) : c.errors)}`;
+          }
+          // the screen (machine.json fb): fbcon's greeting from the boot, then what MicroPython draws is what the IDE draws
+          if (ok && cfg.fb) {
+            const px = () => { const b = m2.screen(); return (x, y) => b[(y * cfg.fb.width + x) * 2] | b[(y * cfg.fb.width + x) * 2 + 1] << 8; };
+            const lit = (() => { const b = m2.screen(); let n = 0; for (let i = 0; i < b.length; i += 2) if (b[i] | b[i + 1]) n++; return n; })();
+            const cmd6 = 'micropython -c "from pi import Screen, RED, BLUE; s = Screen(); s.fill(RED); s.pixel(7, 9, BLUE); s.text(\'Hi\', 100, 100, 0xffff); s.show(); print(\'S\' + \'OK\')"\r';
+            let o = '';
+            m2.input([...cmd6].map((ch) => ch.charCodeAt(0)));
+            while (m2.cycle < 4_000_000_000 && !o.includes('SOK')) o += String.fromCharCode(...m2.step(2_000_000).out);
+            const p = px();
+            let white = 0;
+            for (let y = 100; y < 108; y++) for (let x = 100; x < 116; x++) if (p(x, y) === 0xffff) white++;
+            const sOk = lit > 100 && p(0, 0) === 0xf800 && p(319, 239) === 0xf800 && p(7, 9) === 0x001f && white > 10;
+            ok = sOk;
+            what += `; screen ${sOk ? `(greeting: ${lit} pixels lit) drawn by MicroPython` : `FAILED lit ${lit} ${p(0, 0).toString(16)} ${p(7, 9).toString(16)} white ${white} ` + JSON.stringify(o.slice(-200))}`;
+          }
+        }
+      }
+      // riscv-emu (machine.json riscv): the same board on the instruction-set emulator, from a cold boot
+      if (ok && cfg.riscv) {
+        const { RvMachine } = createRequire(import.meta.url)(path.join(dist, 'rv_machine.cjs'));
+        vm.runInContext(fs.readFileSync(path.join(dist, 'rvemu.js'), 'utf8'), ctx);
+        const T = createRequire(import.meta.url)(tarPath);
+        const rm = await RvMachine.create(fromBase64(ctx.VERYL_RVEMU_B64), cfg, { jit: true });
+        for (const l of cfg.load ?? []) rm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+        rm.reset();
+        const t1 = Date.now();
+        let o = '';
+        while (rm.cycle < 400_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...rm.step(1_000_000).out);
+        const boot = Date.now() - t1, bootM = rm.cycle;
+        const c = core.call({ cmd: 'cc', name: 'ct.c', linux: true, src: 'int main(void) { gpio_write(12, 1); printf("C %d\\n", 6 * 7); return 0; }\n' });
+        rm.writeArea(T.exchangeArea(T.tarFiles([{ name: 'hello.txt', src: 'hi from the IDE\n' }, { name: 'ct', src: fromBase64(c.elf), mode: 0o755 }])));
+        const cmd = 'getfiles > /dev/null; cat hello.txt; micropython -c "from pi import LED; LED(13).on(); print(\'MP\', 7 * 6)"; ./ct; echo RV$((1+1))DONE\r';
+        rm.input([...cmd].map((ch) => ch.charCodeAt(0)));
+        o = '';
+        let r = null;
+        while (rm.cycle < bootM + 200_000_000 && !o.includes('RV2DONE')) { r = rm.step(1_000_000); o += String.fromCharCode(...r.out); }
+        r = rm.step(100_000);
+        const scr = rm.screen();
+        let lit = 0;
+        for (let i = 0; i < scr.length; i += 2) if (scr[i] | scr[i + 1]) lit++;
+        const rOk = o.includes('hi from the IDE') && o.includes('MP 42') && o.includes('C 42') && r.duty[12] > 0.99 && r.duty[13] > 0.99 && lit > 100;
+        ok = rOk;
+        what += `; riscv-emu: ${rOk ? `shell after ${(bootM / 1e6).toFixed(0)} M instructions in ${boot} ms (${(bootM / boot / 1e3).toFixed(0)} MIPS, ${rm.jitStats().translated} blocks translated), files, MicroPython, C, GPIO 12 / 13, screen` : 'FAILED ' + JSON.stringify(o.slice(-300)) + ` duty ${r?.duty?.[12]} ${r?.duty?.[13]} lit ${lit}`}`;
+      }
+      if (!ok) bad++;
+      const mhz = m.cycle / ((Date.now() - t0) / 1000) / 1e6;
+      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} emulator: ${r.stats.split(';')[0]}; ${what} (${mhz.toFixed(2)} MHz)`;
+    } catch (e) {
+      bad++;
+      line = `FAIL ${ex.id.padEnd(9)} emulator: ${e.message}`;
+    }
+    console.log(`${line}  (${Date.now() - t0} ms)`);
+  }
+
+  // the RV64 board's examples (same_hw: the board's machine, checked above): each one's programs
+  // run on riscv-emu, as ▶ Run does (the project's files into /root, C compiled for Linux)
+  const boardEx = ctx.VERYL_EXAMPLES.filter((e) => e.emu && e.same_hw);
+  if (boardEx.length && ctx.VERYL_IMAGES?.linux) {
+    const t0 = Date.now();
+    const { RvMachine } = createRequire(import.meta.url)(path.join(dist, 'rv_machine.cjs'));
+    vm.runInContext(fs.readFileSync(path.join(dist, 'rvemu.js'), 'utf8'), ctx);
+    const T = createRequire(import.meta.url)(tarPath);
+    const { solve } = createRequire(import.meta.url)(bbPath);
+    const cfg = JSON.parse(boardEx[0].files.find((f) => f.name === 'machine.json').src);
+    const rm = await RvMachine.create(fromBase64(ctx.VERYL_RVEMU_B64), cfg, { jit: true });
+    for (const l of cfg.load ?? []) rm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+    rm.reset();
+    let o = '';
+    while (rm.cycle < 400_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...rm.step(1_000_000).out);
+    const lit = () => { const b = rm.screen(); let n = 0; for (let i = 0; i < b.length; i += 2) if (b[i] | b[i + 1]) n++; return n; };
+    /** type a command, wait for `want` (then Ctrl-C and the prompt for a program that runs on); the output and the GPIO over the run */
+    const run = (cmd, want, stop) => {
+      let out = '', r = null;
+      rm.input([...cmd + '\r'].map((c) => c.charCodeAt(0)));
+      const end = rm.cycle + 600_000_000;
+      while (rm.cycle < end && !out.includes(want)) { r = rm.step(1_000_000); out += String.fromCharCode(...r.out); }
+      const ok = out.includes(want);
+      // let it run a little, sampling the GPIO
+      const g = stop ? rm.step(30_000_000) : null;
+      if (stop) rm.input([3]);
+      let tail = '';
+      while (rm.cycle < end + 200_000_000 && !tail.endsWith(cfg.prompt)) tail += String.fromCharCode(...rm.step(1_000_000).out);
+      return { ok, out: out + tail, g };
+    };
+    // what each example's programs must print (C files are compiled first)
+    const CHECKS = {
+      pi_chaser: [['micropython chaser.py', 'chaser: GPIO 6', true], ['./chaser', 'chaser (C): GPIO 6', true]],
+      pi_reaction: [['micropython reaction.py', 'Round 1 : wait for green', true]],
+      pi_breathe: [['./breathe', 'breathing: red, yellow, green', true]],
+      pi_snake: [['./snake', 'snake: GPIO 6 turns left', true]],
+      pi_tetris: [['./tetris', 'tetris: GPIO 6 left, GPIO 13 right', true]],
+      pi_sysmon: [['micropython sysmon.py', 'processes ', true]],
+      pi_linux: [['sh hello.sh', 'Hello from Linux', false], ['sort -k3 -n fruits.txt | tail -1; sh count.sh 2', 'watermelon green 90', false]],
+    };
+    const res = [];
+    let fail = '';
+    for (const ex of boardEx) {
+      const checks = CHECKS[ex.id];
+      if (!checks) { fail ||= `${ex.id}: no check`; continue; }
+      const progs = [];
+      for (const f of ex.files.filter((x) => x.name.endsWith('.c'))) {
+        const c = core.call({ cmd: 'cc', name: f.name, linux: true, src: f.src });
+        if (!c.compiled) { fail ||= `${ex.id}: ${f.name}: ${JSON.stringify(c.errors.slice(0, 2))}`; continue; }
+        progs.push({ name: f.name.slice(0, -2), src: fromBase64(c.elf), mode: 0o755 });
+      }
+      const files = ex.files.filter((f) => !f.name.endsWith('.veryl') && f.name !== 'machine.json');
+      rm.writeArea(T.exchangeArea(T.tarFiles([...files, ...progs])));
+      run('cd /root && getfiles > /dev/null; echo GOT$((1+1))', 'GOT2', false);
+      const before = lit();
+      for (const [cmd, want, stop] of checks) {
+        const r = run(cmd, want, stop);
+        if (!r.ok) { fail ||= `${ex.id}: ${cmd}: ${JSON.stringify(r.out.slice(-200))}`; continue; }
+        // what the program did besides printing
+        if (ex.id === 'pi_chaser' && (r.g.oe & 0xfb8) !== 0xfb8) fail ||= `${ex.id}: ${cmd}: LEDs not outputs (oe ${r.g.oe.toString(16)})`;
+        if (ex.id === 'pi_breathe') {
+          // software PWM: partly lit LEDs on the breadboard (default: red, yellow, green on GPIO 5, 12, 13)
+          const d = [5, 12, 13].map((p) => r.g.duty[p]);
+          if (!d.every((x) => x > 0.03 && x < 0.97)) fail ||= `${ex.id}: duty ${d.map((x) => x.toFixed(2))}`;
+          else res.push(`PWM duty ${d.map((x) => x.toFixed(2)).join(' / ')}`);
+        }
+        if (['pi_snake', 'pi_tetris', 'pi_sysmon'].includes(ex.id) && lit() < 2000) fail ||= `${ex.id}: the screen is not drawn (${lit()} pixels, ${before} before)`;
+        if (ex.id === 'pi_chaser' && cmd.startsWith('./')) {
+          // the example's breadboard: the LED of a lit pin lights
+          const on = [3, 4, 5, 7, 8, 9, 10, 11].filter((p) => r.g.duty[p] > 0.05);
+          const leds = solve(ex.piBoard, new Map(on.map((p) => [p, r.g.duty[p]])), new Set([6, 13]), new Set()).led;
+          if (![...leds.values()].some((v) => v > 0.05)) fail ||= `${ex.id}: no breadboard LED lights (pins ${on})`;
+        }
+      }
+      res.push(ex.id);
+    }
+    const ok = !fail;
+    if (!ok) bad++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} board examples on riscv-emu: ${ok ? res.join(', ') : fail}  (${Date.now() - t0} ms)`);
+  }
+}
+
+// a broken source must come back as a message, not crash the core
+try { core.simulate([{ name: 'x.veryl', src: 'module X ( a: input logic ) { assign b = ; }' }]); bad++; console.log('FAIL parse error not reported'); }
+catch (e) { console.log(`ok   parse error reported: ${e.message}`); }
+console.log(bad ? `${bad} failure(s)` : 'all passed');
+process.exit(bad ? 1 : 0);

@@ -1,4 +1,4 @@
-// Simulation model of the ECP5 DP16KD block RAM in the shape veryl-eda uses it
+// Simulation model of the ECP5 DP16KD block RAM in the shape eda uses it
 // (ecp5::brams): DATA_WIDTH_A = DATA_WIDTH_B = 9 (2048 words, address on AD*13..3),
 // port A writes (WEA & CEA), port B reads (CEB, NOREG: DOB is the registered read of
 // the old word), chip selects tied to CSDECODE. yosys' cells_sim.v only declares the

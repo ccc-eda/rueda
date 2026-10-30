@@ -1,0 +1,110 @@
+# Build and test everything, then publish web/dist to GitHub Pages.
+# Pull requests only run the tests; pushes to main also deploy.
+name: CI and Pages
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust (with the wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # place and route needs the IceStorm chip database; the web build embeds it
+      - name: Chip database
+        run: |
+          node web/test/chipdb.mjs "$RUNNER_TEMP/chipdb-5k.txt"
+          echo "VERYL_EDA_CHIPDB=$RUNNER_TEMP/chipdb-5k.txt" >> "$GITHUB_ENV"
+
+      - name: cargo test (eda, riscv, veryl, fluxa, reda)
+        run: |
+          cargo test --release
+          cargo build --release -p rueda
+
+      - name: reda sim (Veryl and Fluxa)
+        run: |
+          ./target/release/reda sim veryl/sim/examples/counter.veryl
+          ./fluxa/rv32i.sh
+          ./fluxa/rv64.sh
+
+      - name: riscv/rvemu (the translation to wasm in Node)
+        run: |
+          cargo build --release -p rueda-rvemu --lib --target wasm32-unknown-unknown
+          node riscv/rvemu/tests/jit.mjs
+
+      - name: Tutorial (simulation, gate level, iCEBreaker bitstreams)
+        run: ./veryl/tutorial/check.sh
+
+      - name: Web (build wasm + pages, npm test)
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+      # the site keeps the old URL layout: <site>/web/dist/index.html (the IDE), demo.html, ide.html (redirect)
+      - name: Pages content
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p _site/web
+          cp -r web/dist _site/web/dist
+          cat > _site/index.html <<'HTML'
+          <!DOCTYPE html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=web/dist/index.html">
+          <title>rueda</title>
+          <a href="web/dist/index.html">rueda IDE</a> · <a href="web/dist/demo.html">demo</a>
+          HTML
+
+      - name: Setup Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    # one deployment at a time; do not cancel one in progress
+    concurrency:
+      group: "pages"
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

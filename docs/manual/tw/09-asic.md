@@ -1,0 +1,221 @@
+# 9. ASIC：`v2c asic`
+
+```
+v2c asic [--top MODULE] [--pdk vlib|sky130|sky130:DIR] [--seed N]
+         [--verilog OUT.v] [--def OUT.def] [--gds OUT.gds] [--map-only] [-v] FILE.veryl...
+```
+
+把設計做成「標準元件晶片」：元件對應 → 列式佈局 → 時脈樹 → 全域與細部繞線 → 靜態時序 → 功耗與 IR drop；
+用 SKY130 時再加上設計規則檢查（DRC）、版圖與電路比對（LVS）、天線規則、GDSII 版圖與 SPICE 網表。
+
+## 兩種元件庫
+
+| | `--pdk vlib`（預設） | `--pdk sky130` |
+|---|---|---|
+| 是什麼 | 本專案自己定的教學元件庫，數字是「大約 130 nm」的假設值 | SkyWater 的開源製程 SKY130、`sky130_fd_sc_hd` 標準元件庫、典型角落 `tt_025C_1v80` |
+| 列高 / site | 4.0 µm / 0.5 µm | 2.72 µm / 0.46 µm（`unithd`） |
+| 繞線層 | M2–M5（M1 是元件腳位） | met1–met4（元件腳位在 li1）；電源軌 met1、電源帶 met4 |
+| 時序 | 本徵延遲 + 每扇出負載 | Liberty 的 NLDM 查表（依輸入斜率與負載電容），斜率沿路徑傳遞 |
+| 記憶體 | 同步讀取的變成 SRAM 巨集 | 維持正反器（沒有 SRAM 巨集） |
+| DRC、LVS、天線規則、GDSII、SPICE | 無 | 有 |
+| 適合 | 看懂流程、快速比較 | 真實製程的結果、拿去給其他工具 |
+
+需要的 SKY130 元件已經隨 `v2c` 附上，不用另外下載。`--pdk sky130:目錄` 改讀完整的 PDK 檔案（見本章最後）。
+
+## 讀懂輸出
+
+```
+asic: technology sky130_fd_sc_hd (2.72 µm rows, 0.46 µm sites)
+  cells: 14
+    sky130_fd_sc_hd__and2_1 2
+    sky130_fd_sc_hd__dfrtp_1 4
+    ...
+asic: area 187.7 µm² (cells), die 17.9 × 19.0 µm, 7 rows, utilization 55%, ...
+asic: wirelength 186 µm, 71 vias, overflow 0 after 1 routing iterations
+power: 0.057 mW at 752.6 MHz = dynamic 0.057 + leakage 0.0000; ...
+asic: power grid 8 rails, 2 straps, 8 via stacks; 31 filler cells
+asic: DRC 2022 shapes: 0 shorts, 0 spacing, 0 min-area, 0 opens; 11 taps (0 sites too far)
+asic: LVS 19 nets, 170 terminals, 14 devices: 0 opens, 0 shorts, 0 device errors, layout matches the netlist (19 pieces, 0 floating)
+asic: antenna 197 pieces with gates checked: 0 violations (worst 11% of its limit); 0 diodes inserted
+asic: detailed routing 267 µm (met1 56 / met2 132 / met3 51 / met4 29), 142 vias, 0 conflicts, 0 opens after 3 iterations
+asic: clock tree 0 buffers (), insertion 0.000 ns, skew 0.000 ns; hold: worst slack 0.341 ns, 0 delay buffers
+asic: extraction 17 nets from the detailed routing: 0.018 pF of wire, the longest wire delay 0.2 ps
+timing: critical path 1.329 ns, Fmax 752.6 MHz (8 endpoints; ideal clock 756.3 MHz, wirelength-only placement 751.1 MHz)
+```
+
+| 行 | 意思 |
+|---|---|
+| `cells` | 每種標準元件用了幾個（SKY130 顯示元件庫的真實名稱） |
+| `area / die` | 元件面積、晶粒大小、列數、利用率（元件佔晶粒的比例） |
+| `wirelength … overflow` | 全域繞線：總線長、via 數；`overflow` 必須是 0 |
+| `power` | 在 Fmax 下的功耗（隨機輸入模擬得到的翻轉率）與最差 IR drop |
+| `power grid` | 電源軌、電源帶、via 堆疊、填充元件數（SKY130 至少一對電源帶，把每一列的電源軌接在一起） |
+| `DRC` | （SKY130）短路、間距、最小面積、斷路都應該是 0；well tap 數與離 tap 太遠的 site |
+| `LVS` | （SKY130）只從版圖的幾何重建接線，和網表比對：斷路、短路、元件不符都應該是 0，最後一句是 `layout matches the netlist` |
+| `antenna` | （SKY130）天線規則：檢查了幾塊接到閘極的金屬、違規數（應該是 0）、最接近上限的一塊是上限的百分之幾、插了幾個 diode |
+| `detailed routing` | 每層的線長；`conflicts` 與 `opens` 都應該是 0 |
+| `clock tree` | 時脈樹緩衝器數、插入延遲、skew；hold 最差餘裕與修正用的延遲緩衝器 |
+| `extraction` | （SKY130）從細部繞線實際畫出的線算 RC：幾條網路、總線電容、最長的線延遲；最後的時序用它 |
+| `timing` | 關鍵路徑與 Fmax；也列出理想時脈下與只看線長的佈局下的 Fmax，看得出時序導向與時脈樹的影響 |
+
+`-v` 另外印出關鍵路徑的每一級（元件延遲、線延遲）與 DRC 違規的例子；LVS 有錯時一定會列出例子。
+
+### LVS（v2.33）
+
+LVS（layout versus schematic）回答「版圖接起來的，真的是網表說的電路嗎？」。繞線器在每塊金屬上記了它屬於哪個網路，
+但 LVS 不看這些記號（不然只是拿繞線器檢查自己）：它把所有金屬、via、元件的腳位形狀當成導體，同一層碰在一起的是同一塊，
+via 接起上下兩層，重建出一塊一塊的導體；再看每塊導體碰到哪些元件的腳、哪些 IO 標籤：
+
+- 斷路（open）：網表裡的一個網路分散在好幾塊導體上
+- 短路（short）：一塊導體碰到兩個網路的腳
+- 元件不符：版圖上的元件和網表的元件型別不同
+
+電源也一樣：每個元件的 VPWR 必須連成一塊、VGND 一塊，而且兩塊不相連。版圖的 VPWR、VGND 標籤寫在第一條電源帶上。
+`cargo test` 除了要求 LVS 乾淨，還故意把好的版圖弄壞（拿掉一個網路的繞線、多畫一條把兩個網路接起來的線、對調兩個 IO 標籤、
+換掉一個元件），確定 LVS 每一種都抓得到。
+
+### 天線規則（v2.34）
+
+晶片是一層一層做上去的：蝕刻某一層金屬時，上面的層還不存在。一條之後才會經由上層接到驅動它的元件的線，在那段時間裡
+只接著電晶體的閘極；製程中累積的電荷會打穿很薄的閘極氧化層。所以 PDK 規定：每一層「那時候連在一起的一塊金屬」，
+它的側面積（周長 × 厚度；via 層看面積）除以它接到的閘極面積，不能超過上限。接到擴散區（驅動元件的輸出、或專門的
+diode）時電荷有地方去，上限就大很多（SKY130：沒有擴散區 400，有的話 2609 以上）。閘極與擴散區面積來自元件 LEF
+的 `ANTENNAGATEAREA` / `ANTENNADIFFAREA`，上限來自 tech LEF 的 `ANTENNADIFFSIDEAREARATIO` 表。
+
+違規的閘極旁邊會插一個 `sky130_fd_sc_hd__diode_2`（只是一塊接在那個網路上的擴散區，沒有邏輯功能），重新繞線，再檢查；
+繞線若因此變差，就把 diode 換到別的空位再試（最多三處），最多十二輪（每次重繞會讓一些線移動，可能有新的違規）。
+例如 Ram 不修時 met2 / met3 有 7 塊違規，插 15 個 diode 後是 0，時序幾乎不變；rv32i 的 Alu 2 塊、插 11 個後是 0。
+例外是 Wide（200 位元的運算元直接來自 800 多支 IO 腳，網路在晶片裡沒有驅動元件）：從 82 塊降到 2 塊；以及很密的 RiscvSoc：
+它的 8 塊每次插 diode 都讓細部繞線多出衝突，流程寧可保留乾淨的繞線（不拿短路換天線），這 8 塊就照實報告。
+繞線器把 diode 接上網路時有時走較高的層，那時 diode 還不在閘極那一塊上；要完全解決，得讓繞線器用低層把 diode 直接接到閘極腳。
+`VERYL_EDA_ANTENNA_FIX=0` 可以關掉修正，看原本的違規。
+
+`tools/antenna_check.py` 用 KLayout 從 GDS 獨立再算一次：閘極面積用元件版圖裡真正的 poly 與擴散區重疊，金屬用合併後的多邊形，
+一層一層蓋上去檢查（`python3 tools/antenna_check.py counter.gds`）。兩邊的結果一致於「veryl2chip 不會比較寬鬆」：
+不修的 Wide，KLayout 在 met2 / met3 / met4 找到 3 / 2 / 67 塊，veryl2chip 找到 4 / 5 / 73 塊（它把重疊形狀的周長直接加總，略為保守）。
+
+### 時序約束（v2.35）
+
+沒有約束時，STA 只回答「最快能跑多少 MHz」（Fmax）。給了時序約束，它回答的是「在我要的頻率下，每條路徑還差多少」：
+
+```sh
+v2c asic --pdk sky130 --clock 300 uart.veryl          # 一個 300 MHz 的時脈，套用到全部
+v2c asic --pdk sky130 --sdc uart.sdc uart.veryl       # 完整的約束檔
+```
+
+`uart.sdc`（SDC 的常用子集，時間單位 ns）：
+
+```
+create_clock -name clk -period 2 [get_ports i_clk]
+set_input_delay 0.5 -clock clk [all_inputs]
+set_output_delay 0.5 -clock clk [all_outputs]
+set_false_path -from [get_ports i_rst]
+```
+
+報告多一行：
+
+```
+timing: constraints clk 2.000 ns (500.0 MHz, 61 endpoints): WNS -1.752 ns, TNS -38.383 ns, 61 of 72 endpoints failing (worst: DFFR D (c380))
+```
+
+- **餘裕（slack）** = 要求的時間 − 實際到達的時間；負的就是沒達成。正反器的要求是「接收時脈 + 週期 − setup」，輸出腳是「週期 − 輸出延遲」。
+- **WNS**（worst negative slack）：最差的那個端點；**TNS**（total）：所有負餘裕加總，看得出問題是一條路徑還是一大片。
+- `set_input_delay` 讓輸入晚一點才到（外面的電路用掉的時間）；`set_output_delay` 讓輸出早一點要交（外面還需要的時間）。
+- `set_false_path -from` 的輸入不算時序（例如非同步的 reset 按鈕）；`-to` 的輸出不檢查。
+  `set_multicycle_path N -from/-to` 給那些路徑 N 個週期。
+- 每個正反器依它的時脈腳追回 `create_clock` 指定的腳（經過時脈樹的緩衝器），用那個時脈的週期；沒有腳的 `create_clock` 是給 IO 用的虛擬時脈。
+
+限制：例外（false path、multicycle）只能指定輸入腳、輸出腳。合成與對應之後的網表已經攤平、改了名字，沒有暫存器名稱可以指定暫存器之間的路徑。
+
+### 時序收斂（v2.36）
+
+**寄生萃取**：細部繞線之後，每條網路依實際畫出的線（每一段的層、長度，每個 via）算出電阻與電容（LEF 的每層 R/□、面積電容、
+邊緣電容，via 的接觸電阻），從驅動端到每個負載用 Elmore 延遲（沿路每段電阻 × 它下游的全部電容）。最後的時序用這些數字，
+不再用依距離的估計（`extraction` 那一行）。
+
+**時序修正**：有約束而且沒達成（WNS < 0）時，流程會試著修：
+
+- 關鍵路徑上的元件換成驅動力較強的版本（例如 `nand2_1` → `nand2_2` → `nand2_4`，同一列旁邊有空位才換）；
+- 關鍵路徑上負載很多的網路，把不在關鍵路徑上的負載移到一個新的緩衝器後面，讓關鍵路徑推的負載變輕。
+
+較強的元件輸入電容也較大，會讓前一級變慢，所以不是每個改動都有用：每個改動單獨試，實際繞線、萃取、算時序後有改善才保留
+（很大的設計改用全域繞線的估計），每一輪結束再確認繞線沒有變差。例如 Ram 在 450 MHz：
+
+```
+timing: constraints clk 2.222 ns (450.0 MHz, 128 endpoints): WNS +0.098 ns, TNS 0.000 ns, 0 of 136 endpoints failing, met
+timing: repair 10 cells made stronger, 2 buffers: WNS -0.240 -> +0.098 ns
+```
+
+修不了的路徑主要是邏輯太深（例如 UartLoop 在 300 MHz 只從 −0.422 改善到 −0.382 ns）：那要改電路本身，例如加一級暫存器。
+沒有給約束時流程不做修正，結果和以前一樣。
+
+## 流程做了什麼
+
+1. **對應**：在多扇出點把網表切成樹，以最小面積覆蓋（反相器併入 NAND / NOR / AOI / OAI…）；SKY130 還會用
+   3 輸入閘、AOI22 / OAI22、AO21 / OA21；扇出超過 12 的線插入緩衝器樹。
+2. **佈局**：依利用率決定晶粒大小，IO 腳放在四周（輸入：左、上；輸出：右、下），模擬退火最小化線長加上密度懲罰；
+   接著依關鍵路徑做時序導向的第二輪。SKY130 每列每 20 µm 放一個 well tap，空位放填充元件。
+3. **時脈樹**：時脈（與非同步 reset）的負載依位置遞迴對半分，每群一個時脈緩衝器。
+4. **全域繞線**、**hold 修正**、**電源網格**、**細部繞線**（每個格點只屬於一條線，所以不會短路；SKY130 另外遵守它的金屬規則）。
+5. **時序與功耗**：以實際繞好的線長計算。
+
+太擠繞不通時，流程會自動放大晶粒（降低利用率）重來；SKY130 細部繞線不乾淨時最多重試四次，每次換新的佈局種子。
+所以 SKY130 的利用率常落在 30–55 %，大設計也比 vlib 慢（幾萬個元件要數分鐘）。
+
+## 輸出檔
+
+| 選項 | 內容 |
+|---|---|
+| `--verilog OUT.v` | 標準元件網表：元件與腳位用元件庫的名稱（SKY130：`sky130_fd_sc_hd__a21oi_1 … .A1(...)`），檔尾附上元件的行為模型（SKY130 的由 Liberty 函式產生），iverilog 可以直接模擬 |
+| `--def OUT.def` | DEF：晶粒、列、元件位置與方向、填充元件與 tap、IO 腳、電源網路、每條線每一段與 via |
+| `--gds OUT.gds` | （SKY130）GDSII 版圖：PDK 的元件版圖 + 繞線、via、電源、IO 腳與標籤 |
+| `--spice OUT.sp` | （SKY130）SPICE 網表：設計的子電路，每個元件呼叫 PDK 的元件子電路（`.INCLUDE` PDK 的 `sky130hd.cdl`，有完整檔案時）；給 KLayout 的 LVS，或配上 PDK 的電晶體模型給 ngspice |
+| `--map-only` | 只做元件對應，不佈局繞線（很大的設計只想要網表時） |
+
+## 看晶片版圖
+
+```sh
+v2c asic --pdk sky130 --gds counter.gds counter.veryl
+klayout counter.gds
+```
+
+GDS 用的是 SKY130 的層號：li1 67/20、met1 68/20、via 68/44、met2 69/20、via2 69/44、met3 70/20、via3 70/44、met4 71/20、
+IO 腳在 met4（腳形 71/16、標籤 71/5）。網頁 IDE 的 ASIC · SKY130 也可以直接下載 `.gds`。
+
+想自己再檢查一次 GDS（需要 `pip install klayout`）：
+
+```sh
+python3 tools/gds_check.py counter.gds Counter 62 555 7
+```
+
+後面三個數字是 `v2c` 寫 GDS 時印出的「cell instances、shapes、labels」。它用 KLayout 讀回，檢查頂層、元件數、
+元件不重疊，並跑 KLayout 自己對 li1、met1–met4 與各 cut 層的寬度 / 間距檢查。
+
+用 KLayout 再做一次獨立的 LVS（需要完整 SKY130 檔案裡的 `sky130hd.cdl`，見下一節）：
+
+```sh
+v2c asic --pdk sky130 --gds counter.gds --spice counter.sp counter.veryl
+python3 tools/lvs_check.py counter.gds counter.sp
+# KLayout LVS Counter: 14 cell instances, 19 nets extracted from the GDS: match
+```
+
+KLayout 從 GDS 的幾何與標籤（li1、met1–met5 與它們之間的 contact / via）自己抽出接線，和 SPICE 網表逐個網路比對。
+標準元件當成黑盒子，只比它們的腳（元件內部的電晶體是 SkyWater 驗證過的）；比的是 veryl2chip 自己做的部分：元件之間的繞線。
+
+## 用完整的 SKY130 檔案
+
+```sh
+tools/sky130.sh ~/sky130hd                 # 下載 Liberty、tech LEF、cell LEF、GDS、元件的 SPICE 子電路（Apache-2.0）
+export VERYL_EDA_SKY130=~/sky130hd
+v2c pdk                                     # 讀檔、列出各層與元件綁定
+v2c asic --pdk sky130:$VERYL_EDA_SKY130 counter.veryl
+```
+
+`v2c pdk` 也是檢查工具：流程用到的每個元件，都會拿 Liberty 裡的函式比對真值表（正反器比對時脈邊緣、下一狀態、clear / preset），
+不一致就拒絕使用。
+
+## 限制
+
+SKY130：只有典型一個角落；沒有 SRAM 巨集（記憶體很大的設計會很慢、很大）；沒有寬金屬間距表；LVS 只比元件之間的接線（元件內部是 PDK 的）；天線規則只算 OXIDE1（一般的閘極）；
+DRC 與 `gds_check.py` 檢查的是寬度、間距、短路、斷路與最小面積，不是完整的 SKY130 規則檔。
+要真的投片，請再用 Magic / KLayout 的官方規則檔與 OpenROAD 的流程確認。

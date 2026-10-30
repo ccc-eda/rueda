@@ -31,3 +31,8 @@ __pycache__/
 
 # Node
 node_modules/
+
+# outputs of the scripts
+veryl/tutorial/build/
+veryl/synth/fpga/build/
+veryl/examples/rv64/build/

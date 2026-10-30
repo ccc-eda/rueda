@@ -5,14 +5,14 @@
 # script (!gpio 2=1) and read back, an edge interrupt through the PLIC, a file put in the
 # exchange area (0x8F00_0000) read into /root by getfiles at boot, MicroPython with the
 # pi module (an LED on GPIO 13, the button, a big integer), a C program compiled by
-# veryl-eda for the board (GPIO 12, the button), the screen (/dev/fb0) drawn by MicroPython
+# eda for the board (GPIO 12, the button), the screen (/dev/fb0) drawn by MicroPython
 # and by C and read back; then poweroff ends the simulation.
-# Needs sim/build.sh (or SIM=emu/rv64emu after emu/build.sh), linux/build.sh and veryl-eda
-# (cargo build --release; VERYL_EDA picks another binary).
+# Needs sim/build.sh (or SIM=emu/rv64emu after emu/build.sh), linux/build.sh and reda
+# (cargo build --release -p rueda; REDA picks another binary).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 SIM=${SIM:-${OBJ:-sim/obj}/rv64sim}
-VERYL_EDA=${VERYL_EDA:-../../veryl-eda/target/release/veryl-eda}
+REDA=${REDA:-../../../target/release/reda}
 OUT=$(mktemp)
 SCRIPT=$(mktemp)
 AREA=$(mktemp)
@@ -25,7 +25,7 @@ int main(void) {
     return 0;
 }
 C
-"$VERYL_EDA" --cc "$CDIR/ctest.c" --linux -o "$CDIR/ctest" || exit 1
+"$REDA" cc "$CDIR/ctest.c" --linux -o "$CDIR/ctest" || exit 1
 # the exchange area: "VERYLFS <bytes>" in a 512-byte block, then a tar with hello.txt and ctest
 python3 - "$AREA" "$CDIR/ctest" <<'P'
 import io, sys, tarfile

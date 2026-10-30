@@ -3,14 +3,14 @@
 // /Users/Shared/ccc/riscv-tests) with nearly every block translated (threshold 2), and Linux
 // (examples/rv64/linux/build) booted and given commands with translation off, at threshold 2
 // and at the default: the same output, and the speeds.
-//   cargo build --release --lib --target wasm32-unknown-unknown && node tests/jit.mjs
+//   cargo build --release -p rueda-rvemu --lib --target wasm32-unknown-unknown && node riscv/rvemu/tests/jit.mjs
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const wasmPath = path.join(here, '../target/wasm32-unknown-unknown/release/riscv_emu.wasm');
-if (!fs.existsSync(wasmPath)) { console.log('no wasm build (cargo build --release --lib --target wasm32-unknown-unknown): skipped'); process.exit(0); }
+const wasmPath = path.join(here, '../../../target/wasm32-unknown-unknown/release/riscv_emu.wasm');
+if (!fs.existsSync(wasmPath)) { console.log('no wasm build (cargo build --release -p rueda-rvemu --lib --target wasm32-unknown-unknown): skipped'); process.exit(0); }
 const mod = new WebAssembly.Module(fs.readFileSync(wasmPath));
 
 /** a machine; hot = translation threshold (0: off, 1: the default) */
