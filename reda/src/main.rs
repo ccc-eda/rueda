@@ -36,7 +36,12 @@ of yosys internal cells, optimizes it and prints its statistics.
   --top MODULE      the module to synthesize (alias -s)
   -o OUT.json       yosys JSON (alias --json)
   --verilog OUT.v   structural Verilog
-example: reda synth -o adder.json adder.veryl"),
+Fluxa (FILE.fx...): synthesizes a task (--top TASK, default the last one) into an FSM and its
+datapath; each channel parameter c becomes a valid / ready stream (c_data, c_close, c_valid,
+c_ready), every other parameter an input port unless fixed with --param NAME=VALUE. The same
+flags then work for fpga, asic and the outputs.
+  --param NAME=VALUE  a scalar parameter as a constant (Fluxa)
+examples: reda synth -o adder.json adder.veryl     reda synth fluxa/examples/mac.fx"),
     ("fpga", "FPGA flow (iCE40UP5K, ECP5): LUT mapping, place & route, bitstream", "\
 usage: reda fpga [--top MODULE] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]
                 [--pnr veryl|nextpnr] [--seed N] [--no-timing-driven] [--program PROG.bin]
@@ -154,6 +159,7 @@ fn main() {
     let name: &'static str = COMMANDS.iter().find(|x| x.0 == cmd).map(|x| x.0).unwrap_or("help");
     let _ = veryl_sim::cli::CMD.set(name);
     let _ = veryl_synth::cli::CMD.set(name);
+    let _ = fluxa_synth::cli::CMD.set(name);
     let with = |flag: &[&str]| -> Vec<String> { flag.iter().map(|s| s.to_string()).chain(rest.iter().cloned()).collect() };
     match cmd {
         "sim" | "test" => match lang(&rest) {
@@ -164,9 +170,8 @@ fn main() {
             Lang::Veryl => veryl_sim::cli::main(&with(&["--list"])),
             Lang::Fluxa => fluxa::cli::main(&with(&["--list"])),
         },
-        "synth" => { veryl_only(cmd, &rest); veryl_synth::cli::main(rest) }
+        "synth" => synth(&rest, rest.clone()),
         "fpga" => {
-            veryl_only(cmd, &rest);
             // --arch ice40 (default) | ecp5
             let mut arch = "ice40".to_string();
             let mut a = vec![];
@@ -176,16 +181,15 @@ fn main() {
             }
             let flag = match arch.as_str() { "ice40" => "--ice40", "ecp5" => "--ecp5", o => { eprintln!("reda fpga: --arch is ice40 or ecp5, not '{}'", o); std::process::exit(2) } };
             a.insert(0, flag.to_string());
-            veryl_synth::cli::main(a)
+            synth(&rest, a)
         }
-        "asic" => { veryl_only(cmd, &rest); veryl_synth::cli::main(with(&["--asic"])) }
+        "asic" => synth(&rest, with(&["--asic"])),
         "gatesim" => {
             let Some(kind) = rest.first() else { help(Some("gatesim")) };
-            veryl_only(cmd, &rest);
             if !matches!(kind.as_str(), "opt" | "ice40" | "ecp5" | "asic" | "sky130") { eprintln!("reda gatesim: the netlist is opt, ice40, ecp5, asic or sky130, not '{}'", kind); std::process::exit(2); }
             let mut a = vec!["--gatesim".to_string(), kind.clone()];
             a.extend(rest[1..].iter().cloned());
-            veryl_synth::cli::main(a)
+            synth(&rest, a)
         }
         "emu" => veryl_emu::cli::main(&rest),
         "cc" => rvtools::cli::cc(&rest),
@@ -211,7 +215,11 @@ fn lang(args: &[String]) -> Lang {
     if fx > 0 { Lang::Fluxa } else { Lang::Veryl }
 }
 
-/// the commands that only Veryl has so far (Fluxa has no synthesis yet)
-fn veryl_only(cmd: &str, args: &[String]) {
-    if lang(args) == Lang::Fluxa { eprintln!("reda {}: Fluxa (.fx) has no synthesis yet; this command takes .veryl files", cmd); std::process::exit(2); }
+/// synthesis and the flows after it, by the language of the files (`args`: as given, for the
+/// language; `flow`: the arguments for the front end)
+fn synth(args: &[String], flow: Vec<String>) {
+    match lang(args) {
+        Lang::Veryl => veryl_synth::cli::main(flow),
+        Lang::Fluxa => fluxa_synth::cli::main(flow),
+    }
 }

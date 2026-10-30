@@ -1014,6 +1014,7 @@ version = "0.6.0"
 dependencies = [
  "rueda-eda",
  "rueda-fluxa",
+ "rueda-fluxa-synth",
  "rueda-rvemu",
  "rueda-rvtools",
  "rueda-veryl-emu",
@@ -1036,6 +1037,14 @@ dependencies = [
 [[package]]
 name = "rueda-fluxa"
 version = "0.6.0"
+
+[[package]]
+name = "rueda-fluxa-synth"
+version = "0.6.0"
+dependencies = [
+ "rueda-eda",
+ "rueda-fluxa",
+]
 
 [[package]]
 name = "rueda-rvemu"

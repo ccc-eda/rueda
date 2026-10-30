@@ -266,12 +266,16 @@ impl<'a> Parser<'a> {
         while !self.is_p(")") {
             let pname = self.expect_ident()?;
             self.expect_p(":")?;
-            // `in` / `out` 方向標記僅供文件用途；行為由通道端點型別決定
-            if self.is_kw("in") || self.is_kw("out") {
+            // `in` / `out` 方向標記：模擬不需要（行為由通道端點型別決定），合成用它決定埠的方向
+            let out = if self.is_kw("in") || self.is_kw("out") {
+                let o = self.is_kw("out");
                 self.next();
-            }
+                Some(o)
+            } else {
+                None
+            };
             let ty = self.parse_type()?;
-            params.push(Param { name: pname, ty });
+            params.push(Param { name: pname, ty, out });
             if !self.eat_p(",") {
                 break;
             }

@@ -191,6 +191,9 @@ pub struct Generic {
 pub struct Param {
     pub name: String,
     pub ty: TypeExpr,
+    /// the `in` / `out` mark of a channel parameter (Some(true) = out); the simulator does not
+    /// need it (the endpoint types decide), synthesis makes the ports from it
+    pub out: Option<bool>,
 }
 
 #[derive(Debug, Clone)]

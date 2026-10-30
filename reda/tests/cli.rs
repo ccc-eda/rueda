@@ -62,8 +62,13 @@ fn fluxa_and_riscv() {
     // a test that fails (a deadlock) fails the command
     assert_eq!(fx(&["sim", "examples/err_deadlock.fx"]).0, 1);
     // no synthesis for Fluxa yet; no mixing of languages
+    // synthesis of a Fluxa task (arrays and fixed point, used by fir.fx, come later: a clear error)
+    let (c, o) = fx(&["synth", "examples/mac.fx"]);
+    assert!(c == 0 && o.contains("=== Mac ===") && o.contains("a_valid"), "{}", o);
+    let (c, o) = fx(&["asic", "examples/mac.fx"]);
+    assert!(c == 0 && o.contains("timing: critical path"), "{}", o);
     let (c, o) = fx(&["synth", "examples/fir.fx"]);
-    assert!(c == 2 && o.contains("Fluxa"), "{}", o);
+    assert!(c == 1 && o.contains("not synthesized yet"), "{}", o);
     assert_eq!(fx(&["sim", "examples/fir.fx", "../veryl/examples/src/adder.veryl"]).0, 2);
     let (c, o) = fx(&["help", "rvemu"]);
     assert!(c == 0 && o.contains("usage: reda rvemu"), "{}", o);

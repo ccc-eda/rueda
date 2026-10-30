@@ -22,3 +22,4 @@ veryl-sim.workspace = true
 veryl-synth.workspace = true
 veryl-emu.workspace = true
 fluxa.workspace = true
+fluxa-synth.workspace = true
