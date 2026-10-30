@@ -3,13 +3,17 @@ name = "rueda-eda"
 description = "Language-independent EDA back end: gate netlist, iCE40 / ECP5 mapping, place & route and bitstream, ASIC standard-cell flow (vlib or SKY130, to GDS)"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MIT AND Apache-2.0"   # MIT; the bundled SKY130 cells (pdk/sky130hd) are Apache-2.0
 repository.workspace = true
+homepage.workspace = true
+readme = "../README.md"
+keywords = ["eda", "synthesis", "fpga", "asic", "netlist"]
+categories = ["development-tools", "simulation"]
 exclude = ["bits"]
 
 [lib]
 name = "eda"
 
 [dependencies]
-bits = { package = "rueda-bits", path = "bits" }
-rvtools = { package = "rueda-rvtools", path = "../riscv/rvtools" }
+bits.workspace = true
+rvtools.workspace = true

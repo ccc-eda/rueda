@@ -5,10 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["veryl", "hdl", "simulator", "vcd"]
+categories = ["simulation", "development-tools"]
 
 [lib]
 name = "veryl_sim"
 
 [dependencies]
 veryl-parser.workspace = true
-bits = { package = "rueda-bits", path = "../../eda/bits" }
+bits.workspace = true

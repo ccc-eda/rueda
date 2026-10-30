@@ -5,7 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+homepage.workspace = true
+readme = "README.md"
+keywords = ["riscv", "emulator", "rv64", "jit", "wasm"]
+categories = ["emulators"]
 
 [lib]
 name = "riscv_emu"

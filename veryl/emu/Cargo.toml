@@ -5,11 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+homepage.workspace = true
+readme = "README.md"
+keywords = ["veryl", "hdl", "wasm", "emulator"]
+categories = ["simulation", "wasm"]
 
 [lib]
 name = "veryl_emu"
 
 [dependencies]
 veryl-parser.workspace = true
-veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }
+veryl-sim.workspace = true

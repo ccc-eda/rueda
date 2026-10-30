@@ -5,12 +5,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["veryl", "hdl", "synthesis", "fpga", "asic"]
+categories = ["development-tools", "simulation"]
 
 [lib]
 name = "veryl_synth"
 
 [dependencies]
 veryl-parser.workspace = true
-veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }
-eda = { package = "rueda-eda", path = "../../eda" }
-rvtools = { package = "rueda-rvtools", path = "../../riscv/rvtools" }
+veryl-sim.workspace = true
+eda.workspace = true
+rvtools.workspace = true
