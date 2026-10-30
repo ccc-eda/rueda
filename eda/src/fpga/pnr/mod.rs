@@ -103,7 +103,7 @@ impl<'c> Asc<'c> {
         Ok(())
     }
     fn text(&self) -> String {
-        let mut s = String::from(".comment from veryl-eda\n.device 5k\n");
+        let mut s = String::from(".comment from rueda\n.device 5k\n");
         for (xy, t) in &self.chip.tiles {
             s += &format!(".{}_tile {} {}\n", t, xy.0, xy.1);
             for row in &self.bits[xy] { s += std::str::from_utf8(row).unwrap(); s.push('\n'); }

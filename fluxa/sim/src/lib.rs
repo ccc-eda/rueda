@@ -4,6 +4,7 @@
 //! `run_test` 為每個 `test` 區塊建立獨立的模擬世界並執行。
 
 pub mod ast;
+pub mod cli;
 pub mod interp;
 pub mod lexer;
 pub mod parser;

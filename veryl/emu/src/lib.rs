@@ -4,6 +4,8 @@
 //! (`js/emu.mjs`). veryl-sim is not changed: veryl-emu uses its IR and parser
 //! helpers as a library and has its own copy of the elaboration (`elab.rs`).
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod elab;
 pub mod gen;
 pub mod ir;

@@ -1718,9 +1718,9 @@ pub fn compile(name: &str, src: &str, opts: &Options) -> Result<Output, Vec<Diag
     let mut s = String::new();
     if opts.linux {
         // Linux clears the bss; the stack is ours (below 2 GB, see the module comment); main's value to exit
-        s += "# compiled by veryl-eda's C compiler for RV64 Linux (32-bit int, long and pointers)\n    .text\n_start:\n    la sp, __stack_top\n    call main\n    call exit\n";
+        s += "# compiled by rueda's C compiler for RV64 Linux (32-bit int, long and pointers)\n    .text\n_start:\n    la sp, __stack_top\n    call main\n    call exit\n";
     } else {
-        s += &format!("# compiled by veryl-eda's C compiler ({} bytes of RAM)\n    .text\n_start:\n    li sp, {}\n", opts.mem_size, opts.mem_size);
+        s += &format!("# compiled by rueda's C compiler ({} bytes of RAM)\n    .text\n_start:\n    li sp, {}\n", opts.mem_size, opts.mem_size);
         s += "    la t0, __bss_start\n    la t1, __bss_end\n.Lbss:\n    bgeu t0, t1, .Lmain\n    sw zero, 0(t0)\n    addi t0, t0, 4\n    j .Lbss\n.Lmain:\n    call main\n_halt:\n    j _halt\n";
     }
     // functions in source order (runtime first), then top-level assembly

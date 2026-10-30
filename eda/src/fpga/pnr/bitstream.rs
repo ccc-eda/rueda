@@ -242,7 +242,7 @@ pub fn bin_to_asc(bin: &[u8]) -> R<String> {
             _ => {} // CRC check, frequency range
         }
     }
-    let mut s = String::from(".comment from veryl-eda (bin_to_asc)\n.device 5k\n");
+    let mut s = String::from(".comment from rueda (bin_to_asc)\n.device 5k\n");
     if !warmboot { s += ".warmboot disabled\n"; }
     let mut covered: Vec<Vec<Vec<bool>>> = (0..4).map(|b| vec![vec![false; bank_h(b)]; CRAM_W]).collect();
     for ty in 0..=CHIP_H + 1 {

@@ -9,7 +9,3 @@ rust-version = "1.82"
 
 [lib]
 name = "fluxa"
-
-[[bin]]
-name = "fluxa"
-path = "src/main.rs"

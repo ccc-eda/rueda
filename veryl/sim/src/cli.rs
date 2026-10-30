@@ -1,15 +1,15 @@
-//! The `veryl-sim` command line, also `v2c sim` / `v2c list` (veryl-eda's v2c).
+//! The Veryl simulator command line: `reda sim` / `reda list` for .veryl files.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-/// set by `v2c` to its subcommand: argument errors point to `v2c help <subcommand>`
-pub static V2C: OnceLock<&'static str> = OnceLock::new();
+/// set by `reda` to its subcommand: argument errors point to `reda help <subcommand>`
+pub static CMD: OnceLock<&'static str> = OnceLock::new();
 
 fn usage() -> ! {
-    if let Some(cmd) = V2C.get() { eprintln!("v2c {}: wrong arguments (v2c help {})", cmd, cmd); }
-    else { eprintln!("usage: veryl-sim [--top MODULE] [--vcd FILE] [--max-time N] [--list] FILE.veryl..."); }
-    std::process::exit(2);
+    let cmd = CMD.get().copied().unwrap_or("sim");
+    eprintln!("reda {}: wrong arguments (reda help {})", cmd, cmd);
+    std::process::exit(2)
 }
 
 /// run the simulator with command-line arguments (without the program name); exits on errors

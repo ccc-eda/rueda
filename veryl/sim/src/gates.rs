@@ -6,7 +6,7 @@
 //!
 //! Cells: yosys internal gates ($_NOT_ $_AND_ $_OR_ $_XOR_ $_MUX_, $_DFF_*,
 //! $_SDFF_*), iCE40 (SB_LUT4 SB_CARRY SB_DFF* SB_RAM40_4K), ECP5 (LUT4 CCU2C
-//! TRELLIS_FF DP16KD) and the vlib standard cells of veryl-eda (INV ... DFFNS, SRAM macros).
+//! TRELLIS_FF DP16KD) and the vlib standard cells of eda (INV ... DFFNS, SRAM macros).
 
 use crate::elab::{Dir, Elab, Scope};
 use crate::expr::{Expr, LValue, Sel};
@@ -228,7 +228,7 @@ impl<'a> Elab<'a> {
         let pin = |p: &str| c.conns.iter().find(|x| x.0 == p).map(|x| x.1).unwrap_or(Pin::C0);
         let param = |k: &str| c.params.iter().find(|x| x.0 == k).map(|x| usize::from_str_radix(&x.1, 2).unwrap_or(0)).unwrap_or(0);
         let ram = c.typ == "SB_RAM40_4K";
-        // ECP5 DP16KD as veryl-eda uses it: 2048 × 9, port A writes (ADA13..3), port B reads (ADB13..3)
+        // ECP5 DP16KD as eda uses it: 2048 × 9, port A writes (ADA13..3), port B reads (ADB13..3)
         let dp = c.typ == "DP16KD";
         let (depth, width, abits) = if ram { let m = param("READ_MODE"); (256 << m, 16 >> m, 8 + m) } else if dp { (2048, 9, 11) } else { (param("DEPTH"), param("WIDTH"), param("ABITS")) };
         let mode = param("READ_MODE");

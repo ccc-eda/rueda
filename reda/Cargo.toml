@@ -1,0 +1,20 @@
+[package]
+name = "rueda"
+description = "reda: one command for rueda's HDL tools (Veryl, Fluxa), synthesis, FPGA / ASIC flows and RISC-V tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "reda"
+path = "src/main.rs"
+
+[dependencies]
+eda = { package = "rueda-eda", path = "../eda" }
+rvtools = { package = "rueda-rvtools", path = "../riscv/rvtools" }
+riscv_emu = { package = "rueda-rvemu", path = "../riscv/rvemu" }
+veryl-sim = { package = "rueda-veryl-sim", path = "../veryl/sim" }
+veryl-synth = { package = "rueda-veryl-synth", path = "../veryl/synth" }
+veryl-emu = { package = "rueda-veryl-emu", path = "../veryl/emu" }
+fluxa = { package = "rueda-fluxa", path = "../fluxa/sim" }

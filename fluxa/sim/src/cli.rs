@@ -1,10 +1,11 @@
-use fluxa::{load_many, run_test, Options};
+//! `reda sim` / `reda list` for Fluxa (.fx) files: run the tests of a Fluxa program.
+
+use crate::{load_many, run_test, Options};
 use std::process::exit;
 
 fn usage() -> ! {
     eprintln!(
-        "fluxa — behavioral simulator for the Fluxa HLS language\n\n\
-         usage: fluxa <file.fx>... [options]    (multiple files are merged, like `iverilog a.v b.v`)\n\n\
+        "usage: reda sim [options] FILE.fx...    (multiple files are merged, like `iverilog a.v b.v`)\n\n\
          options:\n  \
            --test NAME   run only the test named NAME (repeatable)\n  \
            --list        list tests and exit\n  \
@@ -15,12 +16,13 @@ fn usage() -> ! {
     exit(2)
 }
 
-fn main() {
+/// run the simulator with command-line arguments (without the program name); exits on errors
+pub fn main(args: &[String]) {
     let mut files: Vec<String> = Vec::new();
     let mut only: Vec<String> = Vec::new();
     let mut list = false;
     let mut opts = Options { trace: false, stats: false };
-    let mut args = std::env::args().skip(1);
+    let mut args = args.iter().cloned();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--test" => only.push(args.next().unwrap_or_else(|| usage())),

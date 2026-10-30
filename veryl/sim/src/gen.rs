@@ -1,5 +1,5 @@
 //! Index sequence of a generate-for loop, shared by the simulator and
-//! veryl-eda: `for i in a..b`, `a..=b`, `rev`, `step += k` (also -=, *=,
+//! veryl/synth: `for i in a..b`, `a..=b`, `rev`, `step += k` (also -=, *=,
 //! <<=, >>=; the loop runs while the index stays inside the range).
 
 pub fn for_indices(from: u128, to: u128, inclusive: bool, rev: bool, step: Option<(&str, u128)>) -> Result<Vec<u128>, String> {

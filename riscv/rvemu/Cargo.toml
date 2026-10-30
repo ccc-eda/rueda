@@ -12,7 +12,3 @@ name = "riscv_emu"
 path = "src/lib.rs"
 # rlib for rvemu and the tests, cdylib for the web (wasm32: src/wasm.rs)
 crate-type = ["rlib", "cdylib"]
-
-[[bin]]
-name = "rvemu"
-path = "src/main.rs"

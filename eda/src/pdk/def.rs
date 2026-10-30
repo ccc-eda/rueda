@@ -1,4 +1,4 @@
-//! DEF reader (the parts veryl-eda writes): die area, rows, components,
+//! DEF reader (the parts rueda writes): die area, rows, components,
 //! pins, nets with their routed wires and vias. Used to check what the flow
 //! wrote against the LEF: cells on rows and sites, inside the die, without
 //! overlaps, every row covered, every net's pins listed.

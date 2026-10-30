@@ -8,6 +8,8 @@
 //!   jit.rs  hot blocks translated to WebAssembly (run by wasm32 hosts)
 //!   wasm.rs the WebAssembly interface for the IDE (wasm32 only)
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod bus;
 pub mod cpu;
 pub mod jit;

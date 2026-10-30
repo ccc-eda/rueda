@@ -1,4 +1,4 @@
-//! Veryl interfaces, shared by the simulator and veryl-eda: the interface
+//! Veryl interfaces, shared by the simulator and veryl/synth: the interface
 //! declarations of a source, an interface's generate items (its variables
 //! and logic), and the members of a modport with their direction as seen
 //! from the module that uses it (`name: input`, ..., `..input`,

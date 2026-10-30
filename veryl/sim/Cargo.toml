@@ -9,10 +9,6 @@ repository.workspace = true
 [lib]
 name = "veryl_sim"
 
-[[bin]]
-name = "veryl-sim"
-path = "src/main.rs"
-
 [dependencies]
 veryl-parser.workspace = true
 bits = { package = "rueda-bits", path = "../../eda/bits" }

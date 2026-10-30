@@ -10,10 +10,6 @@ publish = false
 [lib]
 name = "veryl_emu"
 
-[[bin]]
-name = "veryl-emu"
-path = "src/main.rs"
-
 [dependencies]
 veryl-parser.workspace = true
 veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }

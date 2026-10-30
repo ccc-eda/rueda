@@ -45,7 +45,7 @@ pub fn write(o: &Output, include: Option<&str>) -> Result<String, String> {
     }
     let net = |b: &Bit| match b { Bit::W(w) => name.get(b).cloned().unwrap_or_else(|| format!("n{}", w)), Bit::C0 => "VGND".into(), Bit::C1 => "VPWR".into() };
     let mut s = String::new();
-    s += &format!("* {}: the mapped netlist of veryl2chip (veryl-eda), {} cells of {}\n", nl.name, nl.cells.len(), tech.name);
+    s += &format!("* {}: the mapped netlist of rueda, {} cells of {}\n", nl.name, nl.cells.len(), tech.name);
     if let Some(p) = include { s += &format!(".INCLUDE {}\n", p); }
     let mut pins = ports.clone();
     pins.push("VPWR".into());

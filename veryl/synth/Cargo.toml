@@ -9,14 +9,6 @@ repository.workspace = true
 [lib]
 name = "veryl_synth"
 
-[[bin]]
-name = "veryl-eda"
-path = "src/main.rs"
-
-[[bin]]
-name = "v2c"
-path = "src/bin/v2c.rs"
-
 [dependencies]
 veryl-parser.workspace = true
 veryl-sim = { package = "rueda-veryl-sim", path = "../sim" }

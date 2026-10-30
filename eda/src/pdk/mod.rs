@@ -403,7 +403,7 @@ pub fn verilog_models() -> String {
     let mut names: Vec<&String> = t.cells.values().map(|b| &b.cell).collect();
     names.sort();
     names.dedup();
-    let mut s = format!("// {} cells (veryl-eda), behavioural models from the Liberty functions\n", t.name);
+    let mut s = format!("// {} cells (rueda), behavioural models from the Liberty functions\n", t.name);
     for n in names {
         let Some(c) = lib.cell(n) else { continue };
         let mut ports: Vec<String> = c.inputs().map(|p| format!("input {}", p.name)).collect();

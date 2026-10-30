@@ -1,47 +1,20 @@
-//! The `veryl-eda` command line, also behind `v2c synth / fpga / asic / gatesim / cc / pdk`.
+//! The Veryl synthesis command line: `reda synth / fpga / asic / gatesim`.
 
 use crate::elab;
 use eda::fpga::{ecp5, ice40, pnr};
 use eda::{asic, bram, netlist, output};
-use rvtools as rv;
 use std::sync::OnceLock;
 
-/// set by `v2c` to its subcommand: argument errors point to `v2c help <subcommand>`
-pub static V2C: OnceLock<&'static str> = OnceLock::new();
+/// set by `reda` to its subcommand: argument errors point to `reda help <subcommand>`
+pub static CMD: OnceLock<&'static str> = OnceLock::new();
 
 use std::path::PathBuf;
 use veryl_parser::Parser;
 
 fn usage() -> ! {
-    if let Some(cmd) = V2C.get() { eprintln!("v2c {}: wrong arguments (v2c help {})", cmd, cmd); std::process::exit(2); }
-    eprintln!("usage: veryl-eda [--top MODULE] [-o OUT.json] [--verilog OUT.v] [--list]");
-    eprintln!("       veryl-eda --cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]   (C for RvSoc; PROG.s: assemble)");
-    eprintln!("       veryl-eda --cc PROG.c --linux [-o PROG] [-S PROG.s] [-L PROG.lst]   (C for Linux on the RV64 board: a static ELF)");
-    eprintln!("                 [--ice40 [--device up5k] [--package sg48] [--pcf PINS.pcf] [--asc OUT.asc] [--bin OUT.bin]");
-    eprintln!("                  [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [--program PROG.bin]]");
-    eprintln!("                 [--ecp5 [--device 12k|25k|45k|85k] [--package CABGA381] [--lpf PINS.lpf] [--config OUT.config] [--bit OUT.bit]]");
-    eprintln!("                 [--asic [--pdk vlib|sky130|sky130:DIR] [--seed N] [--def OUT.def] [--gds OUT.gds] [--spice OUT.sp] [-v]] [--gatesim opt|ice40|asic|sky130]");
-    eprintln!("                 [--sdc PINS.sdc | --clock MHZ]");
-    eprintln!("                 FILE.veryl...");
-    eprintln!("       veryl-eda --pdk-check [DIR]   (read a SKY130 Liberty + LEF directory, check the cell bindings)");
-    eprintln!("  synthesizes MODULE (default: the last non-#[test] module) into a flat");
-    eprintln!("  gate-level netlist of yosys internal cells and prints its statistics.");
-    eprintln!("  --ice40 maps it to SB_LUT4/SB_DFF* cells; --asc/--bin then run");
-    eprintln!("  place & route (nextpnr-ice40, or veryl-eda's own with --pnr veryl) and icepack.");
-    eprintln!("  --ecp5 maps to LUT4/CCU2C/TRELLIS_FF cells; --config/--bit then run nextpnr-ecp5 and ecppack.");
-    eprintln!("  --program puts a binary (from address 0) into the block RAMs of a byte-lane");
-    eprintln!("  program memory (*.b0.mem .. *.b3.mem, e.g. RvBoard in examples/src/rvsoc.veryl).");
-    eprintln!("  --asic maps to standard cells (vlib, or SkyWater SKY130 sky130_fd_sc_hd with --pdk sky130),");
-    eprintln!("  places rows, routes and times them; --verilog / --def write the library's names;");
-    eprintln!("  --map-only stops after the technology mapping (a netlist for --verilog);");
-    eprintln!("  --gds OUT.gds writes the layout (SKY130: the PDK's cells + routing) as GDSII.");
-    eprintln!("  --spice OUT.sp writes the mapped netlist as SPICE (the PDK's cell subcircuits; for LVS in KLayout, ngspice).");
-    eprintln!("  --sdc FILE: timing constraints (create_clock, set_input_delay / set_output_delay,");
-    eprintln!("  set_false_path / set_multicycle_path on ports); --clock MHZ: one clock for everything.");
-    eprintln!("  With them the timing report gives the slack (WNS, TNS, failing endpoints).");
-    eprintln!("  --gatesim opt|ice40|asic runs the #[test] testbenches against the synthesized");
-    eprintln!("  netlist of MODULE instead of its RTL (post-synthesis simulation).");
-    std::process::exit(2);
+    let cmd = CMD.get().copied().unwrap_or("synth");
+    eprintln!("reda {}: wrong arguments (reda help {})", cmd, cmd);
+    std::process::exit(2)
 }
 
 /// the constraint report: per clock its period and endpoints, WNS / TNS, the failing endpoints
@@ -52,87 +25,8 @@ pub fn slack_line(s: &eda::asic::sta::Slack) -> String {
         if s.failing == 0 { ", met" } else { "" }, if s.failing > 0 { format!(" (worst: {})", s.worst) } else { String::new() })
 }
 
-/// `veryl-eda --cc prog.c [-o prog.bin] [-S prog.s] [-L prog.lst] [--run [N]]`: compile C for RvSoc
-fn cc_main(args: &[String]) -> ! {
-    let (mut src, mut out, mut asm_out, mut run, mut mem) = (None::<String>, None::<String>, None::<String>, None::<u64>, 8192u32);
-    let mut lst: Option<String> = None;
-    let mut linux = false;
-    let mut a = args.iter();
-    while let Some(x) = a.next() {
-        match x.as_str() {
-            "-o" => out = a.next().cloned(),
-            "-S" => asm_out = a.next().cloned(),
-            "-L" => lst = a.next().cloned(),
-            "--run" => run = Some(a.clone().next().and_then(|n| n.parse().ok()).inspect(|_| { a.next(); }).unwrap_or(10_000_000)),
-            "--linux" => linux = true,
-            "--mem" => mem = a.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| usage()),
-            f if !f.starts_with('-') => src = Some(f.to_string()),
-            _ => usage(),
-        }
-    }
-    let Some(path) = src else { usage() };
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| { eprintln!("{}: {}", path, e); std::process::exit(1) });
-    let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().to_string();
-    // an assembly file: just the assembler
-    if name.ends_with(".s") || name.ends_with(".S") {
-        let p = rv::asm::assemble(&text).unwrap_or_else(|es| { for e in es { eprintln!("{}:{}: error: {}", name, e.line, e.msg); } std::process::exit(1) });
-        if let Some(o) = &out { std::fs::write(o, &p.bytes).unwrap(); }
-        if let Some(l) = &lst { std::fs::write(l, rv::asm::listing_text(&p)).unwrap(); }
-        eprintln!("{}: {} bytes", name, p.bytes.len());
-        std::process::exit(0);
-    }
-    let o = match rv::cc::compile(&name, &text, &rv::cc::Options { mem_size: mem, linux }) {
-        Ok(o) => o,
-        Err(es) => { for e in es { eprintln!("{}:{}: error: {}", e.file, e.line, e.msg); } std::process::exit(1) }
-    };
-    if let Some(elf) = &o.elf {
-        if let Some(p) = &asm_out { std::fs::write(p, &o.asm).unwrap(); }
-        if let Some(p) = &lst { std::fs::write(p, rv::asm::listing_text(&o.program)).unwrap(); }
-        let p = out.unwrap_or_else(|| name.trim_end_matches(".c").to_string());
-        std::fs::write(&p, elf).unwrap();
-        #[cfg(unix)]
-        { use std::os::unix::fs::PermissionsExt; let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)); }
-        eprintln!("{}: {} ({} bytes, RV64 Linux)", name, p, elf.len());
-        std::process::exit(0);
-    }
-    eprintln!("{}: {} bytes of code and data, {} with bss (RAM {} bytes)", name, o.program.bytes.len(), o.program.end, mem);
-    if let Some(p) = &asm_out { std::fs::write(p, &o.asm).unwrap(); }
-    if let Some(p) = &lst { std::fs::write(p, rv::asm::listing_text(&o.program)).unwrap(); }
-    if let Some(p) = &out { std::fs::write(p, &o.program.bytes).unwrap(); }
-    if let Some(n) = run {
-        let mut s = rv::iss::Iss::new(&o.program.bytes, mem as usize);
-        let halted = s.run(n).unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(1) });
-        print!("{}", String::from_utf8_lossy(&s.tx));
-        eprintln!("{} after {} instructions ({} cycles); LED = 0x{:02x}", if halted { "halted" } else { "stopped" }, s.instret, s.cycles, s.led);
-    }
-    std::process::exit(0)
-}
-
-/// `veryl-eda --pdk-check [DIR]`: read SKY130's Liberty and LEF files, print what the flow uses
-fn pdk_check(dir: Option<&String>) -> ! {
-    use eda::pdk;
-    let d = dir.map(PathBuf::from).or_else(pdk::sky130_dir).unwrap_or_else(|| { eprintln!("no SKY130 directory (give one, or set VERYL_EDA_SKY130)"); std::process::exit(1) });
-    let t0 = std::time::Instant::now();
-    let t = pdk::sky130_from_dir(&d).unwrap_or_else(|e| { eprintln!("{}: {}", d.display(), e); std::process::exit(1) });
-    let (lib, lef) = (t.liberty.as_ref().unwrap(), t.lef.as_ref().unwrap());
-    println!("{}: Liberty {} ({} cells, {} V), LEF {} macros, {} layers, {} vias  ({:.2} s)", d.display(), lib.name, lib.cells.len(), lib.voltage, lef.macros.len(), lef.layers.len(), lef.vias.len(), t0.elapsed().as_secs_f64());
-    println!("site {} {} x {} µm, {} tracks per row; routing:", t.site, t.site_w, t.row_h, t.tracks);
-    for l in lef.routing() { println!("  {:5} {} pitch {} width {} spacing {} R {} Ω/sq", l.name, if l.horizontal { "H" } else { "V" }, if l.horizontal { l.pitch.1 } else { l.pitch.0 }, l.width, l.spacing, l.rpersq); }
-    let mut names: Vec<&String> = t.cells.keys().collect();
-    names.sort();
-    println!("logical cell -> library cell (function checked against the Liberty file), width in sites, pin access");
-    for n in names {
-        let b = &t.cells[n];
-        let acc: Vec<String> = b.access.iter().map(|a| format!("{}={}@{},{}", a.0, b.lib_pin(a.0), a.1, a.2)).collect();
-        println!("  {:7} {:28} {:3} {:7.3} µm²  {}", n, b.cell, b.width, b.area, acc.join(" "));
-    }
-    std::process::exit(0)
-}
-
-/// run veryl-eda with command-line arguments (without the program name); exits on errors
+/// run Veryl synthesis with command-line arguments (without the program name); exits on errors
 pub fn main(all: Vec<String>) {
-    if all.first().map(|a| a == "--cc") == Some(true) { cc_main(&all[1..]); }
-    if all.first().map(|a| a == "--pdk-check") == Some(true) { pdk_check(all.get(1)); }
     let (mut top, mut json, mut verilog, mut list) = (None::<String>, None::<String>, None::<String>, false);
     let (mut ice40, mut pcf, mut asc, mut bin) = (false, None::<String>, None::<String>, None::<String>);
     let (mut device, mut package) = (None::<String>, None::<String>);
@@ -327,7 +221,7 @@ pub fn main(all: Vec<String>) {
         println!("wrote {}", p);
     }
     if asc.is_some() || bin.is_some() {
-        let dir = std::env::temp_dir().join(format!("veryl-eda-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rueda-synth-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mapped = json.clone().map(PathBuf::from).unwrap_or_else(|| dir.join("mapped.json"));
         std::fs::write(&mapped, output::to_json(&nl)).unwrap();
@@ -380,7 +274,7 @@ pub fn main(all: Vec<String>) {
         }
     }
     if ecp5 && (config.is_some() || bit.is_some()) {
-        let dir = std::env::temp_dir().join(format!("veryl-eda-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rueda-synth-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mapped = json.clone().map(PathBuf::from).unwrap_or_else(|| dir.join("mapped.json"));
         std::fs::write(&mapped, output::to_json(&nl)).unwrap();

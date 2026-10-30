@@ -125,7 +125,7 @@ pub fn pin(base: &str, i: usize) -> &'static str {
 
 /// Verilog models of the library (for simulation and formal checks)
 pub fn verilog_models() -> String {
-    let mut s = String::from("// vlib standard cells (veryl-eda), behavioural models\n");
+    let mut s = String::from("// vlib standard cells (rueda), behavioural models\n");
     for c in LIB {
         let out = if is_ff(c.name) { "output reg Q" } else { "output Y" };
         let ins: Vec<String> = c.ins.iter().map(|p| format!("input {}", p)).collect();

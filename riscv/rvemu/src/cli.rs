@@ -1,7 +1,7 @@
-//! rvemu: run a program on riscv-emu's Rv64Soc, like the Verilator bench (sim/main.cpp) and
+//! `reda rvemu`: run a program on the emulated Rv64Soc, like the Verilator bench (sim/main.cpp) and
 //! veryl-emu's (emu/rv64emu.mjs) in examples/rv64:
 //!
-//!   rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
+//!   reda rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
 //!
 //!   PROG            an ELF file (its segments; tohost for riscv-tests), else a binary at 0x8000_0000
 //!   -t              a line per instruction, in the format of `spike -l --log-commits`
@@ -13,16 +13,16 @@
 //!   -r              real time: mtime follows the clock (10 MHz) instead of counting instructions
 //!                   (the default when typing at a terminal)
 //!
-//! UART output goes to stdout, the terminal's keys to the UART (Ctrl-C ends rvemu); GPIO
+//! UART output goes to stdout, the terminal's keys to the UART (Ctrl-C ends it); GPIO
 //! output changes print "[gpio] out=…" on stderr after the UART's current line.
 //! Exit code: 0 pass (finisher 0x5555, tohost 1, script done), 1 fail, 2 out of instructions.
 
-use riscv_emu::{Machine, Stop, RAM_BASE, RAM_SIZE};
+use crate::{Machine, Stop, RAM_BASE, RAM_SIZE};
 use std::io::{IsTerminal, Read, Write};
 use std::time::Instant;
 
 fn usage() -> ! {
-    eprintln!("usage: rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG");
+    eprintln!("usage: reda rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG");
     std::process::exit(1)
 }
 
@@ -32,8 +32,8 @@ fn num(s: &str) -> u64 {
     r.unwrap_or_else(|_| usage())
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+/// run the emulator with command-line arguments (without the program name); exits
+pub fn main(args: &[String]) -> ! {
     let (mut trace, mut realtime, mut max, mut prog) = (false, None::<bool>, 10_000_000_000u64, None::<String>);
     let (mut loads, mut dumps, mut script) = (vec![], vec![], None::<Vec<String>>);
     let mut a = args.iter();
