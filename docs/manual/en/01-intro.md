@@ -26,7 +26,7 @@ the only places external tools are needed are: flashing a physical board (`icepr
 
 | | Web IDE | Command line `reda` |
 |---|---|---|
-| Install | None, just open the page ([online version](https://ccc-eda.github.io/rueda/web/dist/index.html)) | `cargo install --git https://github.com/ccc-eda/rueda rueda` |
+| Install | None, just open the page ([online version](https://ccc-eda.github.io/rueda/web/dist/index.html)) | `cargo install rueda` |
 | Good for | Classes, experiments, seeing each stage's diagram, the virtual board | Automation, large designs, integration into other flows |
 | Capability | Simulation, waveforms, diagrams of every synthesis stage, FPGA / ASIC (incl. SKY130), virtual board, C programs | The same flows, with file output (JSON, Verilog, `.asc`, `.bin`, DEF, GDS, VCD) |
 

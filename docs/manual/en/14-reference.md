@@ -163,5 +163,5 @@ DIR defaults to looking for `$VERYL_EDA_SKY130`, then `~/sky130hd`.
 | `no chipdb` / cannot find `chipdb-5k.txt` | set `VERYL_EDA_CHIPDB`, or install OSS CAD Suite; or switch to `--pnr nextpnr` |
 | nextpnr fails on timing | the design is too slow (chapter 7); `--pnr veryl` also produces and prints Fmax |
 | ASIC is very slow | large memories become flip-flops in SKY130; use `--map-only` to get just the netlist, or switch to vlib |
-| `reda` not found | `cargo install --git https://github.com/ccc-eda/rueda rueda`, or add `target/release` to `PATH` |
+| `reda` not found | `cargo install rueda`, or add `target/release` to `PATH` |
 | the design works better on the virtual board than on a real one | the virtual board doesn't simulate timing violations or button bounce (chapter 12) |

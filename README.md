@@ -24,7 +24,7 @@ reda rvemu fw_payload.bin              # the RV64 board emulator (OpenSBI + Linu
 reda help [SUBCOMMAND]
 ```
 
-Install: `cargo install --git https://github.com/ccc-eda/rueda rueda`, or build from a checkout (below).
+Install: `cargo install rueda`, or build from a checkout (below).
 
 ## Layout
 

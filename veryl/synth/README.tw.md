@@ -8,7 +8,7 @@ Veryl 的邏輯合成、FPGA 與 ASIC 流程（類似 yosys `synth` / `synth_ice
 
 [rueda](https://github.com/ccc-eda/rueda) 的一部分（線上 IDE：<https://ccc-eda.github.io/rueda/web/dist/index.html>）。
 
-    cargo install --git https://github.com/ccc-eda/rueda rueda   # reda: every tool, one command
+    cargo install rueda   # reda: every tool, one command
     reda synth [--top MODULE] [-o out.json] [--verilog out.v] [--list]
               [--ice40 [--device up5k] [--package sg48] [--pcf pins.pcf] [--asc out.asc] [--bin out.bin]
                        [--pnr nextpnr|veryl] [--seed N] [--no-timing-driven] [-v]]

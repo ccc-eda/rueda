@@ -26,7 +26,7 @@ C 程式       → reda cc        編譯給專案裡的 RISC-V SoC（也是用 V
 
 | | 網頁 IDE | 命令列 `reda` |
 |---|---|---|
-| 安裝 | 不用，打開網頁即可（[線上版](https://ccc-eda.github.io/rueda/web/dist/index.html)） | `cargo install --git https://github.com/ccc-eda/rueda rueda` |
+| 安裝 | 不用，打開網頁即可（[線上版](https://ccc-eda.github.io/rueda/web/dist/index.html)） | `cargo install rueda` |
 | 適合 | 上課、實驗、看每個階段的圖、虛擬開發板 | 自動化、大設計、整合到其他流程 |
 | 能力 | 模擬、波形、合成各階段的圖、FPGA / ASIC（含 SKY130）、虛擬開發板、C 程式 | 同樣的流程，輸出檔案（JSON、Verilog、`.asc`、`.bin`、DEF、GDS、VCD） |
 

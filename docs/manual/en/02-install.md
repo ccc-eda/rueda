@@ -8,10 +8,10 @@ It needs no server: after downloading the whole `web/dist/` directory, opening `
 ## Installing `reda`
 
 Requires Rust (<https://rustup.rs>). `reda` is one command for every tool (simulation, synthesis, the FPGA and ASIC flows,
-the C compiler, the emulators), like `git`; install it from the repository:
+the C compiler, the emulators), like `git`; install it from crates.io:
 
 ```sh
-cargo install --git https://github.com/ccc-eda/rueda rueda
+cargo install rueda
 reda version
 ```
 

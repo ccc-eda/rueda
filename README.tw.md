@@ -24,7 +24,7 @@ reda rvemu fw_payload.bin              # RV64 開發板模擬機（OpenSBI + Lin
 reda help [子指令]
 ```
 
-安裝：`cargo install --git https://github.com/ccc-eda/rueda rueda`，或從原始碼建置（見下）。
+安裝：`cargo install rueda`，或從原始碼建置（見下）。
 
 ## 資料夾結構
 

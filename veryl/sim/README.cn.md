@@ -5,7 +5,7 @@
 
 [rueda](https://github.com/ccc-eda/rueda) 的一部分（在线 IDE：<https://ccc-eda.github.io/rueda/web/dist/index.html>）。
 
-    cargo install --git https://github.com/ccc-eda/rueda rueda   # reda: every tool, one command
+    cargo install rueda   # reda: every tool, one command
     reda sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
 
 在源代码目录里也可以用 `cargo run --release -- ...`。

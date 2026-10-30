@@ -8,10 +8,10 @@
 ## 安装 `reda`
 
 需要 Rust（<https://rustup.rs>）。`reda` 像 `git` 一样，一个指令包含所有工具（仿真、综合、FPGA 与 ASIC 流程、
-C 编译器、仿真机），从仓库安装：
+C 编译器、仿真机），从 crates.io 安装：
 
 ```sh
-cargo install --git https://github.com/ccc-eda/rueda rueda
+cargo install rueda
 reda version
 ```
 

@@ -6,7 +6,7 @@ An event-driven simulator for [Veryl](https://veryl-lang.org/) testbenches, in t
 
 Part of [rueda](https://github.com/ccc-eda/rueda) (online IDE: <https://ccc-eda.github.io/rueda/web/dist/index.html>).
 
-    cargo install --git https://github.com/ccc-eda/rueda rueda   # reda: every tool, one command
+    cargo install rueda   # reda: every tool, one command
     reda sim [--top MODULE] [--vcd out.vcd] [--max-time N] [--list] a.veryl b.veryl ...
 
 In the source tree, `cargo run --release -- ...` works too.

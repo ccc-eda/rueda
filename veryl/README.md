@@ -54,7 +54,7 @@ Build and test everything from the repository root:
 Install the command-line tools from crates.io (`reda`, `veryl/sim`, `veryl/synth`):
 
 ```sh
-cargo install --git https://github.com/ccc-eda/rueda rueda
+cargo install rueda
 ```
 
 Rebuild (Rust + wasm32 target, Node.js):
@@ -89,7 +89,7 @@ reda fpga --pnr veryl --pcf veryl/tutorial/icebreaker.pcf --bin blinky.bin veryl
 reda asic --pdk sky130 --gds alu.gds veryl/examples/src/rv32i.veryl --top Alu
 ```
 
-`reda` comes with `rueda` (`cargo install --git https://github.com/ccc-eda/rueda rueda`, or `./build.sh`: `target/release/reda`);
+`reda` comes with `rueda` (`cargo install rueda`, or `./build.sh`: `target/release/reda`);
 the older commands `veryl/sim` and `veryl/synth` (`reda synth --ice40`, `--asic`, `--cc` ...) still work the same.
 
 See [AGENTS.md](AGENTS.md) for commands and architecture, and the READMEs in each crate ([veryl/sim](sim/README.md), [veryl/synth](synth/README.md); English, 繁體中文, 简体中文) for details.

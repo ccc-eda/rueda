@@ -163,5 +163,5 @@ DIR 默认依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。
 | `no chipdb` / 找不到 `chipdb-5k.txt` | 设置 `VERYL_EDA_CHIPDB`，或装 OSS CAD Suite；或改用 `--pnr nextpnr` |
 | nextpnr 因时序失败 | 设计太慢（第 7 章）；`--pnr veryl` 一样会产生并打印 Fmax |
 | ASIC 很慢 | 大存储器在 SKY130 变成触发器；用 `--map-only` 只拿网表，或改用 vlib |
-| `reda` 找不到 | `cargo install --git https://github.com/ccc-eda/rueda rueda`，或把 `target/release` 加进 `PATH` |
+| `reda` 找不到 | `cargo install rueda`，或把 `target/release` 加进 `PATH` |
 | 虚拟板的设计跑得比真板子好 | 虚拟板不仿真时序违规与按钮弹跳（第 12 章） |

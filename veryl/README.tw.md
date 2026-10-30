@@ -54,7 +54,7 @@ IDE 以前是 `ide.html`：那一頁現在會（帶著 `#…`）轉到 `index.ht
 從 crates.io 安裝命令列工具（`reda`、`veryl/sim`、`veryl/synth`）：
 
 ```sh
-cargo install --git https://github.com/ccc-eda/rueda rueda
+cargo install rueda
 ```
 
 重新建置（需要 Rust + wasm32 target、Node.js）：
@@ -91,7 +91,7 @@ reda fpga --pnr veryl --pcf veryl/tutorial/icebreaker.pcf --bin blinky.bin veryl
 reda asic --pdk sky130 --gds alu.gds veryl/examples/src/rv32i.veryl --top Alu
 ```
 
-`reda` 隨 `rueda` 安裝（`cargo install --git https://github.com/ccc-eda/rueda rueda`，或 `./build.sh`：`target/release/reda`）；
+`reda` 隨 `rueda` 安裝（`cargo install rueda`，或 `./build.sh`：`target/release/reda`）；
 原本的 `veryl/sim` 與 `veryl/synth`（`reda synth --ice40`、`--asic`、`--cc`…）照舊可用。
 
 指令與架構見 [AGENTS.md](AGENTS.md)；各 crate 的 README（[veryl/sim](sim/README.tw.md)、[veryl/synth](synth/README.tw.md)）有更多細節。
