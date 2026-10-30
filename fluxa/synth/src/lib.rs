@@ -33,12 +33,31 @@ pub struct Synth {
 pub fn synthesize(prog: &Arc<Program>, top: &str, params: &HashMap<String, i128>) -> Result<Synth, String> {
     let decl = prog.fns.get(top).ok_or_else(|| format!("no task `{}`", top))?.clone();
     if decl.kind != FnKind::Task { return Err(format!("`{}` is not a task", top)); }
-    if !decl.generics.is_empty() { return Err(format!("`{}`: generic tasks are not synthesized yet", top)); }
+    let prog = &specialize(prog, &decl, params)?;
     // a task that builds a network: its instances connected by FIFOs
     if graph::is_graph(&decl) { return graph::build(prog, &decl, params); }
     let consts: std::collections::HashSet<String> = prog.consts.read().unwrap().keys().cloned().collect();
     let cfg = lower::lower(&decl, &consts)?;
     gen::build(prog, &decl, &cfg, params)
+}
+
+/// a generic task's program: its const generics (values from `params`, i.e. `--param` or the
+/// spawn's `::<…>`) as constants of the program, so types, patterns and expressions see them
+fn specialize(prog: &Arc<Program>, decl: &FnDecl, params: &HashMap<String, i128>) -> Result<Arc<Program>, String> {
+    if decl.generics.is_empty() { return Ok(prog.clone()); }
+    let mut consts = prog.consts.read().unwrap().clone();
+    for g in &decl.generics {
+        if !g.is_const { return Err(format!("`{}`: type parameter `{}` is not synthesized", decl.name, g.name)); }
+        let Some(v) = params.get(&g.name) else { return Err(format!("`{}`: generic `{}` needs a value (--param {}=…)", decl.name, g.name, g.name)) };
+        consts.insert(g.name.clone(), fluxa::value::Value::Int(*v));
+    }
+    Ok(Arc::new(Program {
+        files: prog.files.clone(),
+        consts_decl: prog.consts_decl.clone(),
+        fns: prog.fns.clone(),
+        tests: prog.tests.clone(),
+        consts: std::sync::RwLock::new(consts),
+    }))
 }
 
 /// the task synthesized by default: the last one declared

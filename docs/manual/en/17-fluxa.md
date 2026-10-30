@@ -87,8 +87,16 @@ reda synth --list fluxa/examples/pipeline.fx        # the tasks that can be synt
   channel operations and `return`. The four stages of the RV32I processor (Fetch, Decode, Execute, Mem) all
   synthesize, and its 24 tests pass at gate level: `reda gatesim opt fluxa/rv32i/rv32i.fx
   fluxa/rv32i/tests_basic.fx` (every task replaced by its netlist, about 7 minutes).
-- Not synthesized yet: generic tasks (so RV32I's `Core` network connects the stages in the simulator), networks
-  that spawn with array arguments, the RV64 processor.
+- A generic task gets its const generics' values from `--param NAME=VALUE` (or, in a network or a gate-level test,
+  from the spawn's `::<…>`). A network's array parameter becomes one of its input ports, wired to the instances it
+  is passed to. So RV32I's `Core` is one netlist (the four stages and the FIFOs between them, about 36,500 generic
+  gates): `reda synth --top Core --param WBD=8 fluxa/rv32i/rv32i.fx`, and
+  `reda gatesim opt --top Core fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx` runs the 24 tests on it (the watchdog test runs
+  3,000 instructions and takes about half an hour; the other 23, a minute).
+  Its program and data are input ports (4,096 pins), so it does not fit an FPGA's pins yet: that needs them as
+  constants (ROM / initialized block RAM).
+- Not synthesized yet: a `mem` initialized from a parameter (it stays registers), the RV64 processor (its FPU
+  divides and shifts by amounts that are guarded only at run time, and is far too large as one clock of logic).
 - In the web IDE a Fluxa project has **⚙ Synthesize** too: ① shows the task and its instances, ②–⑦ are the same as
   for Veryl. With the simulation target set to generic gates / iCE40 / standard cells, **▶ Run** runs the tests with
   the synthesis top replaced by its netlist, and **✔ Verify all** compares every implementation side by side. The

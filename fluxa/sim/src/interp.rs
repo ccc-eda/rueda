@@ -896,6 +896,10 @@ impl Interp {
                 let v = argv.iter().find(|(n, _)| n.as_deref() == Some(prm.name.as_str())).map(|(_, v)| v.clone()).or_else(|| positional.next());
                 if let Some(v) = v { ordered.push((prm.name.clone(), v)); }
             }
+            // const generics too, by name (the hardware is built for their values)
+            for (g, v) in decl.generics.iter().zip(&gvals) {
+                if g.is_const { ordered.push((g.name.clone(), v.clone())); }
+            }
             if let Some(r) = p.start(&decl.name, &ordered) {
                 let hw = r.map_err(|m| self.me(m))?;
                 let ins = ordered.iter().filter_map(|(_, v)| if let Value::Rx(c) = v { Some(*c) } else { None }).collect();

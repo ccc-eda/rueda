@@ -82,8 +82,14 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以综合的 task
 - 通道可以传 tuple；数组参数是一个输入端口（全部位）；`match` / `if` 的分支里可以有通道操作与 `return`。
   RV32I 处理器的四个阶段（Fetch、Decode、Execute、Mem）都综合得出来，24 个 test 在门级全部通过：
   `reda gatesim opt fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx`（每个 task 换成网表，约 7 分钟）。
-- 还不能综合的：泛型 task（所以 RV32I 的 `Core` 网络要在仿真器里接起各阶段）、用数组当参数 spawn 的网络、
-  RV64 处理器。
+- 泛型 task 的 const 泛型参数用 `--param NAME=VALUE` 给值（在网络里或门级测试时，取 spawn 的 `::<…>`）。
+  网络的数组参数变成它的一个输入端口，接到拿到它的实例。所以 RV32I 的 `Core` 是一个网表（四个阶段加上中间的
+  FIFO，约 36,500 个通用门）：`reda synth --top Core --param WBD=8 fluxa/rv32i/rv32i.fx`；
+  `reda gatesim opt --top Core fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx` 在它上面跑 24 个 test（看门狗那个要跑
+  3,000 条指令，约半小时；其余 23 个约一分钟）。
+  它的程序与数据是输入端口（4,096 个引脚），所以还放不进 FPGA 的引脚：要把它们变成常数（ROM／有初值的 block RAM）。
+- 还不能综合的：用参数当初值的 `mem`（留成寄存器）、RV64 处理器（它的 FPU 的除法与移位量只在运行时才有防护，
+  而且整个做成一个周期的组合逻辑太大）。
 - 网页 IDE 的 Fluxa 项目也有「⚙ 综合」：① 显示 task 与它的实例，②–⑦ 和 Veryl 一样；
   「仿真对象」选通用门 / iCE40 / 标准单元时，▶ 运行 会把综合顶层换成它的网表再跑 test，
   「✔ 全面验证」把每种实现的结果并排比对。虚拟板不接收 Fluxa（它的端口是数据流，不是板子的引脚）。

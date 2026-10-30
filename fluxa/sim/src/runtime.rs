@@ -111,7 +111,8 @@ pub trait HwTask: Send {
     fn cycle(&mut self, offer: &[Option<HwTok>], room: &[bool]) -> (Vec<bool>, Vec<Option<HwTok>>, bool);
 }
 
-/// 決定哪些任務以硬體執行：`start` 對要取代的任務回傳 Some（參數依宣告順序：名稱與值）
+/// 決定哪些任務以硬體執行：`start` 對要取代的任務回傳 Some（參數依宣告順序：名稱與值；
+/// 其後是 const 泛型參數的名稱與值）
 pub trait HwProvider: Send + Sync {
     fn start(&self, task: &str, args: &[(String, Value)]) -> Option<Result<Box<dyn HwTask>, String>>;
 }

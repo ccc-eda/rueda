@@ -82,8 +82,14 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以合成的 task
 - 通道可以傳 tuple；陣列參數是一個輸入埠（全部位元）；`match` / `if` 的分支裡可以有通道操作與 `return`。
   RV32I 處理器的四個階段（Fetch、Decode、Execute、Mem）都合成得出來，24 個 test 在閘級全部通過：
   `reda gatesim opt fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx`（每個 task 換成網表，約 7 分鐘）。
-- 還不能合成的：泛型 task（所以 RV32I 的 `Core` 網路要在模擬器裡接起各階段）、用陣列當引數 spawn 的網路、
-  RV64 處理器。
+- 泛型 task 的 const 泛型參數用 `--param NAME=VALUE` 給值（在網路裡或閘級測試時，取 spawn 的 `::<…>`）。
+  網路的陣列參數變成它的一個輸入埠，接到拿到它的實例。所以 RV32I 的 `Core` 是一個網表（四個階段加上中間的
+  FIFO，約 36,500 個通用閘）：`reda synth --top Core --param WBD=8 fluxa/rv32i/rv32i.fx`；
+  `reda gatesim opt --top Core fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx` 在它上面跑 24 個 test（看門狗那個要跑
+  3,000 個指令，約半小時；其餘 23 個約一分鐘）。
+  它的程式與資料是輸入埠（4,096 支腳），所以還放不進 FPGA 的腳位：要把它們變成常數（ROM／有初值的 block RAM）。
+- 還不能合成的：用參數當初值的 `mem`（留成暫存器）、RV64 處理器（它的 FPU 的除法與位移量只在執行時才有防護，
+  而且整個做成一個週期的組合邏輯太大）。
 - 網頁 IDE 的 Fluxa 專案也有「⚙ 合成」：① 顯示 task 與它的實例，②–⑦ 和 Veryl 一樣；
   「模擬對象」選通用閘 / iCE40 / 標準元件時，▶ 執行 會把合成頂層換成它的網表再跑 test，
   「✔ 全面驗證」把每種實作的結果並排比對。虛擬板不收 Fluxa（它的埠是串流，不是板子的腳位）。

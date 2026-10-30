@@ -153,7 +153,8 @@ impl Provider {
     /// `top` as `kind` gates (synthesized now, so errors show at once)
     pub fn new(prog: &Arc<fluxa::ast::Program>, top: &str, kind: &str) -> Result<Provider, String> {
         let p = Provider { prog: prog.clone(), kind: kind.into(), only: Some(top.into()), built: Default::default() };
-        p.netlist(top)?;
+        // a generic task is built at its spawn, for its generics' values
+        if prog.fns.get(top).is_none_or(|d| d.generics.is_empty()) { p.netlist(top)?; }
         Ok(p)
     }
 
@@ -198,14 +199,16 @@ impl HwProvider for Provider {
     fn start(&self, task: &str, args: &[(String, Value)]) -> Option<Result<Box<dyn HwTask>, String>> {
         if self.only.as_deref().is_some_and(|o| o != task) { return None; }
         let decl = self.prog.fns.get(task)?;
-        // a network has its scalar arguments built in: one netlist per set of arguments
+        // a network has its scalar arguments built in, a generic task its const generics: one
+        // netlist per set of them
         let net = crate::graph::is_graph(decl);
-        let built = if net {
-            let ps: HashMap<String, i128> = args.iter().filter_map(|(n, v)| match v { Value::Int(k) => Some((n.clone(), *k)), Value::Bool(b) => Some((n.clone(), *b as i128)), _ => None }).collect();
+        let fixed = |n: &str| net || decl.generics.iter().any(|g| g.name == n);
+        let ps: HashMap<String, i128> = args.iter().filter(|(n, _)| fixed(n)).filter_map(|(n, v)| match v { Value::Int(k) => Some((n.clone(), *k)), Value::Bool(b) => Some((n.clone(), *b as i128)), _ => None }).collect();
+        let built = if ps.is_empty() { self.netlist(task) } else {
             let mut key: Vec<String> = ps.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
             key.sort();
             self.netlist_with(&format!("{}({})", task, key.join(",")), task, &ps)
-        } else { self.netlist(task) };
+        };
         let (nl, io) = match built {
             Ok(x) => x,
             // replacing one task: its error; every task: the ones that do not synthesize stay in the interpreter

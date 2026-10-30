@@ -60,7 +60,34 @@ impl HwProvider for Recorder {
 #[derive(Clone, Debug, PartialEq)]
 enum End { Inst(usize, String), Top(String) }
 
-struct Inst { name: String, s: crate::Synth }
+struct Inst {
+    name: String,
+    s: crate::Synth,
+    /// its parameters given the network's array parameters: (its parameter, the network's)
+    passes: Vec<(String, usize)>,
+}
+
+/// a stand-in for an array (or tuple) parameter of the network while it is run: values no
+/// computation makes, so an argument equal to it is that parameter passed on
+fn sentinel(t: &RtType, seed: &mut u64) -> Option<Value> {
+    let mut next = || { *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (*seed >> 11) as i128 };
+    match t {
+        RtType::Int { lo, hi } => { let span = hi - lo + 1; Some(Value::Int(lo + next().rem_euclid(span.max(1)))) }
+        RtType::Bool => Some(Value::Bool(next() & 1 == 1)),
+        RtType::Array(e, n) => (0..*n).map(|_| sentinel(e, seed)).collect::<Option<Vec<_>>>().map(Value::Array),
+        RtType::Tuple(ts) => ts.iter().map(|t| sentinel(t, seed)).collect::<Option<Vec<_>>>().map(Value::Tuple),
+        _ => None,
+    }
+}
+
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x == y,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Array(x), Value::Array(y)) | (Value::Tuple(x), Value::Tuple(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q)),
+        _ => false,
+    }
+}
 
 pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i128>) -> R<crate::Synth> {
     // ---- the network, as the simulator builds it
@@ -69,6 +96,9 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
     let mut it = Interp::new(sh.clone(), 0, decl.name.clone());
     let mut args = vec![];
     let mut top_chans: Vec<(String, usize, Option<bool>)> = vec![];
+    // array parameters: input ports of the network, passed on to instances (name, type, stand-in)
+    let mut passed: Vec<(String, RtType, Value)> = vec![];
+    let mut seed = 0x5eed_u64;
     for p in &decl.params {
         match &p.ty {
             TypeExpr::Chan(t, d) => {
@@ -80,7 +110,13 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
             }
             _ => match params.get(&p.name) {
                 Some(v) => args.push((None, Value::Int(*v))),
-                None => return Err(format!("{}: the network's parameter `{}` must be constant (--param {}=…)", decl.name, p.name, p.name)),
+                None => {
+                    let t = block_on(it.eval_type(&p.ty)).map_err(|e| format!("{}: {:?}", decl.name, e))?;
+                    match (&t, sentinel(&t, &mut seed)) {
+                        (RtType::Array(..) | RtType::Tuple(..), Some(v)) => { args.push((None, v.clone())); passed.push((p.name.clone(), t, v)); }
+                        _ => return Err(format!("{}: the network's parameter `{}` must be constant (--param {}=…)", decl.name, p.name, p.name)),
+                    }
+                }
             },
         }
     }
@@ -100,7 +136,7 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
     let mut consumer: HashMap<usize, End> = HashMap::new();
     for (task, a) in &spawns {
         let k = insts.len();
-        let (s, ends) = if task == "$broadcast" {
+        let (s, ends, passes) = if task == "$broadcast" {
             let (Some(Value::Rx(src)), Some(Value::Array(outs))) = (a.iter().find(|x| x.0 == "rx").map(|x| &x.1), a.iter().find(|x| x.0 == "outs").map(|x| &x.1)) else { return Err("broadcast: unexpected arguments".into()) };
             let outs: Vec<usize> = outs.iter().filter_map(|v| if let Value::Tx(c) = v { Some(*c) } else { None }).collect();
             let elem = &chans[*src].1;
@@ -111,37 +147,52 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
             let s = crate::synthesize(&p2, "Broadcast", &HashMap::new())?;
             let mut ends = vec![("x".to_string(), *src, false)];
             for (k, c) in outs.iter().enumerate() { ends.push((format!("o{}", k), *c, true)); }
-            (s, ends)
+            (s, ends, vec![])
         } else {
             let sub = prog.fns.get(task).ok_or_else(|| format!("no task `{}`", task))?;
             let mut sp = HashMap::new();
             let mut ends = vec![];
+            let mut passes = vec![];
             for (n, v) in a {
                 match v {
                     Value::Int(x) => { sp.insert(n.clone(), *x); }
                     Value::Bool(b) => { sp.insert(n.clone(), *b as i128); }
                     Value::Rx(c) => ends.push((n.clone(), *c, false)),
                     Value::Tx(c) => ends.push((n.clone(), *c, true)),
-                    other => return Err(format!("spawn {}: argument `{}` ({}) is not synthesized", task, n, fluxa::value::kind(other))),
+                    other => match passed.iter().position(|(_, _, v)| same(v, other)) {
+                        Some(k) => passes.push((n.clone(), k)),
+                        None => return Err(format!("spawn {}: argument `{}` ({}) is not synthesized (an array must be a parameter of the network, passed on as it is)", task, n, fluxa::value::kind(other))),
+                    },
                 }
             }
             let _ = sub;
             let s = crate::synthesize(prog, task, &sp).map_err(|e| format!("{} (spawned by {}): {}", task, decl.name, e))?;
             // the direction is what the instance does with the channel
             let ends = ends.into_iter().map(|(n, c, _)| { let out = s.iface.outs.iter().any(|o| o.0 == n); (n, c, out) }).collect();
-            (s, ends)
+            (s, ends, passes)
         };
         for (n, c, out) in ends {
             let e = End::Inst(k, n);
             let slot = if out { &mut producer } else { &mut consumer };
             if slot.insert(c, e).is_some() { return Err(format!("{}: channel `{}` has two {}s", decl.name, chans[c].0, if out { "sender" } else { "receiver" })); }
         }
-        insts.push(Inst { name: task.clone(), s });
+        insts.push(Inst { name: task.clone(), s, passes });
     }
+    // a channel's type: its element type, else (a tuple's `Any`) the type of an instance's port on it
+    let chan_ty = |c: usize, producer: &HashMap<usize, End>, consumer: &HashMap<usize, End>| -> R<Ty> {
+        if let Ok(t) = Ty::of_rt(&chans[c].1) { return Ok(t); }
+        for e in [producer.get(&c), consumer.get(&c)].into_iter().flatten() {
+            if let End::Inst(k, n) = e {
+                let io = &insts[*k].s.iface;
+                if let Some((_, t)) = io.outs.iter().chain(&io.ins).find(|x| &x.0 == n) { return Ok(t.clone()); }
+            }
+        }
+        Ty::of_rt(&chans[c].1)
+    };
     // the task's own channels: the other end is outside
     let mut iface = Iface::default();
     for (name, c, _) in &top_chans {
-        let ty = Ty::of_rt(&chans[*c].1)?;
+        let ty = chan_ty(*c, &producer, &consumer)?;
         match (producer.contains_key(c), consumer.contains_key(c)) {
             (false, true) => { producer.insert(*c, End::Top(name.clone())); iface.ins.push((name.clone(), ty)); }
             (true, false) => { consumer.insert(*c, End::Top(name.clone())); iface.outs.push((name.clone(), ty)); }
@@ -188,15 +239,28 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
         ports.push(Port { name: format!("{}_ready", n), dir: Dir::In, bits: vec![r] });
         top_out_ready.insert(n.clone(), r);
     }
+    // the array parameters: input ports, wired to the instances given them
+    for (n, t, _) in &passed {
+        let ty = Ty::of_rt(t)?;
+        let bits = b.wires(ty.width() as u32);
+        ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
+        iface.scalars.push((n.clone(), ty));
+        for (k, inst) in insts.iter().enumerate() {
+            for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n) {
+                let to = iports[k].get(q).ok_or_else(|| format!("instance {} has no port {}", inst.name, q))?;
+                for (t, f) in to.iter().zip(&bits) { if let Bit::W(w) = t { alias.insert(*w, *f); } }
+            }
+        }
+    }
     let get = |iports: &Vec<HashMap<String, Vec<Bit>>>, k: usize, n: &str| -> R<Vec<Bit>> { iports[k].get(n).cloned().ok_or_else(|| format!("instance {} has no port {}", insts[k].name, n)) };
     let set = |alias: &mut HashMap<u32, Bit>, to: &[Bit], from: &[Bit]| { for (t, f) in to.iter().zip(from) { if let Bit::W(w) = t { alias.insert(*w, *f); } } };
     let mut out_ports: Vec<Port> = vec![];
-    for (c, (cname, elem, depth)) in chans.iter().enumerate() {
+    for (c, (cname, _, depth)) in chans.iter().enumerate() {
         let (Some(p), Some(q)) = (producer.get(&c), consumer.get(&c)) else {
             if producer.contains_key(&c) || consumer.contains_key(&c) { return Err(format!("{}: channel `{}` has only one end", decl.name, cname)); }
             continue;
         };
-        let w = Ty::of_rt(elem)?.width();
+        let w = chan_ty(c, &producer, &consumer)?.width();
         // the producer's side: data, close, valid out of it, ready into it
         let (pd, pc, pv, pr_target): (Vec<Bit>, Bit, Bit, Option<Vec<Bit>>) = match p {
             End::Inst(k, n) => (get(&iports, *k, &format!("{}_data", n))?, get(&iports, *k, &format!("{}_close", n))?[0], get(&iports, *k, &format!("{}_valid", n))?[0], Some(get(&iports, *k, &format!("{}_ready", n))?)),

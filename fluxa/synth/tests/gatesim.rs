@@ -4,6 +4,7 @@
 use fluxa::runtime::{HwProvider, HwTask, HwTok};
 use fluxa::value::Value;
 use fluxa_synth::hw::Provider;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn load(src: &str) -> Arc<fluxa::ast::Program> {
@@ -451,17 +452,18 @@ fn tuple_channels_match_with_sends_and_constant_patterns() {
 fn rv32i_pipeline_in_gates() {
     let rd = |f: &str| std::fs::read_to_string(format!("{}/../rv32i/{}", env!("CARGO_MANIFEST_DIR"), f)).unwrap();
     let prog = fluxa::load_many(&[("rv32i.fx".into(), rd("rv32i.fx")), ("tests_basic.fx".into(), rd("tests_basic.fx"))]).unwrap();
-    let p = Arc::new(Provider::all(&prog, "opt"));
+    // the generic Core (its WBD from the spawn's ::<WB_DEPTH>, its program and data arrays passed
+    // on to Fetch and Mem as input ports) as one netlist: the four stages and the FIFOs between them
+    let p = Arc::new(Provider::new(&prog, "Core", "opt").unwrap());
     let opts = fluxa::Options { coop: true, hw: Some(p.clone()), ..Default::default() };
     for name in ["sum_1_to_10", "all_six_branches"] {
         let t = prog.tests.iter().find(|t| t.name == name).unwrap();
         let r = fluxa::run_test(&prog, t, &opts);
         assert!(r.passed, "{}: {}", name, r.message);
     }
-    // the four stages ran as gates (a task that does not synthesize would stay in the simulator)
     let built = p.report();
-    for stage in ["Fetch", "Decode", "Execute", "Mem"] {
-        let r = built.iter().find(|(n, _)| n == stage).map(|(_, r)| r.clone());
-        assert!(matches!(r, Some(Ok(c)) if c > 1000), "{}: {:?}", stage, r);
-    }
+    assert!(matches!(built.as_slice(), [(n, Ok(c))] if n == "Core(WBD=8)" && *c > 30000), "{:?}", built);
+    // without the generic's value it says what is missing
+    let e = fluxa_synth::synthesize(&prog, "Core", &HashMap::new()).err().unwrap();
+    assert!(e.contains("generic `WBD` needs a value"), "{}", e);
 }

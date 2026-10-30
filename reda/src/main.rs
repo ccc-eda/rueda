@@ -42,7 +42,8 @@ c_ready), every other parameter an input port unless fixed with --param NAME=VAL
 flags then work for fpga, asic and the outputs (e.g. reda fpga --bin fir4.bin fir4.fx).
 pipeline(ii = 1) loops start an iteration every clock (else error E0412); a mem used as m[i]
 becomes block RAM; a task that spawns a network becomes one netlist (channels: FIFOs).
-  --param NAME=VALUE  a scalar parameter as a constant (Fluxa)
+  --param NAME=VALUE  a scalar parameter or const generic as a constant (Fluxa); a network's
+                      array parameters are input ports passed on to its instances
   --list              the tasks of a Fluxa program
 examples: reda synth -o adder.json adder.veryl     reda synth fluxa/examples/mac.fx"),
     ("fpga", "FPGA flow (iCE40UP5K, ECP5): LUT mapping, place & route, bitstream", "\
