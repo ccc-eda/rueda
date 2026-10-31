@@ -18,6 +18,7 @@ between the languages and the back end. **`eda/` must not depend on any language
 | `veryl/emu/` | `rueda-veryl-emu` (`veryl_emu`) | Veryl → WebAssembly |
 | `fluxa/sim/` | `rueda-fluxa` (`fluxa`) | Fluxa simulator; see `fluxa/AGENTS.md` (zero dependencies, async interpreter, two schedulers) |
 | `fluxa/synth/` | `rueda-fluxa-synth` (`fluxa_synth`) | Fluxa → netlist (task FSM + datapath, networks), gate-level co-simulation, `cli.rs` (`reda synth/fpga/asic/gatesim` for `.fx`) |
+| `fluxa/emu/` | `rueda-fluxa-emu` (`fluxa_emu`) | fluxa-emu: Fluxa compiled for fast simulation (`lower`'s states → code on 64 / 128-bit registers, a Rust executor, WebAssembly `wgen.rs`), `cli.rs` (`reda emu` for `.fx`); `js/emu.mjs` harness; plan: `fluxa/docs/emu-plan.md` |
 | `riscv/rvtools/` | `rueda-rvtools` (`rvtools`) | C compiler, assembler, RV32 ISS; `cli.rs` (`reda cc`) |
 | `riscv/rvemu/` | `rueda-rvemu` (`riscv_emu`) | RV64 board emulator, wasm JIT (`.cargo/config.toml` holds its wasm32 link flags) |
 | `web/wasm/` | `rueda-wasm` | the web core: C ABI, JSON in / out (`src/api.rs` `dispatch`) |
@@ -50,4 +51,7 @@ cd web && npm run e2e                   # the IDE end to end in the installed Ch
 - Fluxa synthesis is `fluxa/synth` (crate rueda-fluxa-synth): a task → FSM + datapath (`lower.rs` states,
   `gen.rs` gates), networks → one netlist (`graph.rs`), the gate-level co-simulation (`hw.rs`). Its output is an
   `eda::netlist::Netlist`, so `eda::flow` does the rest; plan and progress: `fluxa/docs/synthesis-plan.md`.
+- fluxa-emu must give the Fluxa simulator's results: `fluxa/emu/tests/agree.rs` (test by test), `fluxa/emu/tests/wasm.sh`
+  (WebAssembly replays the executor's tokens). `fluxa/rv64/linux/soc.fx` is the RV64 board in Fluxa (Linux boots on it):
+  it follows `riscv/rvemu` (cpu.rs, bus.rs) so `fluxa/rv64/linux/test.sh` compares their commit logs line by line.
 - Per-area notes: `veryl/AGENTS.md` (Veryl tools, from veryl2chip), `fluxa/AGENTS.md`, `web/PLAN.md`.

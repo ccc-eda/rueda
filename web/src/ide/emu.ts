@@ -19,11 +19,15 @@ export interface EmuStart {
   stats: string;
   /** the project's files for the exchange area (machine.json "files") */
   files?: Uint8Array;
-  /** what runs the machine: veryl-emu's model of the design, or riscv-emu (the RV64 board's instruction set) */
-  engine?: 'veryl' | 'riscv';
+  /** what runs the machine: veryl-emu's model of the design, riscv-emu (the RV64 board's instruction set),
+   *  or fluxa-emu (the board written in Fluxa) */
+  engine?: Engine;
   /** start from this state instead of a cold boot (memory, cycle, the terminal so far; where it comes from) */
   snap?: { data: Uint8Array; cycle: number; log: string; from: 'saved' | 'bundled' };
 }
+
+/** the emulators that run a machine */
+export type Engine = 'veryl' | 'riscv' | 'fluxa';
 
 // ---- a small terminal: lines of characters, a cursor, the VT100 sequences Linux / busybox use ----
 class Term {
@@ -123,9 +127,10 @@ export class Emulator {
   getRun: () => { name: string; cmd: string } | null = () => null;
   /** the IDE: the exchange area for running it (with a compiled program), or why it cannot run */
   getRunFiles: (r: { name: string; cmd: string }) => Promise<Uint8Array | string> = async () => this.getFiles() ?? '';
-  /** the IDE: the engine (null: the machine has only veryl-emu), and a new choice */
-  getEngine: () => 'veryl' | 'riscv' | null = () => null;
-  onEngine: (e: 'veryl' | 'riscv') => void = () => {};
+  /** the IDE: the engine (null: the machine has only one), the engines it may run on, and a new choice */
+  getEngine: () => Engine | null = () => null;
+  getEngines: () => Engine[] = () => ['riscv', 'veryl'];
+  onEngine: (e: Engine) => void = () => {};
   onParts: (parts: Part[]) => void = () => {};
   private pi: PiBoard | null = null;
 
@@ -134,6 +139,7 @@ export class Emulator {
  <select class="tb-sel hidden" data-a="engine" title="${tr('模擬機的引擎：riscv-emu 只模擬指令集（像 QEMU，快幾十倍）；veryl-emu 模擬 Veryl 寫的硬體本身（每一拍、每個訊號）', 'The emulator\'s engine: riscv-emu emulates the instruction set only (like QEMU, tens of times faster); veryl-emu simulates the hardware written in Veryl (every cycle, every signal)')}">
           <option value="riscv">${tr('riscv-emu（指令集，快）', 'riscv-emu (instruction set, fast)')}</option>
           <option value="veryl">${tr('veryl-emu（硬體）', 'veryl-emu (the hardware)')}</option>
+          <option value="fluxa">${tr('fluxa-emu（Fluxa 寫的硬體）', 'fluxa-emu (the hardware in Fluxa)')}</option>
         </select>
         <button class="tb-btn" data-a="boot" title="${tr('用 veryl-emu 把設計編譯成 WebAssembly，載入程式後開機', 'Compile the design to WebAssembly with veryl-emu, load the programs and boot')}">${tr('🖥 開機', '🖥 Boot')}</button>
         <button class="tb-btn" data-a="pause" disabled>⏸</button>
@@ -154,7 +160,7 @@ export class Emulator {
     q('files').onclick = () => { const a = this.getFiles(); if (this.w && a) { this.w.postMessage({ type: 'files', area: a }); this.note(tr('專案的檔案送進板子的 /root', 'The project\'s files went to /root on the board')); } };
     q('run').onclick = () => this.run();
     q<HTMLSelectElement>('engine').onchange = () => {
-      this.onEngine(q<HTMLSelectElement>('engine').value as 'veryl' | 'riscv');
+      this.onEngine(q<HTMLSelectElement>('engine').value as Engine);
       if (this.state !== 'off') this.boot();
     };
     q('save').onclick = () => { if (this.w) { this.w.postMessage({ type: 'save' }); this.note(tr('存狀態中…', 'Saving the state…')); } };
@@ -191,7 +197,7 @@ export class Emulator {
   private note(s: string): void { (this.host.querySelector('.em-note') as HTMLElement).textContent = s; }
   get running(): boolean { return this.state === 'run'; }
   /** the engine of the machine now (undefined: none started) */
-  get engine(): 'veryl' | 'riscv' | undefined { return this.state === 'off' ? undefined : this.last?.engine; }
+  get engine(): Engine | undefined { return this.state === 'off' ? undefined : this.last?.engine; }
 
   private set(s: Emulator['state']): void {
     this.state = s;
@@ -216,7 +222,10 @@ export class Emulator {
     const mhz = (this.stat.rate / 1e6).toFixed(2);
     const what = { off: tr('關機', 'off'), run: tr('執行中', 'running'), pause: tr('暫停', 'paused'), end: tr('結束', 'ended') }[this.state];
     const rv = this.last?.engine === 'riscv';
-    st.textContent = this.state === 'off' ? '' : rv
+    const fx = this.last?.engine === 'fluxa';
+    st.textContent = this.state === 'off' ? '' : fx
+      ? tr(`${what}　fluxa-emu　${(this.stat.cycle / 1e6).toFixed(0)} M 次狀態轉移　${(this.stat.rate / 1e6).toFixed(0)} M / 秒`, `${what}  fluxa-emu  ${(this.stat.cycle / 1e6).toFixed(0)} M state transitions  ${(this.stat.rate / 1e6).toFixed(0)} M/s`)
+      : rv
       ? tr(`${what}　${(this.stat.cycle / 1e6).toFixed(1)} M 個指令　${(this.stat.rate / 1e6).toFixed(1)} MIPS`, `${what}  ${(this.stat.cycle / 1e6).toFixed(1)} M instructions  ${(this.stat.rate / 1e6).toFixed(1)} MIPS`)
       : tr(`${what}　${(this.stat.cycle / 1e6).toFixed(1)} M 拍　${mhz} MHz`, `${what}  ${(this.stat.cycle / 1e6).toFixed(1)} M cycles  ${mhz} MHz`);
   }
@@ -239,7 +248,7 @@ export class Emulator {
     if (s.snap) this.term.write([...s.snap.log].map((c) => c.charCodeAt(0) & 0xff));
     const prog = this.upload ? tr(`程式：${this.uploadName}`, `program: ${this.uploadName}`) : s.cfg.load?.length ? tr(`程式：${s.cfg.load.map((l) => l.image).join('、')}`, `program: ${s.cfg.load.map((l) => l.image).join(', ')}`) : '';
     const from = s.snap ? (s.snap.from === 'saved' ? tr('　從存下的狀態繼續（⟲ 冷開機）', '  continued from the saved state (⟲ cold boot)') : tr('　從快照開機（⟲ 冷開機）', '  booted from the snapshot (⟲ cold boot)')) : '';
-    this.note(`${s.cfg.top}: ${s.stats}${prog ? '　' + prog : ''}${from}`);
+    this.note(`${s.cfg.fluxa?.top ?? s.cfg.top}: ${s.stats}${prog ? '　' + prog : ''}${from}`);
     // the development board (machine.json "board": "pi")
     const bh = this.host.querySelector('.em-board') as HTMLElement;
     if (s.cfg.board === 'pi') {
@@ -288,6 +297,8 @@ export class Emulator {
     const sel = this.host.querySelector('[data-a="engine"]') as HTMLSelectElement;
     const eng = this.getEngine();
     sel.classList.toggle('hidden', !eng);
+    const can = this.getEngines();
+    for (const o of Array.from(sel.options)) o.hidden = !can.includes(o.value as Engine);
     if (eng) sel.value = eng;
     const b = this.host.querySelector('[data-a="run"]') as HTMLButtonElement;
     const r = this.getRun();

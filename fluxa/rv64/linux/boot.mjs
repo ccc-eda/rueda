@@ -39,7 +39,7 @@ while (!done) {
       else done = done ?? 'the script ended';
     }
   }
-  for (let t; (t = m.pop(gpio)); ) process.stdout.write(`[gpio] out=0x${Number(t[0]).toString(16).padStart(4, '0')}\n`);
+  for (let t; (t = m.pop(gpio)); ) process.stdout.write(`[gpio] out=0x${Number(t[0] & t[1]).toString(16).padStart(4, '0')}\n`);
   for (let t; (t = m.pop(fin)); ) done = `finisher 0x${Number(t[0]).toString(16)}`;
   for (let t; (t = m.pop(trace)); ) {
     const [prv, pc, insn, wrote, rd, val] = t;
@@ -49,11 +49,13 @@ while (!done) {
     if (tbuf.length >= 4096) { fs.writeSync(out, tbuf.join('\n') + '\n'); tbuf = []; }
     traced++;
   }
-  // the devices ask the outside: a byte of the line being typed, no pins
+  // the devices ask the outside: a byte of the line being typed, no pins; mtime counts
+  // instructions (a wait jumps to the timer, as riscv-emu does)
   for (let t; (t = m.pop(envReq)); ) {
+    const [wait, until] = t;
     const b = typing.length ? typing.shift() : null;
-    if (b === null && t[0] && !lines.length && !typing.length) { done = done ?? 'idle'; }
-    m.push(env, [b === null ? 0n : 1n, BigInt(b ?? 0), 0n]);
+    if (b === null && wait && until === 0xffffffffffffffffn) done = done ?? 'idle';
+    m.push(env, [b === null ? 0n : 1n, BigInt(b ?? 0), 0n, wait && until !== 0xffffffffffffffffn ? until : 0n]);
   }
   if (max && (traceFile ? traced : transitions) >= max) done = done ?? `${max} reached`;
   if (n === 0 && !m.count(envReq)) done = done ?? 'stuck';

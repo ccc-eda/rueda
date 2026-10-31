@@ -116,4 +116,43 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以综合的 task
   「✔ 全面验证」把每种实现的结果并排比对。虚拟板不接收 Fluxa（它的端口是数据流，不是板子的引脚）。
   示例「FIR 滤波器（4 阶）」放得进 iCE40，「任务网络综合成一个电路」示范网络。
 
+## fluxa-emu：编译后再跑
+
+Fluxa 仿真器是解释器（每个运算走一次语法树、变量查哈希表），RV64 上每秒约一万个指令。**fluxa-emu**
+（`fluxa/emu`）像 veryl-emu 一样先编译再跑：task 照综合的切法变成状态（每个通道操作是一个边界），状态里的运算
+依值域放进 64 或 128 位的寄存器，task 的变量在 frame 里，通道是存储器里的环形缓冲区；最后产生 WebAssembly。
+
+```sh
+reda emu fluxa/examples/fir.fx                      # test 照跑，但 task 换成编译后的版本（结果必须和仿真器相同）
+reda emu --top Core fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx fluxa/rv64/tests_basic.fx
+reda emu -o core.wasm --top Core --param WBD=8 --param TLBN=8 --param 'data=dimage([])' \
+     --param 'prog=image([addi(1, 0, 5), ecall()])' fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx
+```
+
+- 和仿真器一样严格：值放不进类型、索引越界、除以零都会让 test 失败。
+- `-o` 写出 WebAssembly 模块与 JSON（通道、存储器的地址），`fluxa/emu/js/emu.mjs` 是 Node 与浏览器的测试平台。
+- 验证：`fluxa/emu/tests/agree.rs` 让每个示例、RV32I、RV64 的 test 在两边各跑一次，结果相同；
+  `fluxa/emu/tests/wasm.sh` 把 Rust 运行器的输入、输出 token 录下来，WebAssembly 重播后输出相同。
+- 速度：管线版的 RV64 在 Node 上每秒约 230 万个指令；一个 RV64 循环，仿真器要 1,247 秒，fluxa-emu 不到 2 秒。
+
+## Fluxa 开发板：Linux 跑在 Fluxa 写的 RV64 上
+
+`fluxa/rv64/linux/soc.fx` 是用 Fluxa 写的 RV64 开发板，和 Veryl 的 Rv64Soc 有相同的存储器映射与指令集，
+所以开同一个映像（OpenSBI + Linux 6.12 + busybox + MicroPython）：
+
+- `Hart`：一个 task 就是一颗多周期的 RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu，M / S / U、Sv39（512 项 TLB），
+  RAM 与 CLINT 在它里面；照 riscv-emu 写，`TRACE` 送出 commit log。
+- `Devices`：UART、PLIC、GPIO、关机设备。外界的输入（键盘、按钮）与时间用一对询问通道向外界要：Fluxa 没有
+  非阻塞的 recv，所以 hart 每 16384 个指令问一次，等待中断（wfi）时告诉外界下一个计时器在什么时候。
+
+```sh
+reda emu -o soc.wasm --top Soc --param RAMW=33554432 --param TRACE=false fluxa/rv64/linux/soc.fx
+node fluxa/rv64/linux/boot.mjs soc.wasm fw_payload.bin --script cmds.txt     # 开机、在提示字符打 cmds.txt 的指令
+fluxa/rv64/linux/test.sh                       # 前 100 万个指令的 commit log 和 riscv-emu 逐行相同，开到 shell
+```
+
+开到 shell 约 8,450 万个指令，Node 上不到 10 秒。网页 IDE 的示例库有「Fluxa 开发板」一组：Linux + MicroPython + C、
+跑马灯、俄罗斯方块、贪食蛇、呼吸灯、反应时间游戏，程序和 RV64 开发板相同；🖥 仿真机的引擎选 fluxa-emu（硬件本身，
+即时）或 riscv-emu（指令集）。
+
 设计与进度见 `fluxa/docs/synthesis-plan.md`。

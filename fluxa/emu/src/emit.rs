@@ -700,12 +700,26 @@ impl<'p> Em<'p> {
             _ if has_array(t) => { self.env.insert(name.into(), v.clone()); }
             _ => {
                 let f = self.fit_ev(v, t, line)?;
+                // in the frame at once (the value stays known on this path)
+                if let Some(base) = self.slots.get(name).copied() { self.write(&Place { base, off: None, ty: t.clone() }, &f, line)?; }
+                else { self.dirty.insert(name.into()); }
                 self.env.insert(name.into(), f);
-                self.dirty.insert(name.into());
             }
         }
         Ok(())
     }
+
+    /// a task variable in the frame not known on this path: loaded where it is read (an array
+    /// stays in the frame)
+    fn load_var(&mut self, name: &str) -> Option<EV> {
+        let (base, t) = (*self.slots.get(name)?, self.vars.get(name)?.clone());
+        let v = self.read(&Place { base, off: None, ty: t });
+        self.env.insert(name.into(), v.clone());
+        Some(v)
+    }
+
+    /// is `name` a task variable that lives in the frame (written through, loaded when read)?
+    fn in_frame(&self, name: &str) -> bool { self.slots.contains_key(name) && self.vars.get(name).is_some_and(|t| !has_array(t)) }
 
     /// `name` (whole, or the element / field at `path`) gets `v`
     fn store(&mut self, name: &str, path: &[Step], v: EV, line: u32) -> R<()> {
@@ -724,6 +738,7 @@ impl<'p> Em<'p> {
             let t = self.vars[name].clone();
             return self.set_var(name, &t, &v, line);
         }
+        if !self.env.contains_key(name) && self.slots.contains_key(name) { self.load_var(name); }
         let cur = match self.env.get(name).cloned() { Some(c) => c, None => return err(line, self.prog, format!("assignment to `{}`, which has no value here", base(name))) };
         match cur {
             EV::M(p) => {
@@ -850,7 +865,13 @@ impl<'p> Em<'p> {
         names.sort();
         names.dedup();
         for n in names {
-            let v = match (tenv.get(n), fenv.get(n)) {
+            let (a, b) = (tenv.get(n), fenv.get(n));
+            // a variable in the frame: known after the arms only when they agree (else loaded again)
+            if self.in_frame(n) {
+                if let (Some(a), Some(b)) = (a, b) { if a == b { env.insert(n.clone(), a.clone()); } }
+                continue;
+            }
+            let v = match (a, b) {
                 (Some(a), Some(b)) => self.merge(a, b, &mut tops, &mut fops, line)?,
                 (Some(a), None) | (None, Some(a)) => a.clone(),
                 _ => unreachable!(),
@@ -1059,8 +1080,10 @@ impl<'p> Em<'p> {
         for p in pend {
             let v = self.env[&p].clone();
             let n = p.trim_end_matches("~p").to_string();
-            if self.depth == 0 && self.is_var(&n) { self.dirty.insert(n.clone()); }
-            self.env.insert(n, v);
+            match self.vars.get(&n).cloned() {
+                Some(t) if self.depth == 0 && self.is_var(&n) => { let _ = self.set_var(&n, &t, &v, 0); }
+                _ => { self.env.insert(n, v); }
+            }
         }
     }
 
@@ -1113,7 +1136,10 @@ impl<'p> Em<'p> {
             ExprKind::Float(_) => match self.konst(e) { Some(v) => self.value(&v, line), None => err(line, self.prog, "floating point is only for compile-time constants") },
             ExprKind::Path(p) => {
                 let n = p.last().unwrap();
-                if p.len() == 1 { if let Some(v) = self.env.get(n) { return Ok(v.clone()); } }
+                if p.len() == 1 {
+                    if let Some(v) = self.env.get(n) { return Ok(v.clone()); }
+                    if self.slots.contains_key(n) { if let Some(v) = self.load_var(n) { return Ok(v); } }
+                }
                 if let Some(pl) = self.rom.get(n) { return Ok(EV::M(pl.clone())); }
                 let c = self.prog.consts.read().unwrap().get(n).cloned();
                 match c {
@@ -1555,33 +1581,6 @@ pub enum ParamKind {
     Data(Ty),
 }
 
-/// the variables a state's code reads or writes (to load them first)
-fn names_in(b: &fluxa_synth::lower::Bb, out: &mut HashSet<String>) {
-    let mut add = |e: &Expr| fluxa_synth::walk_paths(e, &mut |p| { out.insert(p.to_string()); });
-    for s in &b.stmts { walk_stmt_all(s, &mut add); }
-    match &b.term {
-        LTerm::Branch(c, ..) => add(c),
-        LTerm::Send { val, .. } => add(val),
-        LTerm::MemRead { addr, .. } => add(addr),
-        LTerm::MemWrite { addr, val, .. } => { add(addr); add(val); }
-        LTerm::Pipe { cond: Some(c), .. } => add(c),
-        _ => {}
-    }
-    if let LTerm::Pipe { sends, .. } = &b.term { for (_, v) in sends { out.insert(v.clone()); } }
-}
-
-fn walk_stmt_all(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
-    match &s.kind {
-        StmtKind::Let { init: Some(e), .. } | StmtKind::Carry { init: e, .. } | StmtKind::Expr(e) | StmtKind::Spawn(e) => fluxa_synth::walk(e, f),
-        StmtKind::Assign { target, value, .. } => { fluxa_synth::walk(target, f); fluxa_synth::walk(value, f); }
-        StmtKind::For { iter, body, .. } => { fluxa_synth::walk(iter, f); for s in &body.stmts { walk_stmt_all(s, f); } if let Some(t) = &body.tail { fluxa_synth::walk(t, f); } }
-        StmtKind::Parallel(ss) => for s in ss { walk_stmt_all(s, f) },
-        StmtKind::Assert { cond, .. } => fluxa_synth::walk(cond, f),
-        StmtKind::Return(Some(e)) => fluxa_synth::walk(e, f),
-        _ => {}
-    }
-}
-
 struct Task<'a> {
     decl: &'a FnDecl,
     cfg: &'a Cfg,
@@ -1656,19 +1655,6 @@ pub fn compile_task(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &[(St
 }
 
 impl Em<'_> {
-    /// load the task variables the state uses
-    fn prologue(&mut self, used: &HashSet<String>) {
-        let mut names: Vec<&String> = used.iter().filter(|n| self.slots.contains_key(*n)).collect();
-        names.sort();
-        for n in names {
-            let (base, t) = (self.slots[n], self.vars.get(n).cloned());
-            let Some(t) = t else { continue };
-            let p = Place { base, off: None, ty: t };
-            let v = self.read(&p);
-            self.env.insert(n.clone(), v);
-        }
-    }
-
     /// store the task variables the state assigned
     fn epilogue(&mut self) -> R<()> {
         let mut names: Vec<String> = self.dirty.drain().collect();
@@ -1715,12 +1701,9 @@ fn emit_all(em: &mut Em, task: &Task, dry: bool) -> R<Vec<State>> {
             Temp::ChanElem(ch) => task.ports.get(ch).map(|p| task.port_ty[*p as usize].clone()).ok_or_else(|| format!("`{}` is not a channel parameter of the task", base(ch)))?,
             Temp::MemElem(m) => match &task.mems[m] { Ty::Array(e, _) => (**e).clone(), t => t.clone() },
             Temp::Like(e) => {
-                let mut used = HashSet::new();
-                fluxa_synth::walk_paths(e, &mut |p| { used.insert(p.to_string()); });
                 let saved = std::mem::take(&mut em.ops);
                 em.env.clear();
                 em.bind_params(task)?;
-                em.prologue(&used);
                 let r = match &e.kind {
                     ExprKind::Range(lo, hi, incl) => em.scalar(lo).and_then(|l| em.scalar(hi).map(|h| (l, h, *incl))).map(|(l, h, incl)| Ty::Int { lo: l.lo.min(h.lo), hi: (h.hi + incl as i128).max(l.hi) }),
                     _ => em.eval(e).map(|v| em.ev_ty(&v)),
@@ -1744,9 +1727,6 @@ fn emit_all(em: &mut Em, task: &Task, dry: bool) -> R<Vec<State>> {
         em.dirty.clear();
         em.ops.clear();
         em.bind_params(task)?;
-        let mut used = HashSet::new();
-        names_in(b, &mut used);
-        em.prologue(&used);
         let line = b.stmts.first().map(|s| s.line).unwrap_or(task.decl.line);
         // the head of a pipelined loop: its tokens and condition come first (states of their own)
         if let LTerm::Pipe { head, cond, recvs, sends, exit } = &b.term {
@@ -1785,9 +1765,6 @@ fn emit_all(em: &mut Em, task: &Task, dry: bool) -> R<Vec<State>> {
                 em.env.clear();
                 em.ops.clear();
                 em.bind_params(task)?;
-                let mut used = HashSet::new();
-                fluxa_synth::walk_paths(c, &mut |p| { used.insert(p.to_string()); });
-                em.prologue(&used);
                 let cv = em.scalar(c)?;
                 let cr = em.truth(&cv);
                 states[si] = State { ops: std::mem::take(&mut em.ops), term: Term::Branch(cr, next, *exit as u32), at: em.here(line) };

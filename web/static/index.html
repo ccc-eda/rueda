@@ -27,7 +27,7 @@
   </div>
   <div id="grpFlow" class="tb-group">
     <span class="tb-lbl" data-en="Circuit">看電路</span>
-    <select id="flowTarget" disabled title="目標：合成（看電路變成什麼）或模擬機（讓機器開機、跑軟體）" data-en-title="Target: synthesis (see what the circuit becomes) or an emulator (boot a machine, run software)"><optgroup id="tgSynth"><option value="fpga">FPGA</option><option value="asic">ASIC · vlib</option><option value="sky130">ASIC · SKY130</option></optgroup><optgroup id="tgEmu"><option value="emu-veryl" data-en="veryl-emu (the hardware)">veryl-emu（硬體）</option><option value="emu-riscv" data-en="riscv-emu (instruction set)">riscv-emu（指令集）</option></optgroup></select>
+    <select id="flowTarget" disabled title="目標：合成（看電路變成什麼）或模擬機（讓機器開機、跑軟體）" data-en-title="Target: synthesis (see what the circuit becomes) or an emulator (boot a machine, run software)"><optgroup id="tgSynth"><option value="fpga">FPGA</option><option value="asic">ASIC · vlib</option><option value="sky130">ASIC · SKY130</option></optgroup><optgroup id="tgEmu"><option value="emu-veryl" data-en="veryl-emu (the hardware)">veryl-emu（硬體）</option><option value="emu-riscv" data-en="riscv-emu (instruction set)">riscv-emu（指令集）</option><option value="emu-fluxa" data-en="fluxa-emu (the hardware in Fluxa)">fluxa-emu（Fluxa 硬體）</option></optgroup></select>
     <select id="flowStage" disabled title="合成並檢視這個階段（Ctrl/⌘+Shift+B）" data-en-title="Synthesize and view this stage (Ctrl/⌘+Shift+B)"></select>
     <select id="synthTop" title="合成的頂層模組" data-en-title="Module to synthesize"></select>
   </div>

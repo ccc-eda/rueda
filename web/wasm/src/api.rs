@@ -784,6 +784,28 @@ pub fn dispatch(v: &Value) -> R<Value> {
     match cmd {
         "version" => Ok(json!({ "ok": true, "version": env!("CARGO_PKG_VERSION") })),
         // veryl-emu: the design compiled to a WebAssembly module (the IDE's emulator)
+        // fluxa-emu: a Fluxa task (and the network it builds) as a WebAssembly module; params:
+        // {name: integer or Fluxa expression}
+        "fluxa_emu_compile" => {
+            let prog = fluxa::load_many(&files(v)?)?;
+            let top = v.get("top").and_then(|t| t.as_str()).map(String::from).or_else(|| fluxa_synth::default_top(&prog)).ok_or("no task to compile")?;
+            let mut ps = std::collections::HashMap::new();
+            if let Some(o) = v.get("params").and_then(|p| p.as_object()) {
+                for (k, x) in o {
+                    let val = match x {
+                        Value::Number(n) => fluxa::value::Value::Int(n.as_i64().unwrap_or(0) as i128),
+                        Value::Bool(b) => fluxa::value::Value::Bool(*b),
+                        Value::String(s) => fluxa::eval_str(&prog, s).map_err(|e| format!("param {}: {}", k, e))?,
+                        _ => return Err(format!("param {}: a number, a bool or a Fluxa expression", k)),
+                    };
+                    ps.insert(k.clone(), val);
+                }
+            }
+            let m = fluxa_emu::compile(&prog, &top, &ps).map_err(|e| format!("fluxa-emu: {}", e))?;
+            let o = fluxa_emu::wgen::compile(&m);
+            let meta: Value = serde_json::from_str(&o.json).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true, "wasm": base64(&o.wasm), "meta": meta, "stats": m.stats() }))
+        }
         "emu_compile" => {
             let top = v.get("top").and_then(|t| t.as_str());
             let stops: Vec<String> = v.get("stops").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();

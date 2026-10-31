@@ -44,8 +44,8 @@ flowchart LR
 | E1 ✓ | crate `fluxa/emu`：elab、emit、opt、Rust 執行器、`reda emu x.fx` | 所有範例、RV32I、RV64（basic、mmu、amo、fp、irq、system）每個 test 與模擬器相同；37 萬條指令的 RV64 迴圈：模擬器 1,247 秒，執行器 30 秒 |
 | E2 ✓ | WebAssembly 後端（`wgen.rs`：每個程式碼一個 `step` 函式，`br_table` 跳到狀態；128 位元的乘、移位、除是輔助函式）、Node 測試平台（`fluxa/emu/js/emu.mjs`）、`reda emu -o x.wasm` | `fluxa/emu/tests/wasm.sh`：範例、RV32I、RV64 共 222 台機器，錄下執行器的輸入、輸出 token，wasm 重播後輸出相同；RV64 在 Node 上每秒約 234 萬條指令（Rust 執行器的 17 倍） |
 | L1 ✓ | `fluxa/rv64/linux/soc.fx`：Fluxa 寫的 Rv64Soc。`Hart` 一個 task（RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu、M / S / U、Sv39、512 項 TLB、RAM、CLINT），照 riscv-emu 的 `cpu.rs`；`Devices`（UART、PLIC、GPIO、關機裝置）照 `bus.rs`；外界（UART 收字、GPIO 輸入）用詢問通道。`boot.mjs` 在 Node 上開機 | `fluxa/rv64/linux/test.sh`：同一個映像（`web/dist/img_linux.js`）開到 busybox shell、執行指令；前 100 萬條指令的 commit log 和 riscv-emu 逐行相同。8,450 萬條指令 9.8 秒（每秒 860 萬條） |
-| E3 | 加速：變數留在暫存器、排程 | |
-| L2 | IDE：Fluxa 開發板範例、模擬機引擎 fluxa-emu | npm test、瀏覽器實測 |
+| E3 ✓ | 加速：wasm 裡往後面狀態的跳躍直接 `br`（不經分派；只在往回跳時看預算）；task 變數寫入時立即存回 frame、讀到時才載入（狀態開頭不再載入全部變數、結尾不再存回、分支合流不再複製）。試過把變數整個函式期間放在 wasm 區域變數：TurboFan 對這麼大的函式配置得很差，反而慢三倍，沒採用 | Linux 開機 9.7 → 6.0 秒（Node）；Hart 每條指令約 770 → 430 個運算；瀏覽器裡每秒約 500 萬條指令 |
+| L2 ✓ | IDE：web 核心的 `fluxa_emu_compile`、`web/src/fx_machine.ts`（模擬機的第三種引擎：和 RvMachine 同介面；即時模式下時間跟著時鐘，wfi 時 worker 等到計時器或輸入才回答）、範例庫「Fluxa 開發板」（Linux + MicroPython + C、跑馬燈、俄羅斯方塊、貪食蛇、呼吸燈、反應時間遊戲） | npm test：Fluxa 開發板開到 shell、檔案、MicroPython、C、GPIO、螢幕；每個範例的程式在 fluxa-emu 上跑（和 riscv-emu 上同樣的檢查）；瀏覽器實測 |
 
 ## 為什麼 Linux 用另一顆 RV64
 

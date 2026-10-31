@@ -580,7 +580,8 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     { id: 1, kind: 'wire', a: 'gnd', b: 'r:top-:1' },
   ];
   if (fs.existsSync(path.join(dist, 'img_linux.js'))) vm.runInContext(fs.readFileSync(path.join(dist, 'img_linux.js'), 'utf8'), ctx);
-  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw)) {
+  const machineOf = (e) => JSON.parse(e.files.find((f) => f.name === 'machine.json').src);
+  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw && !machineOf(e).fluxa)) {
     const t0 = Date.now();
     let line;
     try {
@@ -717,34 +718,72 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     console.log(`${line}  (${Date.now() - t0} ms)`);
   }
 
-  // the RV64 board's examples (same_hw: the board's machine, checked above): each one's programs
-  // run on riscv-emu, as ▶ Run does (the project's files into /root, C compiled for Linux)
-  const boardEx = ctx.VERYL_EXAMPLES.filter((e) => e.emu && e.same_hw);
-  if (boardEx.length && ctx.VERYL_IMAGES?.linux) {
+  // the Fluxa board (machine.json fluxa: fluxa/rv64/linux/soc.fx compiled by fluxa-emu, as the page's
+  // worker runs it): boot to the shell, files, MicroPython, C, GPIO, the screen
+  const { FluxaMachine } = createRequire(import.meta.url)(path.join(dist, 'fx_machine.cjs'));
+  /** a Fluxa board booted to its shell; the steps are state transitions (about 40 an instruction) */
+  const fluxaBoard = async (ex) => {
+    const cfg = machineOf(ex);
+    const r = core.call({ cmd: 'fluxa_emu_compile', files: ex.files.filter((f) => f.name.endsWith('.fx')), top: cfg.fluxa.top, params: cfg.fluxa.params });
+    if (!r.ok) throw new Error(r.error);
+    const fm = await FluxaMachine.create(fromBase64(r.wasm), r.meta, cfg);
+    for (const l of cfg.load ?? []) fm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+    fm.reset();
+    let o = '';
+    while (fm.cycle < 10_000_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...fm.step(40_000_000).out);
+    return { fm, cfg, booted: o.endsWith(cfg.prompt), stats: r.stats };
+  };
+  for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw && machineOf(e).fluxa)) {
     const t0 = Date.now();
-    const { RvMachine } = createRequire(import.meta.url)(path.join(dist, 'rv_machine.cjs'));
-    vm.runInContext(fs.readFileSync(path.join(dist, 'rvemu.js'), 'utf8'), ctx);
+    let line;
+    try {
+      const { fm, cfg, booted, stats } = await fluxaBoard(ex);
+      const boot = Date.now() - t0, bootT = fm.cycle;
+      let ok = booted, what = booted ? `shell after ${(bootT / 1e9).toFixed(1)} G transitions in ${boot} ms` : 'no shell';
+      if (ok) {
+        const T = createRequire(import.meta.url)(tarPath);
+        const c = core.call({ cmd: 'cc', name: 'ct.c', linux: true, src: 'int main(void) { gpio_write(12, 1); printf("C %d\\n", 6 * 7); return 0; }\n' });
+        fm.writeArea(T.exchangeArea(T.tarFiles([{ name: 'hello.txt', src: 'hi from the IDE\n' }, { name: 'ct', src: fromBase64(c.elf), mode: 0o755 }])));
+        const cmd = 'getfiles > /dev/null; cat hello.txt; micropython -c "from pi import LED; LED(13).on(); print(\'MP\', 7 * 6)"; ./ct; echo FX$((1+1))DONE\r';
+        fm.input([...cmd].map((ch) => ch.charCodeAt(0)));
+        let o = '', r = null;
+        while (fm.cycle < bootT + 20_000_000_000 && !o.includes('FX2DONE')) { r = fm.step(40_000_000); o += String.fromCharCode(...r.out); }
+        r = fm.step(4_000_000);
+        const scr = fm.screen();
+        let lit = 0;
+        for (let i = 0; i < scr.length; i += 2) if (scr[i] | scr[i + 1]) lit++;
+        ok = o.includes('hi from the IDE') && o.includes('MP 42') && o.includes('C 42') && r.duty[12] > 0.99 && r.duty[13] > 0.99 && lit > 100;
+        what += ok ? '; files, MicroPython, C, GPIO 12 / 13, screen' : '; FAILED ' + JSON.stringify(o.slice(-300)) + ` duty ${r?.duty?.[12]} ${r?.duty?.[13]} lit ${lit}`;
+      }
+      if (!ok) bad++;
+      line = `${ok ? 'ok  ' : 'FAIL'} ${ex.id.padEnd(9)} emulator: ${stats}; ${what}`;
+    } catch (e) {
+      bad++;
+      line = `FAIL ${ex.id.padEnd(9)} emulator: ${e.message}`;
+    }
+    console.log(`${line}  (${Date.now() - t0} ms)`);
+  }
+
+  // the boards' examples (same_hw: the board's machine, checked above): each one's programs run as
+  // ▶ Run does (the project's files into /root, C compiled for Linux): the RV64 board's on riscv-emu,
+  // the Fluxa board's on fluxa-emu (`scale`: its steps per instruction)
+  const boardChecks = async (boardEx, rm, cfg, scale, label) => {
+    const t0 = Date.now();
     const T = createRequire(import.meta.url)(tarPath);
     const { solve } = createRequire(import.meta.url)(bbPath);
-    const cfg = JSON.parse(boardEx[0].files.find((f) => f.name === 'machine.json').src);
-    const rm = await RvMachine.create(fromBase64(ctx.VERYL_RVEMU_B64), cfg, { jit: true });
-    for (const l of cfg.load ?? []) rm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
-    rm.reset();
-    let o = '';
-    while (rm.cycle < 400_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...rm.step(1_000_000).out);
     const lit = () => { const b = rm.screen(); let n = 0; for (let i = 0; i < b.length; i += 2) if (b[i] | b[i + 1]) n++; return n; };
     /** type a command, wait for `want` (then Ctrl-C and the prompt for a program that runs on); the output and the GPIO over the run */
     const run = (cmd, want, stop) => {
       let out = '', r = null;
       rm.input([...cmd + '\r'].map((c) => c.charCodeAt(0)));
-      const end = rm.cycle + 600_000_000;
-      while (rm.cycle < end && !out.includes(want)) { r = rm.step(1_000_000); out += String.fromCharCode(...r.out); }
+      const end = rm.cycle + 600_000_000 * scale;
+      while (rm.cycle < end && !out.includes(want)) { r = rm.step(1_000_000 * scale); out += String.fromCharCode(...r.out); }
       const ok = out.includes(want);
       // let it run a little, sampling the GPIO
-      const g = stop ? rm.step(30_000_000) : null;
+      const g = stop ? rm.step(30_000_000 * scale) : null;
       if (stop) rm.input([3]);
       let tail = '';
-      while (rm.cycle < end + 200_000_000 && !tail.endsWith(cfg.prompt)) tail += String.fromCharCode(...rm.step(1_000_000).out);
+      while (rm.cycle < end + 200_000_000 * scale && !tail.endsWith(cfg.prompt)) tail += String.fromCharCode(...rm.step(1_000_000 * scale).out);
       return { ok, out: out + tail, g };
     };
     // what each example's programs must print (C files are compiled first)
@@ -760,7 +799,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     const res = [];
     let fail = '';
     for (const ex of boardEx) {
-      const checks = CHECKS[ex.id];
+      const checks = CHECKS[ex.id.replace(/^fx_/, 'pi_')];
       if (!checks) { fail ||= `${ex.id}: no check`; continue; }
       const progs = [];
       for (const f of ex.files.filter((x) => x.name.endsWith('.c'))) {
@@ -768,7 +807,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
         if (!c.compiled) { fail ||= `${ex.id}: ${f.name}: ${JSON.stringify(c.errors.slice(0, 2))}`; continue; }
         progs.push({ name: f.name.slice(0, -2), src: fromBase64(c.elf), mode: 0o755 });
       }
-      const files = ex.files.filter((f) => !f.name.endsWith('.veryl') && f.name !== 'machine.json');
+      const files = ex.files.filter((f) => !f.name.endsWith('.veryl') && !f.name.endsWith('.fx') && f.name !== 'machine.json');
       rm.writeArea(T.exchangeArea(T.tarFiles([...files, ...progs])));
       run('cd /root && getfiles > /dev/null; echo GOT$((1+1))', 'GOT2', false);
       const before = lit();
@@ -776,15 +815,15 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
         const r = run(cmd, want, stop);
         if (!r.ok) { fail ||= `${ex.id}: ${cmd}: ${JSON.stringify(r.out.slice(-200))}`; continue; }
         // what the program did besides printing
-        if (ex.id === 'pi_chaser' && (r.g.oe & 0xfb8) !== 0xfb8) fail ||= `${ex.id}: ${cmd}: LEDs not outputs (oe ${r.g.oe.toString(16)})`;
-        if (ex.id === 'pi_breathe') {
+        if (ex.id.replace(/^fx_/, 'pi_') === 'pi_chaser' && (r.g.oe & 0xfb8) !== 0xfb8) fail ||= `${ex.id}: ${cmd}: LEDs not outputs (oe ${r.g.oe.toString(16)})`;
+        if (ex.id.replace(/^fx_/, 'pi_') === 'pi_breathe') {
           // software PWM: partly lit LEDs on the breadboard (default: red, yellow, green on GPIO 5, 12, 13)
           const d = [5, 12, 13].map((p) => r.g.duty[p]);
           if (!d.every((x) => x > 0.03 && x < 0.97)) fail ||= `${ex.id}: duty ${d.map((x) => x.toFixed(2))}`;
           else res.push(`PWM duty ${d.map((x) => x.toFixed(2)).join(' / ')}`);
         }
-        if (['pi_snake', 'pi_tetris', 'pi_sysmon'].includes(ex.id) && lit() < 2000) fail ||= `${ex.id}: the screen is not drawn (${lit()} pixels, ${before} before)`;
-        if (ex.id === 'pi_chaser' && cmd.startsWith('./')) {
+        if (['pi_snake', 'pi_tetris', 'pi_sysmon'].includes(ex.id.replace(/^fx_/, 'pi_')) && lit() < 2000) fail ||= `${ex.id}: the screen is not drawn (${lit()} pixels, ${before} before)`;
+        if (ex.id.replace(/^fx_/, 'pi_') === 'pi_chaser' && cmd.startsWith('./')) {
           // the example's breadboard: the LED of a lit pin lights
           const on = [3, 4, 5, 7, 8, 9, 10, 11].filter((p) => r.g.duty[p] > 0.05);
           const leds = solve(ex.piBoard, new Map(on.map((p) => [p, r.g.duty[p]])), new Set([6, 13]), new Set()).led;
@@ -795,7 +834,25 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     }
     const ok = !fail;
     if (!ok) bad++;
-    console.log(`${ok ? 'ok  ' : 'FAIL'} board examples on riscv-emu: ${ok ? res.join(', ') : fail}  (${Date.now() - t0} ms)`);
+    console.log(`${ok ? 'ok  ' : 'FAIL'} board examples on ${label}: ${ok ? res.join(', ') : fail}  (${Date.now() - t0} ms)`);
+  };
+  const rvEx = ctx.VERYL_EXAMPLES.filter((e) => e.emu && e.same_hw && !machineOf(e).fluxa);
+  if (rvEx.length && ctx.VERYL_IMAGES?.linux) {
+    const { RvMachine } = createRequire(import.meta.url)(path.join(dist, 'rv_machine.cjs'));
+    vm.runInContext(fs.readFileSync(path.join(dist, 'rvemu.js'), 'utf8'), ctx);
+    const cfg = machineOf(rvEx[0]);
+    const rm = await RvMachine.create(fromBase64(ctx.VERYL_RVEMU_B64), cfg, { jit: true });
+    for (const l of cfg.load ?? []) rm.load(await gunzip(fromBase64(ctx.VERYL_IMAGES[l.image])), l.addr ? BigInt(l.addr) : undefined);
+    rm.reset();
+    let o = '';
+    while (rm.cycle < 400_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...rm.step(1_000_000).out);
+    await boardChecks(rvEx, rm, cfg, 1, 'riscv-emu');
+  }
+  const fxEx = ctx.VERYL_EXAMPLES.filter((e) => e.emu && e.same_hw && machineOf(e).fluxa);
+  if (fxEx.length && ctx.VERYL_IMAGES?.linux) {
+    const { fm, cfg, booted } = await fluxaBoard(fxEx[0]);
+    if (!booted) { bad++; console.log('FAIL board examples on fluxa-emu: no shell'); }
+    else await boardChecks(fxEx, fm, cfg, 40, 'fluxa-emu');
   }
 }
 

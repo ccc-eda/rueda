@@ -12,9 +12,13 @@
 //             SiFive registers, pin k = PLIC source 16 + k), the finisher (0x10_0000)
 //
 //  The hart reaches the devices through a request / response pair of channels; every response
-//  brings the external interrupt lines back. What comes from outside (UART bytes, GPIO inputs) the
-//  devices ask the environment for (`env_req` / `env`): Fluxa has no non-blocking receive, so the
-//  hart polls every POLL instructions and when it waits for an interrupt.
+//  brings the external interrupt lines back. What comes from outside (UART bytes, GPIO inputs, the
+//  time) the devices ask the environment for (`env_req` / `env`): Fluxa has no non-blocking
+//  receive, so the hart polls every POLL instructions and when it waits for an interrupt (wfi),
+//  saying when its next timer is due. An environment that answers at once with time 0 (or with
+//  the timer's time when the hart waits) makes mtime count instructions, as riscv-emu does: the
+//  run is reproducible. One that answers with its clock (10 MHz) and waits when the hart does
+//  runs the machine in real time (the IDE's board).
 //
 //  This hart is one task (a multi-cycle core like Veryl's Rv64Core); fluxa/rv64/rv64.fx is the
 //  pipelined RV64G of tasks. It follows riscv/rvemu/src/cpu.rs and bus.rs.
@@ -410,11 +414,12 @@ task Hart<const RAMW: u32, const TRACE: bool>(load: in chan<(u32, u64)>,
     serial for _ in 0..H_FOREVER {
         // ── the outside: every POLL instructions (UART bytes, GPIO inputs)
         if mtime >= next_poll {
-            next_poll = (mtime + H_POLL).wrap::<u64>();
             dreq.send((D_POLL, 0, 0, 0));
-            let (_, me, se) = dresp.recv();
+            let (t, me, se) = dresp.recv();
             meip = me;
             seip = se;
+            if t > mtime { mtime = t; }
+            next_poll = (mtime + H_POLL).wrap::<u64>();
             check = true;
         }
         if mtime >= timer_next { timer_next = H_MAX; check = true; }
@@ -431,17 +436,14 @@ task Hart<const RAMW: u32, const TRACE: bool>(load: in chan<(u32, u64)>,
             if (h_mip(cs, mtime, msip, meip, seip) & cs[S_MIE]) != 0 {
                 waiting = false;
             } else {
-                // sleep until the next timer, or until something comes from outside
+                // sleep until the next timer (none: H_MAX), or until something comes from outside
                 let t = h_timer_next(cs);
-                if t == H_MAX || t <= mtime {
-                    dreq.send((D_WAIT, 0, 0, 0));
-                    let (_, me, se) = dresp.recv();
-                    meip = me;
-                    seip = se;
-                    check = true;
-                } else {
-                    mtime = t;
-                }
+                dreq.send((D_WAIT, 0, 0, if t <= mtime { H_MAX } else { t }));
+                let (now, me, se) = dresp.recv();
+                meip = me;
+                seip = se;
+                if now > mtime { mtime = now; }
+                check = true;
             }
         } else if !tk {
             // ── one instruction: fetch (one or two translations), then its data access (one)
@@ -935,12 +937,13 @@ comb fn h_exec(i: u64, a: u64, b: u64, pc: u64, next: u64, imm_i: u64) -> (bool,
 
 /// the UART, the PLIC, GPIO and the finisher (riscv/rvemu/src/bus.rs, register for register).
 /// Requests from the hart: (kind, address, size, data); each answer: (data, MEIP, SEIP).
-/// The outside: `env_req` asks it (true: wait until something comes), `env` answers
-/// (a UART byte or none, the GPIO pins driven from outside); `tx` the UART's bytes, `gpio` the pins
-/// after each change, `fin` the finisher's code.
+/// The outside: `env_req` asks it ((wait: until something comes or the time given, when the hart's
+/// next timer is due), `env` answers (a UART byte or none, the GPIO pins driven from outside, the
+/// time: 0 = mtime counts instructions); `tx` the UART's bytes, `gpio` the outputs after each change
+/// (values, output enables), `fin` the finisher's code.
 task Devices(req: in chan<(u2, u64, u4, u64)>, resp: out chan<(u64, bool, bool)>,
-             env_req: out chan<bool>, env: in chan<(bool, u8, u16)>,
-             tx: out chan<u8>, gpio: out chan<u16>, fin: out chan<u32>) {
+             env_req: out chan<(bool, u64)>, env: in chan<(bool, u8, u16, u64)>,
+             tx: out chan<u8>, gpio: out chan<(u16, u16)>, fin: out chan<u32>) {
     // UART
     let mut ier: u8 = 0;
     let mut lcr: u8 = 0;
@@ -957,7 +960,8 @@ task Devices(req: in chan<(u2, u64, u4, u64)>, resp: out chan<(u64, bool, bool)>
     // GPIO
     let mut g: [u16; 17] = [0; 17];          // the registers 0..16 (value at 0 = iv, the pins as last seen)
     let mut pins_in: u16 = 0;
-    let mut last_pins: u16 = 0;
+    let mut last_out: u16 = 0;
+    let mut last_oe: u16 = 0;
     // PLIC
     let mut prio: [u3; 32] = [0; 32];
     let mut en0: u32 = 0;
@@ -969,12 +973,13 @@ task Devices(req: in chan<(u2, u64, u4, u64)>, resp: out chan<(u64, bool, bool)>
     for (k, a, size, v) in req {
         let mut out: u64 = 0;
         if k == D_POLL || k == D_WAIT {
-            // the outside: a byte (when there is room for one) and the input pins
-            env_req.send(k == D_WAIT);
-            let (has, b, pins) = env.recv();
+            // the outside: a byte (when there is room for one), the input pins, the time
+            env_req.send((k == D_WAIT, v));
+            let (has, b, pins, now) = env.recv();
             if has && !pend { pend = true; pend_byte = b; }
             pins_in = pins;
             g = d_gpio_update(g, pins_in);
+            out = now;
         } else if (a >> 26) == 3 {
             // PLIC
             let off = a & 0x3FFFFFF;
@@ -1036,8 +1041,8 @@ task Devices(req: in chan<(u2, u64, u4, u64)>, resp: out chan<(u64, bool, bool)>
                 if r == 7 || r == 9 || r == 11 || r == 13 { g[r] = g[r] & (w ^ 0xFFFF); }
                 else if r >= 1 && r <= 16 { g[r] = w; }
                 g = d_gpio_update(g, pins_in);
-                let p = d_pins(g, pins_in);
-                if p != last_pins { last_pins = p; gpio.send(p); }
+                let o = (g[3] ^ g[16]) & 0xFFFF;
+                if o != last_out || g[2] != last_oe { last_out = o; last_oe = g[2]; gpio.send((o, g[2])); }
             }
         } else if (a >> 12) == 0x100 {
             // the finisher: a write of a non-zero low half
@@ -1096,8 +1101,8 @@ comb fn d_best(prio: [u3; 32], src: u32, claimed: u32, en: u32) -> (u32, u3) {
 
 /// the hart and the devices; the RAM gets `load`'s words first
 task Soc<const RAMW: u32, const TRACE: bool>(load: in chan<(u32, u64)>,
-        env_req: out chan<bool>, env: in chan<(bool, u8, u16)>,
-        tx: out chan<u8>, gpio: out chan<u16>, fin: out chan<u32>,
+        env_req: out chan<(bool, u64)>, env: in chan<(bool, u8, u16, u64)>,
+        tx: out chan<u8>, gpio: out chan<(u16, u16)>, fin: out chan<u32>,
         trace: out chan<(u2, u64, u32, bool, u5, u64)>) {
     let (qt, qr) = chan::<(u2, u64, u4, u64)>(depth = 1);
     let (rt, rr) = chan::<(u64, bool, bool)>(depth = 1);

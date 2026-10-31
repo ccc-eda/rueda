@@ -69,11 +69,23 @@ function fluxaCaps(i: CapInput): Record<Act, Cap> {
   const tests = hasTests(i);
   const noTests: Cap = { on: false, why: tr('這個 Fluxa 程式沒有 test 區塊，沒有東西可以測試。', 'This Fluxa program has no test block: nothing to test.') };
   const noTask = tr('沒有 task 可以合成。', 'No task to synthesize.');
+  // a machine written in Fluxa (machine.json fluxa: the Fluxa board): fluxa-emu boots it, its programs run on it
+  const m = machine(i.files);
+  if (m) {
+    const runOnBoard = !!m.files && !!i.active && boardProgram(i.active) && i.files.some(f => f.name === i.active);
+    return {
+      test: runOnBoard || tests ? { on: true } : noTests,
+      verify: tests ? { on: true } : noTests,
+      board: { on: false, why: tr('這個專案是一台模擬機（machine.json），放不進虛擬 iCEBreaker 的 FPGA。請用「🖥 模擬機」。', 'This project is a machine (machine.json): it does not fit the virtual iCEBreaker\'s FPGA. Use "🖥 Emulator".'), fix: ['emu'] },
+      emu: { on: true },
+      synth: i.top ? { on: true } : { on: false, why: noTask },
+    };
+  }
   return {
     test: tests ? { on: true } : noTests,
     verify: !tests ? noTests : i.top ? { on: true } : { on: false, why: noTask },
     board: { on: false, why: tr('Fluxa 的 task 的埠是資料流（valid / ready），不是板子的腳位；虛擬板要用 Veryl 寫的設計。可以按「⚙ 合成」看它變成的 FPGA 與晶片。', 'A Fluxa task\'s ports are streams (valid / ready), not the board\'s pins: the virtual board takes Veryl designs. "⚙ Synthesize" shows the FPGA and chip it becomes.') },
-    emu: { on: false, why: tr('模擬機要有 machine.json（Veryl 寫的機器）。', 'The emulator needs a machine.json (a machine written in Veryl).') },
+    emu: { on: false, why: tr('模擬機要有 machine.json（說明機器的頂層與要載入的映像）。範例「Fluxa 開發板」就是一台。', 'The emulator needs a machine.json (the machine\'s top and the images to load). The "Fluxa board" example is one.') },
     synth: i.top ? { on: true } : { on: false, why: noTask },
   };
 }

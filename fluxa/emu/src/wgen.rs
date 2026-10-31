@@ -270,9 +270,20 @@ impl Gen<'_> {
         }
     }
 
-    /// go to state `to` (on the stack when None), `extra` blocks deeper than the state's code
+    /// go to state `to` (on the stack when None), `extra` blocks deeper than the state's code.
+    /// A later state's code comes after the end of its block, which encloses this one: a `br`
+    /// gets there. An earlier one is a turn of the loop through the dispatch, where the budget is
+    /// looked at (every cycle of states has such an edge, so a run always comes back).
     fn goto(&mut self, to: Option<u32>, me: usize, extra: u32) {
-        if let Some(t) = to { self.f.i32c(t as i32); }
+        if let Some(t) = to {
+            if t as usize > me {
+                self.f.i32c(t as i32).set(self.s);
+                self.f.get(self.n).i32c(1).op(I32_ADD).set(self.n);
+                self.f.br(t - me as u32 - 1 + extra);
+                return;
+            }
+            self.f.i32c(t as i32);
+        }
         self.f.set(self.s);
         self.f.get(self.n).i32c(1).op(I32_ADD).tee(self.n).get(self.budget).op(I32_GE_U).if_();
         self.f.get(self.d).get(self.s).store32(0).get(self.n).ret();
@@ -296,8 +307,10 @@ impl Gen<'_> {
         match &st.term {
             Term::Goto(t) => self.goto(Some(*t), me, 0),
             Term::Branch(c, t, e) => {
-                self.f.i32c(*t as i32).i32c(*e as i32).get(lo(&self.regs, *c)).op(I64_EQZ).op(I32_EQZ).op(SELECT);
-                self.goto(None, me, 0);
+                self.f.get(lo(&self.regs, *c)).op(I64_EQZ).op(I32_EQZ).if_();
+                self.goto(Some(*t), me, 1);
+                self.f.end();
+                self.goto(Some(*e), me, 0);
             }
             Term::Halt => { self.f.get(self.d).i32c(1).store32(4); self.wait(me); }
             Term::Recv { port, closed, next } => {

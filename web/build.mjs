@@ -41,7 +41,7 @@ console.log(`rvemu.js     ${(rvWasm.length / 1e3).toFixed(0)} KB wasm`);
 // ---- examples ----
 const rd = (p) => ({ name: path.basename(p), src: fs.readFileSync(path.join(root, p), 'utf8') });
 // English titles / notes / groups (the IDE's language menu; Simplified Chinese is derived)
-const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 'RV64 開發板': 'RV64 board', Fluxa: 'Fluxa', 其他: 'Other' };
+const GROUP_EN = { 教學: 'Tutorial', 實驗: 'Labs', 'C 程式': 'C programs', 基礎: 'Basics', 時序: 'Sequential', 綜合: 'Combined', 周邊: 'Peripherals', 'RISC-V': 'RISC-V', 'RV64 開發板': 'RV64 board', 'Fluxa 開發板': 'Fluxa board', Fluxa: 'Fluxa', 其他: 'Other' };
 const EN = {
   lab_gates: { title_en: 'Breadboard lab: logic gates', note_en: 'two switches (PMOD1B, each with a pull-down) → four LEDs for AND, OR, XOR, NOT (PMOD1A, each with a series resistor); the breadboard comes wired' },
   lab_counter: { title_en: 'Lab: one press, plus one', note_en: 'each BTN1 press adds one (synchronizer + rising edge); the 8-bit count on the LED module in PMOD1A; BTN2 clears' },
@@ -103,6 +103,18 @@ const piEx = (id, dir, files, title, title_en, note, note_en, piBoard) => ({
   id, group: 'RV64 開發板', title, title_en, note, note_en, files: [...files.map((f) => `veryl/examples/rv64/apps/${dir}/${f}`), ...RV64_HW],
   synth: 'Rv64Core', asic: false, emu: true, same_hw: 'rv64_linux', machine: RV64_MACHINE, ...(piBoard ? { piBoard } : {}),
 });
+
+// the same board written in Fluxa (fluxa/rv64/linux/soc.fx), run by fluxa-emu (or riscv-emu): the same image and programs
+const FLUXA_MACHINE = { ...RV64_MACHINE, top: undefined, reset: undefined, uart: undefined, finish: undefined, ram: undefined, snapshot: undefined,
+  gpio: { out: 'gpio', oe: 'gpio', in: 'env', n: 16 }, fluxa: { top: 'Soc', params: { RAMW: 33554432, TRACE: false } } };
+const FLUXA_HW = ['fluxa/rv64/linux/soc.fx'];
+/** an example on the Fluxa board: its programs (examples/rv64/apps/DIR/...), the board written in Fluxa */
+const fxEx = (id, dir, files, title, title_en, note, note_en, piBoard) => ({
+  id, group: 'Fluxa 開發板', title, title_en, note, note_en, files: [...files.map((f) => `veryl/examples/rv64/apps/${dir}/${f}`), ...FLUXA_HW],
+  synth: 'Devices', asic: false, emu: true, same_hw: 'fx_linux', machine: FLUXA_MACHINE, ...(piBoard ? { piBoard } : {}),
+});
+const FX_NOTE = '（硬體是 fluxa/rv64/linux/soc.fx：用 Fluxa 寫的 RV64 開發板，fluxa-emu 編譯成 WebAssembly 來跑，開的是同一個 Linux）';
+const FX_NOTE_EN = ' (the hardware is fluxa/rv64/linux/soc.fx: the RV64 board written in Fluxa, compiled to WebAssembly by fluxa-emu, booting the same Linux)';
 
 const EX = [
   { id: 'tut_blinky', group: '教學', title: '第 1 課 Blinky 閃爍 LED', files: ['veryl/tutorial/src/blinky.veryl'], synth: 'Blinky', pcf: 'veryl/tutorial/icebreaker.pcf',
@@ -181,6 +193,29 @@ const EX = [
   piEx('pi_linux', 'linux', ['exercises.txt', 'hello.sh', 'count.sh', 'fruits.txt'], '開發板：Linux 指令入門', 'Board: Linux command line',
     '不碰硬體，練習 Linux 的終端機：檔案與目錄、看文字檔、管線 |、排序與統計、背景行程（&、jobs、kill）、/proc 與 /sys。照 exercises.txt 一題一題在模擬機的終端機打指令；hello.sh 按「▶ 執行」',
     'No hardware, just the Linux command line: files and directories, text files, pipes |, sorting and counting, background processes (&, jobs, kill), /proc and /sys. Follow exercises.txt in the emulator\'s terminal; press ▶ Run on hello.sh'),
+  { id: 'fx_linux', group: 'Fluxa 開發板', title: 'Fluxa 開發板：Linux + MicroPython + C + 螢幕', title_en: 'Fluxa board: Linux + MicroPython + C + screen',
+    files: ['veryl/examples/rv64/board/main.py', 'veryl/examples/rv64/board/button.py', 'veryl/examples/rv64/board/traffic.py', 'veryl/examples/rv64/board/clock.py', 'veryl/examples/rv64/board/blink.c', 'veryl/examples/rv64/board/count.c', 'veryl/examples/rv64/board/lights.c', 'veryl/examples/rv64/board/shapes.c', 'veryl/examples/rv64/board/blink.sh', 'veryl/examples/rv64/board/button.sh', ...FLUXA_HW],
+    synth: 'Devices', asic: false, emu: true, machine: FLUXA_MACHINE,
+    note: '和「RV64 開發板」同一塊板子，但硬體是用 Fluxa 寫的（soc.fx：一個 hart task 加一個周邊 task，照 riscv-emu 寫，commit log 逐條相同）。🖥 模擬機用 fluxa-emu 把它編譯成 WebAssembly，開 OpenSBI + Linux 6.12 + busybox；打開 main.py 按「▶ 執行」，其他程式和 RV64 開發板相同',
+    note_en: 'The same board as "RV64 board", but its hardware is written in Fluxa (soc.fx: a hart task and a devices task, following riscv-emu, the same commit log instruction by instruction). The emulator (🖥) compiles it to WebAssembly with fluxa-emu and boots OpenSBI + Linux 6.12 + busybox; open main.py and press ▶ Run, the other programs as on the RV64 board' },
+  fxEx('fx_chaser', 'chaser', ['chaser.py', 'chaser.c'], 'Fluxa 開發板：8 顆 LED 跑馬燈', 'Fluxa board: 8-LED chaser',
+    '麵包板上 8 顆 LED（GPIO 3、4、5、7–11）輪流亮；GPIO 6 的按鈕換速度、GPIO 13 換方向。打開 chaser.py 或 chaser.c 按「▶ 執行」' + FX_NOTE,
+    'Eight LEDs on the breadboard (GPIO 3, 4, 5, 7-11) light in turn; the button on GPIO 6 changes the speed, GPIO 13 the direction. Open chaser.py or chaser.c and press ▶ Run' + FX_NOTE_EN,
+    piBB([[3, LED_COLORS[0]], [4, LED_COLORS[1]], [5, LED_COLORS[2]], [7, LED_COLORS[3]], [8, LED_COLORS[4]], [9, LED_COLORS[5]], [10, LED_COLORS[6]], [11, LED_COLORS[7]]], [6, 13])),
+  fxEx('fx_tetris', 'tetris', ['tetris.c'], 'Fluxa 開發板：俄羅斯方塊', 'Fluxa board: Tetris',
+    'C 寫的俄羅斯方塊：麵包板上四個按鈕左移（GPIO 6）、右移（GPIO 13）、旋轉（GPIO 5）、加速落下（GPIO 12）；點一下板子後也可以用 ← → ↑ ↓' + FX_NOTE,
+    'Tetris in C: the four breadboard buttons move left (GPIO 6), right (GPIO 13), rotate (GPIO 5) and drop faster (GPIO 12); after a click on the board ← → ↑ ↓ do the same' + FX_NOTE_EN,
+    piBB([], [6, 13, 5, 12])),
+  fxEx('fx_snake', 'snake', ['snake.c'], 'Fluxa 開發板：貪食蛇', 'Fluxa board: snake',
+    '蛇自己往前走，麵包板上的兩個按鈕讓它左轉（GPIO 6）或右轉（GPIO 13），吃紅點變長' + FX_NOTE,
+    'The snake moves by itself, the two breadboard buttons turn it left (GPIO 6) or right (GPIO 13); eat the red dots to grow' + FX_NOTE_EN,
+    piBB([], [6, 13])),
+  fxEx('fx_breathe', 'breathe', ['breathe.c'], 'Fluxa 開發板：呼吸燈（軟體 PWM）', 'Fluxa board: breathing LEDs (software PWM)',
+    '用 C 快速開關 LED：開著的時間比例（工作週期）決定亮度' + FX_NOTE,
+    'C switches the LEDs on and off quickly: the share of time on (the duty cycle) sets the brightness' + FX_NOTE_EN),
+  fxEx('fx_reaction', 'reaction', ['reaction.py'], 'Fluxa 開發板：反應時間遊戲', 'Fluxa board: reaction time game',
+    '紅燈（GPIO 5）亮時等，綠燈（GPIO 13）一亮就按麵包板上的按鈕（GPIO 6），量幾毫秒' + FX_NOTE,
+    'Wait while red (GPIO 5) is on; when green (GPIO 13) lights, press the breadboard button (GPIO 6): the time in milliseconds' + FX_NOTE_EN),
   { id: 'rv32i', group: 'RISC-V', title: 'RV32I 單週期 CPU', files: ['veryl/examples/src/rv32i.veryl', 'veryl/examples/src/rv32i_rom.veryl'], synth: 'RiscvCore',
     note: 'TestRiscvCore 跑 examples/sw/rv32i_test.S（41 個結果，期望值經 spike 交叉比對）' },
   { id: 'soc', group: 'RISC-V', title: 'RISC-V SoC（FPGA）', files: ['veryl/examples/src/rv32i.veryl', 'veryl/examples/src/rv32i_rom.veryl', 'veryl/synth/examples/soc.veryl'],
@@ -253,6 +288,7 @@ await esbuild.build({ entryPoints: [path.join(here, 'src/ide/main.ts')], bundle:
 // the emulator's machine for the Node tests
 await esbuild.build({ entryPoints: [path.join(here, 'src/emu_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'emu_machine.cjs'), logLevel: 'warning' });
 await esbuild.build({ entryPoints: [path.join(here, 'src/rv_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'rv_machine.cjs'), logLevel: 'warning' });
+await esbuild.build({ entryPoints: [path.join(here, 'src/fx_machine.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'fx_machine.cjs'), logLevel: 'warning' });
 await esbuild.build({ entryPoints: [path.join(here, 'src/api.ts')], bundle: true, format: 'cjs', platform: 'node', target: 'node20', outfile: path.join(dist, 'api.cjs'), logLevel: 'warning' });
 for (const f of ['index.html', 'ide.css', 'style.css', 'ide.html']) fs.copyFileSync(path.join(here, 'static', f), path.join(dist, f));
 console.log('ide.js, api.cjs, emu_machine.cjs, index.html (IDE), ide.css, style.css, ide.html (redirect)');

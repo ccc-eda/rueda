@@ -12,7 +12,7 @@ import { newModule, projectZip } from '../templates';
 import { WaveView } from '../wave';
 import { saveAs } from '../zip';
 import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
-import { Emulator, EmuStart } from './emu';
+import { Emulator, EmuStart, Engine } from './emu';
 import { fingerprint, MachineCfg, machineStops } from '../emu_machine';
 import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
@@ -45,7 +45,7 @@ interface Project {
   /** the development board's breadboard (emulator, machine.json "board": "pi") */
   piBoard?: import('./bbmodel').Part[];
   /** the emulator's engine for a machine riscv-emu can run (machine.json "riscv") */
-  emuEngine?: 'veryl' | 'riscv';
+  emuEngine?: Engine;
   /** the suggested steps bar was closed */
   guideOff?: boolean;
   /** the target clock (MHz) of the synthesis flows, when the project has no .sdc file */
@@ -1068,8 +1068,9 @@ const flowPdk = (): 'vlib' | 'sky130' => synthValue() === 'sky130' ? 'sky130' : 
 function syncTarget(): void {
   const sel = $<HTMLSelectElement>('flowTarget');
   const cfg = machineCfg();
-  (sel.querySelector('[value="emu-veryl"]') as HTMLOptionElement).disabled = !cfg;
+  (sel.querySelector('[value="emu-veryl"]') as HTMLOptionElement).disabled = !cfg || !!cfg.fluxa;
   (sel.querySelector('[value="emu-riscv"]') as HTMLOptionElement).disabled = !cfg?.riscv;
+  (sel.querySelector('[value="emu-fluxa"]') as HTMLOptionElement).disabled = !cfg?.fluxa;
   const want = proj.active === EMU_TAB && cfg ? `emu-${emuEngine()}` : synthValue();
   if (sel.value !== want) sel.value = want;
 }
@@ -1120,7 +1121,7 @@ function machineCfg(): MachineCfg | null {
 
 /** the project's files for the board (not the hardware: Veryl, machine.json, pins) and programs as an exchange area */
 function projectArea(programs: { name: string; src: Uint8Array; mode: number }[] = []): Uint8Array {
-  const fs = proj.files.filter(f => !f.name.endsWith('.veryl') && f.name !== 'machine.json' && !f.name.endsWith('.pcf'));
+  const fs = proj.files.filter(f => !f.name.endsWith('.veryl') && !f.name.endsWith('.fx') && f.name !== 'machine.json' && !f.name.endsWith('.pcf'));
   return exchangeArea(tarFiles([...fs, ...programs]));
 }
 
@@ -1202,7 +1203,8 @@ function ensureEmu(): Emulator {
     emu.getParts = () => proj.piBoard ?? null;
     emu.getRun = boardRun;
     emu.getRunFiles = boardRunFiles;
-    emu.getEngine = () => (machineCfg()?.riscv ? emuEngine() : null);
+    emu.getEngine = () => (emuEngines().length > 1 ? emuEngine() : null);
+    emu.getEngines = () => emuEngines();
     emu.onEngine = (e) => { proj.emuEngine = e; persist(); syncTarget(); };
     emu.getFiles = projectArea;
     emu.onFilesBack = filesBack;
@@ -1282,8 +1284,8 @@ function synthOn(v: string, stage?: string): void {
 }
 
 /** boot the machine on an engine (a running machine of the other engine boots again) */
-function bootEngine(engine: 'veryl' | 'riscv'): void {
-  if (machineCfg()?.riscv) proj.emuEngine = engine;
+function bootEngine(engine: Engine): void {
+  if (emuEngines().length > 1) proj.emuEngine = engine;
   persist();
   const e = ensureEmu();
   openFile(EMU_TAB);
@@ -1312,7 +1314,10 @@ function menuItems(): [string, MenuItem[]][] {
     ]],
     [tr('跑起來', 'Run it'), [
       { act: 'board', label: actName('board'), hint: actHint('board', ci), run: flashBoard },
-      ...(mc?.riscv
+      ...(mc?.fluxa
+        ? [{ act: 'emu' as Act, label: tr('🖥 模擬機 · fluxa-emu（Fluxa 寫的硬體）', '🖥 Emulator · fluxa-emu (the hardware in Fluxa)'), hint: tr('你的 Fluxa 電路編譯成 WebAssembly 來跑：改了硬體用這個', 'your Fluxa circuit compiled to WebAssembly: use it after changing the hardware'), run: () => bootEngine('fluxa') },
+          ...(mc.riscv ? [{ act: 'emu' as Act, label: tr('🖥 模擬機 · riscv-emu（指令集，快）', '🖥 Emulator · riscv-emu (instruction set, fast)'), hint: tr('像 QEMU：只模擬指令集，寫程式用', 'like QEMU: the instruction set only, for writing software'), run: () => bootEngine('riscv'), alt: true }] : [])]
+        : mc?.riscv
         ? [{ act: 'emu' as Act, label: tr('🖥 模擬機 · riscv-emu（指令集，快）', '🖥 Emulator · riscv-emu (instruction set, fast)'), hint: tr('像 QEMU：開機幾秒，寫程式用', 'like QEMU: boots in seconds, for writing software'), run: () => bootEngine('riscv') },
           { act: 'emu' as Act, label: tr('🖥 模擬機 · veryl-emu（硬體本身）', '🖥 Emulator · veryl-emu (the hardware itself)'), hint: tr('你的 Veryl 電路一拍一拍地跑：改了硬體用這個', 'your Veryl circuit cycle by cycle: use it after changing the hardware'), run: () => bootEngine('veryl'), alt: true }]
         : [{ act: 'emu' as Act, label: actName('emu'), hint: actHint('emu', ci), run: openEmu }]),
@@ -1467,8 +1472,17 @@ function openEmu(): void {
   if (!e.running) e.boot();
 }
 
-/** the emulator's engine: riscv-emu (instruction set, fast) where it can run the machine, else veryl-emu (the hardware) */
-function emuEngine(): 'veryl' | 'riscv' { return machineCfg()?.riscv ? proj.emuEngine ?? 'riscv' : 'veryl'; }
+/** the engines that can run the project's machine: a Fluxa board on fluxa-emu (and riscv-emu), a Veryl one on veryl-emu (and riscv-emu) */
+function emuEngines(): Engine[] {
+  const c = machineCfg();
+  if (!c) return [];
+  return c.fluxa ? (c.riscv ? ['fluxa', 'riscv'] : ['fluxa']) : (c.riscv ? ['riscv', 'veryl'] : ['veryl']);
+}
+/** the emulator's engine: the project's choice, else riscv-emu (instruction set, fast) for a Veryl board, fluxa-emu for a Fluxa one */
+function emuEngine(): Engine {
+  const can = emuEngines();
+  return proj.emuEngine && can.includes(proj.emuEngine) ? proj.emuEngine : can[0] ?? 'veryl';
+}
 
 declare const VERYL_RVEMU_B64: string | undefined;
 /** riscv-emu's wasm (rvemu.js, loaded when first needed) */
@@ -1491,6 +1505,24 @@ async function startEmu(): Promise<EmuStart | null> {
   if (!f) throw new Error(tr('這個專案沒有 machine.json：模擬機要知道頂層模組、重設、UART、RAM 等腳位（可以參考範例「RV64 + Linux」）', 'This project has no machine.json: the emulator needs the top module, the reset, UART and RAM ports (see the example "RV64 + Linux")'));
   let cfg: MachineCfg;
   try { cfg = JSON.parse(f.src); } catch (e) { throw new Error('machine.json: ' + (e as Error).message); }
+  if (emuEngine() === 'fluxa' && cfg.fluxa) {
+    // fluxa-emu: the board written in Fluxa compiled to WebAssembly
+    setBusy(true, tr('🖥 fluxa-emu 編譯中…', '🖥 fluxa-emu compiling…'));
+    try {
+      const files = proj.files.filter(x => x.name.endsWith('.fx'));
+      const r = await core.call<{ wasm: string; meta: object; stats: string }>({ cmd: 'fluxa_emu_compile', files, top: cfg.fluxa.top, params: cfg.fluxa.params ?? {} });
+      const images: EmuStart['images'] = [];
+      for (const l of cfg.load ?? []) images.push({ bytes: await image(l.image), addr: l.addr });
+      emuFp = `fluxa-emu:${r.wasm.length}`;
+      let snap: EmuStart['snap'];
+      const saved = await idbGet<{ fingerprint: string; cycle: number; log: string; data: Uint8Array }>(`state:${proj.id}`);
+      if (saved && saved.fingerprint === emuFp) snap = { data: await gunzip(saved.data), cycle: saved.cycle, log: saved.log, from: 'saved' };
+      $('sbTest').textContent = tr('🖥 模擬機開機（fluxa-emu）', '🖥 Emulator booted (fluxa-emu)');
+      return { engine: 'fluxa', wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: `fluxa-emu: ${r.stats}`, snap, files: cfg.files ? projectArea() : undefined };
+    } finally {
+      setBusy(false);
+    }
+  }
   if (emuEngine() === 'riscv') {
     // riscv-emu: the board's programs on the instruction-set emulator (the Veryl source is not used); a cold boot takes seconds
     const wasm = await rvWasm();
@@ -1833,7 +1865,7 @@ function wire(): void {
     const v = $<HTMLSelectElement>('flowTarget').value;
     if (v.startsWith('emu-')) {
       // an emulator: open it with that engine (a running machine of the other engine boots again)
-      bootEngine(v.slice(4) as 'veryl' | 'riscv');
+      bootEngine(v.slice(4) as Engine);
       return;
     }
     if (proj.active === EMU_TAB) { openFile(FLOW_TAB); }

@@ -29,6 +29,9 @@ export interface MachineCfg {
   fb?: { addr: string; width: number; height: number };
   /** the design is Rv64Soc: riscv-emu (rv_machine.ts) can run its programs instead of veryl-emu */
   riscv?: boolean;
+  /** the machine is a Fluxa network (fluxa-emu, fx_machine.ts): its task (instead of `top`) and the
+   *  parameters it is compiled with (an integer, a bool or a Fluxa expression) */
+  fluxa?: { top: string; params?: Record<string, number | boolean | string> };
 }
 
 /** a bundled or saved machine state: the memory (gzip of `Machine.snapshot()`), the cycle, the terminal so far */

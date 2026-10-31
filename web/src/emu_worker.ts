@@ -1,5 +1,6 @@
-// The emulator's worker: runs a Machine (emu_machine.ts: veryl-emu's model of the design)
-// or an RvMachine (rv_machine.ts: riscv-emu, engine 'riscv') in slices of about 50 ms,
+// The emulator's worker: runs a Machine (emu_machine.ts: veryl-emu's model of the design),
+// an RvMachine (rv_machine.ts: riscv-emu, engine 'riscv') or a FluxaMachine (fx_machine.ts:
+// fluxa-emu, engine 'fluxa') in slices of about 50 ms,
 // sends the UART output and the speed, takes typed bytes and pause / resume / reset.
 //   in:  {type: 'start', engine?, wasm, meta, cfg, images: [{bytes, addr?}], snapshot?, cycle?, files?} | {type: 'input', bytes}
 //        {type: 'files', area} (the project's files into the exchange area, then getfiles is typed)
@@ -12,8 +13,9 @@
 
 import { Machine } from './emu_machine';
 import { RvMachine } from './rv_machine';
+import { FluxaMachine } from './fx_machine';
 
-let m: Machine | RvMachine | null = null;
+let m: Machine | RvMachine | FluxaMachine | null = null;
 let images: { bytes: Uint8Array; addr?: string }[] = [];
 let running = false;
 let gen = 0;
@@ -86,7 +88,9 @@ self.onmessage = async (e: MessageEvent) => {
     if (d.type === 'start') {
       gen++;
       running = false;
-      m = d.engine === 'riscv' ? await RvMachine.create(d.wasm, d.cfg, { realtime: true, jit: true }) : await Machine.create(d.wasm, d.meta, d.cfg);
+      m = d.engine === 'riscv' ? await RvMachine.create(d.wasm, d.cfg, { realtime: true, jit: true })
+        : d.engine === 'fluxa' ? await FluxaMachine.create(d.wasm, d.meta, d.cfg, { realtime: true })
+        : await Machine.create(d.wasm, d.meta, d.cfg);
       images = d.images;
       files = d.files ?? null;
       tail = '';

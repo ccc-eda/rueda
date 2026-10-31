@@ -125,4 +125,49 @@ reda synth --list fluxa/examples/pipeline.fx        # the tasks that can be synt
   virtual board does not take Fluxa (its ports are streams, not the board's pins). The example "FIR filter (4 taps)"
   fits an iCE40; "A network of tasks as one circuit" shows a network.
 
+## fluxa-emu: compiled before it runs
+
+The Fluxa simulator is an interpreter (every operation walks the syntax tree, variables are looked up in hash
+tables): about ten thousand RV64 instructions a second. **fluxa-emu** (`fluxa/emu`) compiles first, as veryl-emu
+does: a task is cut into states as synthesis cuts it (every channel operation is a boundary), the operations in a
+state use 64- or 128-bit registers as their value ranges need, a task's variables live in a frame, channels are ring
+buffers in memory; the result is WebAssembly.
+
+```sh
+reda emu fluxa/examples/fir.fx                      # the tests, with the tasks compiled (the results must be the simulator's)
+reda emu --top Core fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx fluxa/rv64/tests_basic.fx
+reda emu -o core.wasm --top Core --param WBD=8 --param TLBN=8 --param 'data=dimage([])' \
+     --param 'prog=image([addi(1, 0, 5), ecall()])' fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx
+```
+
+- As strict as the simulator: a value that does not fit its type, an index out of bounds, a division by zero fail the test.
+- `-o` writes the WebAssembly module and a JSON file (where the channels and memories are); `fluxa/emu/js/emu.mjs`
+  is the harness for Node and browsers.
+- Checked: `fluxa/emu/tests/agree.rs` runs every test of the examples, RV32I and RV64 both ways, with the same
+  results; `fluxa/emu/tests/wasm.sh` records the Rust executor's tokens in and out and replays them on WebAssembly.
+- Speed: the pipelined RV64 runs about 2.3 M instructions a second in Node; an RV64 loop the simulator needs
+  1,247 s for takes fluxa-emu under 2 s.
+
+## The Fluxa board: Linux on an RV64 written in Fluxa
+
+`fluxa/rv64/linux/soc.fx` is the RV64 board written in Fluxa, with the memory map and instruction set of Veryl's
+Rv64Soc, so it boots the same image (OpenSBI + Linux 6.12 + busybox + MicroPython):
+
+- `Hart`: one task is a multi-cycle RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu, M / S / U, Sv39 (a 512-entry
+  TLB), with the RAM and the CLINT; written after riscv-emu, `TRACE` sends its commit log.
+- `Devices`: the UART, the PLIC, GPIO, the finisher. Input from outside (keys, buttons) and the time come from a
+  pair of channels asking the outside: Fluxa has no non-blocking recv, so the hart asks every 16384 instructions and,
+  when it waits for an interrupt (wfi), says when its next timer is due.
+
+```sh
+reda emu -o soc.wasm --top Soc --param RAMW=33554432 --param TRACE=false fluxa/rv64/linux/soc.fx
+node fluxa/rv64/linux/boot.mjs soc.wasm fw_payload.bin --script cmds.txt     # boot, type cmds.txt's lines at the prompt
+fluxa/rv64/linux/test.sh                       # the first million instructions: riscv-emu's commit log line for line; the shell
+```
+
+The shell comes after about 84.5 M instructions, under 10 s in Node. The web IDE's example library has a "Fluxa board"
+group: Linux + MicroPython + C, the 8-LED chaser, Tetris, snake, breathing LEDs, the reaction game, with the RV64
+board's programs; the emulator (🖥) runs on fluxa-emu (the hardware itself, in real time) or riscv-emu (the
+instruction set).
+
 Design and progress: `fluxa/docs/synthesis-plan.md`.
