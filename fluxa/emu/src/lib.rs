@@ -10,6 +10,8 @@ pub mod emit;
 pub mod exec;
 pub mod ir;
 pub mod opt;
+pub mod wasm;
+pub mod wgen;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
@@ -200,7 +202,20 @@ impl Provider {
     }
 }
 
-struct Running { ex: exec::Exec, ins: Vec<u32>, outs: Vec<u32>, closed_sent: Vec<bool> }
+struct Running { ex: exec::Exec, ins: Vec<u32>, outs: Vec<u32>, closed_sent: Vec<bool>, rec: Option<Record> }
+
+/// FLUXA_EMU_RECORD=DIR: each machine's module and the tokens that went in and out
+/// (`js/replay.mjs DIR` feeds the inputs to the WebAssembly module and compares the outputs)
+struct Record { path: String, ins: Vec<Vec<String>>, outs: Vec<Vec<String>> }
+
+impl Drop for Record {
+    fn drop(&mut self) {
+        let list = |v: &Vec<Vec<String>>| v.iter().map(|s| format!("[{}]", s.join(","))).collect::<Vec<_>>().join(",");
+        let _ = std::fs::write(&self.path, format!("{{\"ins\":[{}],\"outs\":[{}]}}\n", list(&self.ins), list(&self.outs)));
+    }
+}
+
+fn tok_text(vs: &[i128]) -> String { format!("[{}]", vs.iter().map(|v| format!("\"{}\"", v)).collect::<Vec<_>>().join(",")) }
 
 impl HwTask for Running {
     fn cycle(&mut self, offer: &[Option<HwTok>], room: &[bool]) -> (Vec<bool>, Vec<Option<HwTok>>, bool) {
@@ -208,9 +223,9 @@ impl HwTask for Running {
         for (k, o) in offer.iter().enumerate() {
             let c = self.ins[k];
             match o {
-                Some(HwTok::Close) => { if !self.ex.closed(c) { self.ex.close(c); taken[k] = true; } }
-                Some(HwTok::Data(v)) if self.ex.room(c) => { self.ex.push(c, &[*v]); taken[k] = true; }
-                Some(HwTok::Tuple(vs)) if self.ex.room(c) => { self.ex.push(c, vs); taken[k] = true; }
+                Some(HwTok::Close) => { if !self.ex.closed(c) { self.ex.close(c); taken[k] = true; if let Some(r) = &mut self.rec { r.ins[k].push("\"close\"".into()); } } }
+                Some(HwTok::Data(v)) if self.ex.room(c) => { self.ex.push(c, &[*v]); taken[k] = true; if let Some(r) = &mut self.rec { r.ins[k].push(tok_text(&[*v])); } }
+                Some(HwTok::Tuple(vs)) if self.ex.room(c) => { self.ex.push(c, vs); taken[k] = true; if let Some(r) = &mut self.rec { r.ins[k].push(tok_text(vs)); } }
                 _ => {}
             }
         }
@@ -220,7 +235,8 @@ impl HwTask for Running {
             if !*r { continue; }
             let c = self.outs[k];
             match self.ex.pop(c) {
-                Some(vs) => sent[k] = Some(if vs.len() == 1 && self.ex.m.chans[c as usize].leaves.len() == 1 { HwTok::Data(vs[0]) } else { HwTok::Tuple(vs) }),
+                Some(vs) => sent[k] = Some({ if let Some(r) = &mut self.rec { r.outs[k].push(tok_text(&vs)); }
+                    if vs.len() == 1 && self.ex.m.chans[c as usize].leaves.len() == 1 { HwTok::Data(vs[0]) } else { HwTok::Tuple(vs) } }),
                 None => if self.ex.closed(c) && !self.closed_sent[k] { sent[k] = Some(HwTok::Close); self.closed_sent[k] = true; },
             }
         }
@@ -228,6 +244,8 @@ impl HwTask for Running {
     }
     fn error(&self) -> Option<String> { self.ex.error.clone() }
 }
+
+static RECORDED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl HwProvider for Provider {
     fn start(&self, task: &str, args: &[(String, Value)]) -> Option<Result<Box<dyn HwTask>, String>> {
@@ -259,7 +277,14 @@ impl HwProvider for Provider {
                 let ins = m.ins.iter().map(|x| x.1).collect();
                 let outs: Vec<u32> = m.outs.iter().map(|x| x.1).collect();
                 let n = outs.len();
-                Some(Ok(Box::new(Running { ex: exec::Exec::new(m), ins, outs, closed_sent: vec![false; n] })))
+                let rec = std::env::var("FLUXA_EMU_RECORD").ok().map(|dir| {
+                    let k = RECORDED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let w = wgen::compile(&m);
+                    let _ = std::fs::write(format!("{}/m{}_{}.wasm", dir, std::process::id(), k), &w.wasm);
+                    let _ = std::fs::write(format!("{}/m{}_{}.json", dir, std::process::id(), k), &w.json);
+                    Record { path: format!("{}/m{}_{}.streams.json", dir, std::process::id(), k), ins: vec![vec![]; m.ins.len()], outs: vec![vec![]; n] }
+                });
+                Some(Ok(Box::new(Running { ex: exec::Exec::new(m), ins, outs, closed_sent: vec![false; n], rec })))
             }
             Err(e) => {
                 self.note(task, Err(e.clone()));

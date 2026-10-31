@@ -2,7 +2,8 @@
 # Test the whole project; every step runs even after a failure, with a summary at the end.
 #
 #   ./test.sh          what CI runs: cargo test of the whole workspace (eda, riscv, veryl, fluxa, reda),
-#                      reda sim on an example, the tutorial's flow, reda emu's check, the Fluxa processors,
+#                      reda sim on an example, the tutorial's flow, reda emu's check, the Fluxa processors
+#                      (and fluxa-emu's WebAssembly replaying them),
 #                      the RV64 emulator's JIT in WebAssembly, npm test, the IDE end to end in Chrome (npm run e2e)
 #   ./test.sh --full   + veryl/synth/test.sh: yosys formal equivalence with `veryl build`, the FPGA flows
 #                        and the own place & route's co-simulation (needs OSS CAD Suite; tens of minutes)
@@ -72,6 +73,8 @@ fi
 fluxa_cpus() {
     "$ROOT/fluxa/rv32i.sh"
     "$ROOT/fluxa/rv64.sh"
+    # fluxa-emu: its WebAssembly modules replay the executor's runs
+    if command -v node > /dev/null; then "$ROOT/fluxa/emu/tests/wasm.sh"; fi
 }
 run fluxa fluxa_cpus
 

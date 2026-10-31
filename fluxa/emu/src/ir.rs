@@ -149,6 +149,35 @@ impl Machine {
     }
 }
 
+/// where everything is in memory (the executor's and the WebAssembly module's alike): a control
+/// word (the instance that stopped the program), then each instance's descriptor (state, halted,
+/// frame, the trap it stopped at + 1, then the address of the channel behind each port), the
+/// frames, the channels (count, head, closed, depth, then `depth` tokens of `tok` bytes)
+#[derive(Clone, Debug)]
+pub struct Layout {
+    pub desc: Vec<u32>,
+    pub frames: Vec<u32>,
+    pub chans: Vec<u32>,
+    pub tok: Vec<u32>,
+    pub size: u32,
+}
+
+/// a channel's header bytes
+pub const CHAN_HDR: u32 = 16;
+
+pub fn tok_size(leaves: &[K]) -> u32 { leaves.iter().map(|k| k.size()).sum::<u32>().max(8) }
+
+pub fn layout(m: &Machine) -> Layout {
+    let mut at: u32 = 16;
+    let mut desc = vec![];
+    for i in &m.insts { desc.push(at); at += (16 + 4 * i.chans.len() as u32).next_multiple_of(16); }
+    let mut frames = vec![];
+    for i in &m.insts { frames.push(at); at += m.codes[i.code].frame.max(16).next_multiple_of(16); }
+    let (mut chans, mut tok) = (vec![], vec![]);
+    for c in &m.chans { chans.push(at); let t = tok_size(&c.leaves); tok.push(t); at += (CHAN_HDR + t * c.depth).next_multiple_of(16); }
+    Layout { desc, frames, chans, tok, size: at }
+}
+
 /// the code as text, one operation a line (FLUXA_EMU_DUMP)
 pub fn dump(c: &Code) -> String {
     fn ops(out: &mut String, os: &[Op], ind: usize, regs: &[K]) {

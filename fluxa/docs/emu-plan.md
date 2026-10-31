@@ -42,7 +42,7 @@ flowchart LR
 | 版本 | 內容 | 驗證 |
 |---|---|---|
 | E1 ✓ | crate `fluxa/emu`：elab、emit、opt、Rust 執行器、`reda emu x.fx` | 所有範例、RV32I、RV64（basic、mmu、amo、fp、irq、system）每個 test 與模擬器相同；37 萬條指令的 RV64 迴圈：模擬器 1,247 秒，執行器 30 秒 |
-| E2 | WebAssembly 後端、Node 測試平台（`fluxa/emu/js`）、`reda emu -o x.wasm` | 錄下每台機器的輸入、輸出 token，wasm 重播後輸出相同；速度 |
+| E2 ✓ | WebAssembly 後端（`wgen.rs`：每個程式碼一個 `step` 函式，`br_table` 跳到狀態；128 位元的乘、移位、除是輔助函式）、Node 測試平台（`fluxa/emu/js/emu.mjs`）、`reda emu -o x.wasm` | `fluxa/emu/tests/wasm.sh`：範例、RV32I、RV64 共 222 台機器，錄下執行器的輸入、輸出 token，wasm 重播後輸出相同；RV64 在 Node 上每秒約 234 萬條指令（Rust 執行器的 17 倍） |
 | E3 | 加速：等待迴圈、變數留在暫存器、排程 | RV64 每秒百萬個指令級 |
 | L1 | Fluxa RV64 開 Linux：共用 RAM、C 擴充、CLINT / PLIC / UART / GPIO / 螢幕 / 關機裝置 | OpenSBI + Linux 開到 shell |
 | L2 | IDE：Fluxa 開發板範例、模擬機引擎 fluxa-emu | npm test、瀏覽器實測 |

@@ -5,7 +5,7 @@
 
 use crate::ir::*;
 
-const HDR: u32 = 16;
+const HDR: u32 = CHAN_HDR;
 
 pub struct Exec {
     pub m: Machine,
@@ -46,17 +46,12 @@ fn wr(mem: &mut [u8], a: usize, k: K, v: i128) {
 fn u32at(mem: &[u8], a: usize) -> u32 { u32::from_le_bytes(mem[a..a + 4].try_into().unwrap()) }
 fn set32(mem: &mut [u8], a: usize, v: u32) { mem[a..a + 4].copy_from_slice(&v.to_le_bytes()); }
 
-pub fn tok_size(leaves: &[K]) -> u32 { leaves.iter().map(|k| k.size()).sum::<u32>().max(8) }
-
 impl Exec {
     pub fn new(m: Machine) -> Exec {
-        let mut at: u32 = 0;
-        let mut frames = vec![];
-        for i in &m.insts { frames.push(at); at += m.codes[i.code].frame.max(16).next_multiple_of(16); }
-        let mut chans = vec![];
-        let mut tok = vec![];
-        for c in &m.chans { chans.push(at); let t = tok_size(&c.leaves); tok.push(t); at += (HDR + t * c.depth).next_multiple_of(16); }
-        let mut mem = vec![0u8; at as usize];
+        let l = layout(&m);
+        let (frames, chans, tok) = (l.frames, l.chans, l.tok);
+        let mut mem = vec![0u8; l.size as usize];
+        for (k, c) in m.chans.iter().enumerate() { set32(&mut mem, chans[k] as usize + 12, c.depth); }
         for (i, inst) in m.insts.iter().enumerate() {
             let code = &m.codes[inst.code];
             let f = frames[i] as usize;
