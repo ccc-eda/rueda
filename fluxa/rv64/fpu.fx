@@ -442,3 +442,227 @@ comb fn fma_op(inst: u32, a: u64, b: u64, c: u64) -> (u64, u5) {
     let negc = op == 0x47 || op == 0x4F;
     boxed(d, ffma(d, unbox(d, a), unbox(d, b), unbox(d, c), inst[14:12], negp, negc))
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//  多週期 FPU（合成用的硬體版本）
+//
+//  Fpu task 收 (指令字, rs1, rs2, rs3)、回 (結果, fflags)，與 fp_op / fma_op 逐位元相同
+//  （tests_fpu.fx 的每個向量兩者都跑）。上面的 comb fn 是參考模型：每個呼叫都是一份組合
+//  邏輯，整個 fp_op 做成一個時脈太大。這裡：
+//    • 特殊值（NaN、∞、0）與不需要大運算的指令在一個時脈算完；
+//    • 乘法 53 拍（移位相加）、除法 116 拍（恢復式除法）、開方 60 拍（逐位開方），
+//      都是 serial for：一拍一次迭代；
+//    • 精確加法（add_h）與捨入（round_pack）全 task 只有一份，所有運算共用。
+//  寫法讓合成器能證明位移量非負（norm116h、jamh 依條件分支）。
+// ════════════════════════════════════════════════════════════════════════════
+
+/// norm116 的硬體版：位移量由 `bl <= 116` 界定（呼叫者保證 sig 不超過 116 位）
+comb fn norm116h(sig: u120, e: i32) -> (u120, i32) {
+    let bl = bitlen(sig);
+    if bl <= 116 { (sig << (116 - bl), e - (116 - bl)) } else { (sig, e) }
+}
+
+/// jam 的硬體版（k ≥ 0）
+comb fn jamh(x: u120, k: i32) -> u120 {
+    if k <= 0 { x }
+    else if k > 118 { if x != 0 { 1 } else { 0 } }
+    else {
+        let q = x >> k;
+        q | (if (q << k) != x { 1 } else { 0 })
+    }
+}
+
+/// add_core 的精確加法部分：(精確相消, 符號, 指數, 有效數)，捨入由呼叫者做
+comb fn add_h(sx: bool, x: u120, ex: i32, sy: bool, y: u120, ey: i32) -> (bool, bool, i32, u120) {
+    let (nx, nex) = norm116h(x, ex);
+    let (ny, ney) = norm116h(y, ey);
+    let dd = nex - ney;
+    let mut eb = nex;
+    let mut xa = nx;
+    let mut ya = ny;
+    if dd >= 0 { ya = jamh(ny, dd); } else { eb = ney; xa = jamh(nx, 0 - dd); }
+    let v = (if sx { 0 - xa } else { xa }) + (if sy { 0 - ya } else { ya });
+    (v == 0, v < 0, eb, if v < 0 { 0 - v } else { v })
+}
+
+task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
+    for (inst, a, b, c) in req {
+        let op = inst[6:0];
+        let f5 = inst[31:27];
+        let d = inst[25:25] == 1;
+        let rm = inst[14:12];
+        let rs2 = inst[24:20];
+        let ua = unbox(d, a);
+        let ub = unbox(d, b);
+        let uc = unbox(d, c);
+        let ca = fcls(d, ua);
+        let cb = fcls(d, ub);
+        let cc = fcls(d, uc);
+        let sa = fneg(d, ua);
+        let sb = fneg(d, ub);
+        let ea = fexp(d, ua);
+        let eb = fexp(d, ub);
+        let ma = fsig(d, ua);
+        let mb = fsig(d, ub);
+
+        // 第一段：結果 (res, fl)，或要做的事
+        //   job：0 = 完成、1 = 捨入 (s, e, sig)、2 = 精確加法 (s, sig, e) + (sy, y, ey) 後捨入
+        //   乘法 sig = mx × my；除法 sig = na / dv（加 sticky）；開方 sig = isqrt(n1)（加 sticky）
+        let mut res: u64 = 0;
+        let mut fl: u5 = 0;
+        let mut boxit = true;
+        let mut job: u2 = 0;
+        let mut s = false;
+        let mut e: i32 = 0;
+        let mut sig: u120 = 0;
+        let mut sy = false;
+        let mut y: u120 = 0;
+        let mut ey: i32 = 0;
+        let mut mul = false;
+        let mut mx: u120 = 0;
+        let mut my: u64 = 0;
+        let mut div = false;
+        let mut na: u120 = 0;
+        let mut dv: u120 = 0;
+        let mut sqrt = false;
+        let mut n1: u120 = 0;
+        if op != 0x53 {
+            // FMADD / FMSUB / FNMSUB / FNMADD（ffma）
+            let negp = op == 0x4B || op == 0x4F;
+            let negc = op == 0x47 || op == 0x4F;
+            let sp = (sa != sb) != negp;
+            let sc = fneg(d, uc) != negc;
+            let inv_mul = (ca == 2 && cb == 0) || (ca == 0 && cb == 2);
+            if ca >= 3 || cb >= 3 || cc >= 3 {
+                res = fqnan(d);
+                fl = if ca == 4 || cb == 4 || cc == 4 || inv_mul { FL_NV } else { 0 };
+            }
+            else if inv_mul { res = fqnan(d); fl = FL_NV; }
+            else if ca == 2 || cb == 2 {
+                if cc == 2 && sc != sp { res = fqnan(d); fl = FL_NV; } else { res = finf(d, sp); }
+            }
+            else if cc == 2 { res = finf(d, sc); }
+            else if ca == 0 || cb == 0 {
+                if cc == 0 { res = fzero(d, if sp == sc { sp } else { rm == RM_RDN }); }
+                else { job = 1; s = sc; e = fexp(d, uc); sig = fsig(d, uc); }
+            }
+            else if cc == 0 { job = 1; mul = true; s = sp; e = ea + eb; mx = ma; my = mb; }
+            else { job = 2; mul = true; s = sp; e = ea + eb; mx = ma; my = mb; sy = sc; y = fsig(d, uc); ey = fexp(d, uc); }
+        } else if f5 <= 0x01 {
+            // fadd / fsub
+            let sb2 = sb != (f5 == 0x01);
+            if ca >= 3 || cb >= 3 { res = fqnan(d); fl = if ca == 4 || cb == 4 { FL_NV } else { 0 }; }
+            else if ca == 2 && cb == 2 { if sa != sb2 { res = fqnan(d); fl = FL_NV; } else { res = finf(d, sa); } }
+            else if ca == 2 { res = finf(d, sa); }
+            else if cb == 2 { res = finf(d, sb2); }
+            else if ca == 0 && cb == 0 { res = fzero(d, if sa == sb2 { sa } else { rm == RM_RDN }); }
+            else if ca == 0 { job = 1; s = sb2; e = eb; sig = mb; }
+            else if cb == 0 { job = 1; s = sa; e = ea; sig = ma; }
+            else { job = 2; s = sa; sig = ma; e = ea; sy = sb2; y = mb; ey = eb; }
+        } else if f5 == 0x02 {
+            // fmul
+            let sp = sa != sb;
+            if ca >= 3 || cb >= 3 { res = fqnan(d); fl = if ca == 4 || cb == 4 { FL_NV } else { 0 }; }
+            else if (ca == 2 && cb == 0) || (ca == 0 && cb == 2) { res = fqnan(d); fl = FL_NV; }
+            else if ca == 2 || cb == 2 { res = finf(d, sp); }
+            else if ca == 0 || cb == 0 { res = fzero(d, sp); }
+            else { job = 1; mul = true; s = sp; e = ea + eb; mx = ma; my = mb; }
+        } else if f5 == 0x03 {
+            // fdiv
+            let sp = sa != sb;
+            if ca >= 3 || cb >= 3 { res = fqnan(d); fl = if ca == 4 || cb == 4 { FL_NV } else { 0 }; }
+            else if (ca == 2 && cb == 2) || (ca == 0 && cb == 0) { res = fqnan(d); fl = FL_NV; }
+            else if ca == 2 { res = finf(d, sp); }
+            else if cb == 0 { res = finf(d, sp); fl = FL_DZ; }
+            else if ca == 0 || cb == 2 { res = fzero(d, sp); }
+            else {
+                let (n, en) = norm116h(ma, ea);
+                job = 1; div = true; s = sp; na = n; dv = mb; e = en - eb - 1;
+            }
+        } else if f5 == 0x0B {
+            // fsqrt
+            if ca >= 3 { res = fqnan(d); fl = if ca == 4 { FL_NV } else { 0 }; }
+            else if ca == 0 { res = ua; }
+            else if sa { res = fqnan(d); fl = FL_NV; }
+            else if ca == 2 { res = ua; }
+            else {
+                let (n0, e0) = norm116h(ma, ea);
+                let odd = (e0 & 1) != 0;
+                job = 1; sqrt = true;
+                n1 = if odd { n0 >> 1 } else { n0 };
+                e = ((if odd { e0 + 1 } else { e0 }) >> 1) - 1;
+            }
+        } else if f5 == 0x04 { res = fsgnj(d, ua, ub, rm); }
+        else if f5 == 0x05 { let r = fminmax(d, ua, ub, rm == 1); res = r.0; fl = r.1; }
+        else if f5 == 0x08 {
+            // fcvt.s.d / fcvt.d.s：來源格式是 !d
+            let fa = unbox(!d, a);
+            let cf = fcls(!d, fa);
+            let sf = fneg(!d, fa);
+            if cf >= 3 { res = fqnan(d); fl = if cf == 4 { FL_NV } else { 0 }; }
+            else if cf == 2 { res = finf(d, sf); }
+            else if cf == 0 { res = fzero(d, sf); }
+            else { job = 1; s = sf; e = fexp(!d, fa); sig = fsig(!d, fa); }
+        }
+        else if f5 == 0x14 { let r = fcmp(d, ua, ub, rm); res = r.0; fl = r.1; boxit = false; }
+        else if f5 == 0x18 { let r = fcvt_to_int(d, ua, rm, rs2); res = r.0; fl = r.1; boxit = false; }
+        else if f5 == 0x1A {
+            let v = if rs2 == 0 { a.wrap::<i32>() } else if rs2 == 1 { a.wrap::<u32>() }
+                          else if rs2 == 2 { a.wrap::<i64>() } else { a };
+            if v != 0 { job = 1; s = v < 0; e = 0; sig = if v < 0 { 0 - v } else { v }; }
+        }
+        else if f5 == 0x1C {
+            boxit = false;
+            if rm == 1 { res = fclass(d, ua); } else if d { res = a; } else { res = a.wrap::<i32>().wrap::<u64>(); }
+        }
+        else { res = b0(d, a); }
+
+        // 第二段：大運算，一拍一步
+        if mul {
+            let mut p: u120 = 0;
+            serial for _ in 0..53 {
+                if (my & 1) == 1 { p = p + mx; }
+                mx = mx << 1;
+                my = my >> 1;
+            }
+            sig = p;
+        }
+        if div {
+            // na < 2^116：每拍移入一位，餘數 r < dv
+            let mut q: u120 = 0;
+            let mut r: u120 = 0;
+            let mut n: u120 = na;
+            serial for _ in 0..116 {
+                r = (r << 1) | (n >> 115);
+                n = (n & ((1 << 115) - 1)) << 1;
+                if r >= dv { r = r - dv; q = (q << 1) | 1; } else { q = q << 1; }
+            }
+            sig = (q << 1) | (if r != 0 { 1 } else { 0 });
+        }
+        if sqrt {
+            // 一次兩位：root = ⌊√n1⌋、rem = n1 − root²
+            let mut rem: u120 = 0;
+            let mut root: u120 = 0;
+            let mut n: u120 = n1;
+            serial for _ in 0..60 {
+                rem = (rem << 2) | (n >> 118);
+                n = (n & ((1 << 118) - 1)) << 2;
+                let t = (root << 2) | 1;
+                if rem >= t { rem = rem - t; root = (root << 1) | 1; } else { root = root << 1; }
+            }
+            sig = (root << 1) | (if rem != 0 { 1 } else { 0 });
+        }
+
+        // 第三段：唯一的一份加法與捨入
+        if job == 2 {
+            let (z, sv, eh, mag) = add_h(s, sig, e, sy, y, ey);
+            if z { job = 0; res = fzero(d, rm == RM_RDN); } else { job = 1; s = sv; e = eh; sig = mag; }
+        }
+        if job == 1 {
+            let r = round_pack(d, s, e, sig, rm);
+            res = r.0;
+            fl = r.1;
+        }
+        resp.send((if boxit { box(d, res) } else { res }, fl));
+    }
+}

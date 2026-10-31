@@ -526,7 +526,7 @@ def gen():
 
 def main():
     print("// 由 rv64/fpgen.py 產生，請勿手改（python3 rv64/fpgen.py > rv64/tests_fpu.fx）")
-    print("// 每個向量：(指令字, rs1 值, rs2 值, rs3 值, 期望結果, 期望 fflags)；直接驅動 fp_op / fma_op")
+    print("// 每個向量：(指令字, rs1 值, rs2 值, rs3 值, 期望結果, 期望 fflags)；直接驅動 fp_op / fma_op 與 Fpu task")
     print()
     print("fn fp_check(inst: _, a: _, b: _, c: _, want: _, fl: _) -> u32 {")
     print("    let mut bad: u32 = 0;")
@@ -534,6 +534,16 @@ def main():
     print("        let r = if inst[k][6:0] == 0x53 { fp_op(inst[k], a[k], b[k]) } else { fma_op(inst[k], a[k], b[k], c[k]) };")
     print("        if r.0 != want[k] || r.1 != fl[k] { bad += 1; }")
     print("    }")
+    print("    // 多週期的 Fpu task（合成用的硬體版本）跑同樣的向量")
+    print("    let (qtx, qrx) = chan::<(u32, u64, u64, u64)>(depth = 2);")
+    print("    let (rtx, rrx) = chan::<(u64, u5)>(depth = 2);")
+    print("    spawn Fpu(qrx, rtx);")
+    print("    for k in 0..len(inst) {")
+    print("        qtx.send((inst[k], a[k], b[k], c[k]));")
+    print("        let r = rrx.recv();")
+    print("        if r.0 != want[k] || r.1 != fl[k] { bad += 1; }")
+    print("    }")
+    print("    qtx.close();")
     print("    bad")
     print("}")
     for name, vec in gen():

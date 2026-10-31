@@ -68,7 +68,7 @@ const C_PTW_W: u5 = 25;               // Decode 製造的 A/D 回寫（SD）toke
 const C_AMO: u5 = 26;                 // A 擴充：LR/SC/AMO*
 const C_FLOAD: u5 = 27;               // FLW/FLD
 const C_FSTORE: u5 = 28;              // FSW/FSD
-const C_FP: u5 = 29;                  // OP-FP（fpu.fx 的 fp_op）
+const C_FP: u5 = 29;                  // OP-FP（fpu.fx 的 Fpu task；參考模型 fp_op）
 const C_FMA: u5 = 30;                 // FMADD/FMSUB/FNMSUB/FNMADD
 
 // Fetch → Decode 的 token 標籤
@@ -1122,7 +1122,9 @@ task Decode<const TLBN: u32, const WBD: u32>(ifq: in chan<(u2, u64, u32)>,
 /// 執行：ALU、分支判斷、位址計算。分支與 JALR 把下一個 pc 送回 Fetch。
 task Execute(from_dec: in chan<(u64, u32, u5, u64, u64, u64)>,
              to_mem: out chan<(u3, u6, u64, u64, u64, u3, u5)>,
-             redirect: out chan<u64>) {
+             redirect: out chan<u64>,
+             fpu_req: out chan<(u32, u64, u64, u64)>,
+             fpu_resp: in chan<(u64, u5)>) {
     for (pc, inst, c, a, b, c3) in from_dec {
         let rd = inst[11:7];
         // 目的索引：f 暫存器 = 32 + rd（FLW/FLD、FMA、寫 f 的 OP-FP）
@@ -1176,13 +1178,15 @@ task Execute(from_dec: in chan<(u64, u32, u5, u64, u64, u64)>,
             }
             C_FP => {
                 redir = (true, link);
-                let r = fp_op(inst, a, b);
+                fpu_req.send((inst, a, b, 0));       // 多週期 FPU（fpu.fx 的 Fpu，與 fp_op 相同）
+                let r = fpu_resp.recv();
                 fl = r.1;
                 (1, r.0, 0, 0)
             }
             C_FMA => {
                 redir = (true, link);
-                let r = fma_op(inst, a, b, c3);
+                fpu_req.send((inst, a, b, c3));      // fma_op
+                let r = fpu_resp.recv();
                 fl = r.1;
                 (1, r.0, 0, 0)
             }
@@ -1309,10 +1313,13 @@ task Core<const WBD: u32, const TLBN: u32>(prog: [u32; IWORDS], data: [u64; DWOR
     let (e2m_tx, e2m_rx) = chan::<(u3, u6, u64, u64, u64, u3, u5)>(depth = 1);
     let (wb_tx, wb_rx)   = chan::<(u6, u64, u5)>(depth = WBD);
     let (rd_tx, rd_rx)   = chan::<u64>(depth = 1);
+    let (fq_tx, fq_rx)   = chan::<(u32, u64, u64, u64)>(depth = 1);
+    let (fr_tx, fr_rx)   = chan::<(u64, u5)>(depth = 1);
 
     spawn Fetch(prog, f2d_tx, rd_rx);
     spawn Decode::<TLBN, WBD>(f2d_rx, d2e_tx, wb_rx, dump);
-    spawn Execute(d2e_rx, e2m_tx, rd_tx);
+    spawn Execute(d2e_rx, e2m_tx, rd_tx, fq_tx, fr_rx);
+    spawn Fpu(fq_rx, fr_tx);
     spawn Mem(e2m_rx, wb_tx, io, data);
 }
 
