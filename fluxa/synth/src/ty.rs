@@ -177,7 +177,7 @@ pub fn divrem(g: &mut Builder, a: &SVal, b: &SVal) -> R<(SVal, SVal)> {
 }
 
 pub fn shl_const(a: &SVal, k: u32) -> SVal {
-    let (lo, hi) = (a.lo << k, a.hi << k);
+    let (lo, hi) = (shl_sat(a.lo, k), shl_sat(a.hi, k));
     let w = int_bits(lo, hi) as usize;
     let mut b = vec![Bit::C0; k as usize];
     b.extend(a.ext(w.saturating_sub(k as usize)));
@@ -195,12 +195,22 @@ pub fn shr_const(a: &SVal, k: u32) -> SVal {
     ranged(b, lo, hi, a.frac)
 }
 
+/// x << k, held to Fluxa's exact integers (±2^120: the simulator stops a program going past them)
+fn shl_sat(x: i128, k: u32) -> i128 {
+    let lim = 1i128 << 120;
+    if x == 0 { return 0; }
+    match (k < 120).then(|| x.checked_mul(1i128 << k)).flatten() {
+        Some(v) => v.clamp(-lim, lim - 1),
+        None => if x > 0 { lim - 1 } else { -lim },
+    }
+}
+
 /// a shift by a variable amount: the range assumes the largest shift the amount allows
 pub fn shift(g: &mut Builder, a: &SVal, amt: &SVal, left: bool) -> R<SVal> {
     if amt.lo < 0 { return Err("a shift amount must not be negative".into()); }
     if left {
         let k = amt.hi.min(120) as u32;
-        let (lo, hi) = (a.lo.min(a.lo << k), a.hi.max(a.hi << k));
+        let (lo, hi) = (a.lo.min(shl_sat(a.lo, k)), a.hi.max(shl_sat(a.hi, k)));
         let w = int_bits(lo, hi) as usize;
         let s = g.shift(&a.ext(w), &amt.bits, true, Bit::C0);
         Ok(ranged(s, lo, hi, a.frac))

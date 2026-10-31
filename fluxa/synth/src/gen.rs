@@ -396,10 +396,16 @@ impl<'p> Gen<'p> {
                 let cv = self.scalar(c)?;
                 let cb = truth(&mut self.g, &cv);
                 let before = self.env.clone();
+                // each arm sees the variables the condition bounds with the narrower range (its
+                // value is only used when the arm is taken, so `if sh <= 0 { x << (0 - sh) }` is fine)
+                let nt = self.narrow(c, true);
                 let tv = { self.stmts(&t.stmts)?; match &t.tail { Some(x) => self.eval(x)?, None => HV::S(SVal::konst(0)) } };
-                let after_t = std::mem::replace(&mut self.env, before);
+                let mut after_t = std::mem::replace(&mut self.env, before.clone());
+                unnarrow(&mut after_t, &nt, &before);
+                let nf = self.narrow(c, false);
                 let fv = match el { Some(x) => self.eval(x)?, None => HV::S(SVal::konst(0)) };
-                let after_f = std::mem::take(&mut self.env);
+                let mut after_f = std::mem::take(&mut self.env);
+                unnarrow(&mut after_f, &nf, &before);
                 self.env = self.merge(cb, after_t, after_f)?;
                 Ok(select_hv(&mut self.g, cb, &tv, &fv).unwrap_or(tv))
             }
@@ -407,6 +413,56 @@ impl<'p> Gen<'p> {
             ExprKind::Str(_) => Ok(HV::S(SVal::konst(0))),
             _ => err(line, self.prog, "this expression is not synthesized yet"),
         }
+    }
+
+    /// the variables condition `c` bounds when it is `truth` (`x < k`, `x != 0`, `a && b`, …,
+    /// with k a constant or a variable), narrowed in the environment; returns the narrowed values
+    fn narrow(&mut self, c: &Expr, truth: bool) -> Vec<(String, HV)> {
+        let mut out = vec![];
+        self.bounds(c, truth, &mut out);
+        out
+    }
+
+    fn bounds(&mut self, c: &Expr, truth: bool, out: &mut Vec<(String, HV)>) {
+        match &c.kind {
+            ExprKind::Unary('!', x) => self.bounds(x, !truth, out),
+            ExprKind::Binary(BinOp::And, l, r) if truth => { self.bounds(l, true, out); self.bounds(r, true, out); }
+            ExprKind::Binary(BinOp::Or, l, r) if !truth => { self.bounds(l, false, out); self.bounds(r, false, out); }
+            ExprKind::Binary(op, l, r) if matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne) => {
+                // the comparison as it holds: x OP y
+                let op = if truth { *op } else { match op { BinOp::Lt => BinOp::Ge, BinOp::Le => BinOp::Gt, BinOp::Gt => BinOp::Le, BinOp::Ge => BinOp::Lt, BinOp::Eq => BinOp::Ne, _ => BinOp::Eq } };
+                let flip = |o: BinOp| match o { BinOp::Lt => BinOp::Gt, BinOp::Le => BinOp::Ge, BinOp::Gt => BinOp::Lt, BinOp::Ge => BinOp::Le, o => o };
+                self.bound(l, op, r, out);
+                self.bound(r, flip(op), l, out);
+            }
+            _ => {}
+        }
+    }
+
+    /// `x OP y` holds: narrow variable `x` by `y`'s range
+    fn bound(&mut self, x: &Expr, op: BinOp, y: &Expr, out: &mut Vec<(String, HV)>) {
+        let ExprKind::Path(p) = &x.kind else { return };
+        if p.len() != 1 { return; }
+        let Some(HV::S(v)) = self.env.get(&p[0]).cloned() else { return };
+        if v.boolean || v.frac > 0 { return; }
+        let (ylo, yhi) = match &y.kind {
+            ExprKind::Path(q) if q.len() == 1 && self.env.contains_key(&q[0]) => match self.env.get(&q[0]) { Some(HV::S(w)) if !w.boolean && w.frac == 0 => (w.lo, w.hi), _ => return },
+            _ => match self.konst(y) { Some(Value::Int(k)) => (k, k), _ => return },
+        };
+        let (mut lo, mut hi) = (v.lo, v.hi);
+        match op {
+            BinOp::Lt => hi = hi.min(yhi.saturating_sub(1)),
+            BinOp::Le => hi = hi.min(yhi),
+            BinOp::Gt => lo = lo.max(ylo.saturating_add(1)),
+            BinOp::Ge => lo = lo.max(ylo),
+            BinOp::Eq => { lo = lo.max(ylo); hi = hi.min(yhi); }
+            _ => if ylo == yhi { if lo == ylo { lo += 1 } else if hi == ylo { hi -= 1 } },
+        }
+        // an arm that cannot be taken keeps the old range
+        if lo > hi || (lo == v.lo && hi == v.hi) { return; }
+        let n = HV::S(SVal { lo, hi, ..v });
+        self.env.insert(p[0].clone(), n.clone());
+        out.push((p[0].clone(), n));
     }
 
     /// element `k` of `xs` (a run-time index: a multiplexer over the elements)
@@ -665,7 +721,9 @@ impl<'p> Gen<'p> {
         for (p, u) in decl.params.iter().zip(&params) {
             let v = match vals.iter().find(|(n, _)| n.as_deref() == Some(p.name.as_str())) { Some((_, v)) => v.clone(), None => match positional.next() { Some(v) => v, None => return err(line, self.prog, format!("missing argument `{}`", p.name)) } };
             let t = self.ty(&p.ty, line)?;
-            self.declare(u, Some(t), v)?;
+            self.declare(u, Some(t.clone()), v.clone())?;
+            let k = fit_keep(&mut self.g, &v, &t)?;
+            self.env.insert(u.clone(), k);
         }
         self.depth += 1;
         let mut stmts = body.stmts.clone();
@@ -676,7 +734,7 @@ impl<'p> Gen<'p> {
         let r = self.stmts(&stmts).and_then(|_| match &tail { Some(t) => self.eval(t), None => Ok(HV::S(SVal::konst(0))) });
         self.depth -= 1;
         let v = r?;
-        match &decl.ret { Some(rt) => { let t = self.ty(rt, line)?; fit_hv(&mut self.g, &v, &t) } None => Ok(v) }
+        match &decl.ret { Some(rt) => { let t = self.ty(rt, line)?; fit_keep(&mut self.g, &v, &t) } None => Ok(v) }
     }
 }
 
@@ -685,6 +743,26 @@ impl<'p> Gen<'p> {
 pub enum PathStep {
     Const(usize),
     Var(SVal),
+}
+
+/// after an arm: a variable it did not change gets its range from before the condition back
+fn unnarrow(env: &mut HashMap<String, HV>, narrowed: &[(String, HV)], before: &HashMap<String, HV>) {
+    for (n, v) in narrowed {
+        if let (Some(cur), Some(old)) = (env.get(n), before.get(n)) {
+            if cur.flat() == v.flat() { env.insert(n.clone(), old.clone()); }
+        }
+    }
+}
+
+/// `v` as type `t`, keeping `v`'s narrower range when it lies inside `t`'s (a function's
+/// argument or result: `fmb(d)` is 23 or 52, not any u32)
+fn fit_keep(g: &mut Builder, v: &HV, t: &Ty) -> R<HV> {
+    let f = fit_hv(g, v, t)?;
+    Ok(match (v, f, t) {
+        (HV::S(x), HV::S(y), Ty::Int { lo, hi }) if !x.boolean && x.frac == 0 && x.lo >= *lo && x.hi <= *hi => HV::S(SVal { lo: x.lo, hi: x.hi, ..y }),
+        (HV::A(xs), HV::A(ys), Ty::Tuple(ts)) => HV::A(xs.iter().zip(ys).zip(ts).map(|((x, y), t)| fit_keep(g, x, t).unwrap_or(y)).collect()),
+        (_, f, _) => f,
+    })
 }
 
 /// the source name of a unique name (`x.3` → `x`)

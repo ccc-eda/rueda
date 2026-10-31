@@ -495,3 +495,37 @@ fn rv32i_core_with_program_built_in() {
     let e = fluxa_synth::synthesize(&prog, "Core", &ps).err().unwrap();
     assert!(e.contains("`data`") && e.contains("[u32; 64]"), "{}", e);
 }
+
+/// a condition bounds its variables in each arm: shifts by `0 - sh` under `sh <= 0`, a division
+/// under `b != 0`, `!`, `&&` and `||`; a function's result keeps its narrower range (`width(d)`
+/// is 4 or 7, so `x >> (width(d) - 1)` shifts by at least 3)
+#[test]
+fn conditions_narrow_ranges() {
+    let prog = load(r#"
+        comb fn width(d: bool) -> u32 { if d { 7 } else { 4 } }
+        comb fn shift_by(x: u16, sh: i8) -> u32 { if sh <= 0 { x << (0 - sh) } else { x >> sh } }
+        comb fn safe_div(a: u8, b: u8) -> u8 { if b != 0 { a / b } else { 255 } }
+        comb fn both(a: u8, b: i8) -> u8 { if !(b < 1 || a == 0) { a / a + (a >> b) } else { 0 } }
+        task N(xs: in chan<(u16, i8, bool)>, ys: out chan<(u32, u8, u8, u16)>) {
+            for (x, sh, d) in xs {
+                let lo = x[7:0];
+                ys.send((shift_by(x, sh), safe_div(lo, sh.wrap::<u8>()), both(lo, sh), x >> (width(d) - 1)));
+            }
+        }
+        test narrowed {
+            let (tx, rx) = chan::<(u16, i8, bool)>(depth = 2);
+            let (ty, ry) = chan::<(u32, u8, u8, u16)>(depth = 8);
+            spawn N(rx, ty);
+            for v in [(1000, -3, true), (1000, 3, false), (77, 0, true), (0, 5, false), (65535, -8, true), (300, 2, false)] { tx.send(v); }
+            tx.close();
+            assert ry.recv() == (8000, 0, 0, 15);
+            assert ry.recv() == (125, 77, 30, 125);
+            assert ry.recv() == (77, 255, 0, 1);
+            assert ry.recv() == (0, 0, 0, 0);
+            assert ry.recv() == (16776960, 1, 0, 1023);
+            assert ry.recv() == (75, 22, 12, 37);
+        }
+    "#);
+    assert!(behavioral(&prog).iter().all(|r| r.1), "{:?}", behavioral(&prog));
+    agree(&prog, "N", &["opt", "ice40"]);
+}
