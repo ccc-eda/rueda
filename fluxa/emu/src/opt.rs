@@ -17,6 +17,7 @@ fn uses(o: &Op, out: &mut Vec<Reg>) {
         Op::Sel(_, c, a, b) => { out.push(*c); out.push(*a); out.push(*b); }
         Op::If(c, ..) => out.push(*c),
         Op::Copy(d, s, _) => { addr(d, out); addr(s, out); }
+        Op::Zero(d, _) => addr(d, out),
     }
 }
 

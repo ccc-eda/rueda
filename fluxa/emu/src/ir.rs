@@ -49,6 +49,8 @@ pub enum Op {
     Trap(u32),
     /// copy `n` bytes inside the frame (whole arrays)
     Copy(Addr, Addr, u32),
+    /// `n` zero bytes into the frame (a large array cleared)
+    Zero(Addr, u32),
 }
 
 /// how a state ends. Channel operations name a port of the task; a token's scalars are laid out
@@ -197,6 +199,7 @@ pub fn dump(c: &Code) -> String {
                 Op::Sel(d, c, x, y) => format!("{} = {} ? {} : {}", r(d), r(c), r(x), r(y)),
                 Op::Trap(k) => format!("trap {}", k),
                 Op::Copy(d, s, n) => format!("copy {} = {} ({} bytes)", a(d), a(s), n),
+                Op::Zero(d, n) => format!("zero {} ({} bytes)", a(d), n),
                 Op::If(c, t, f) => {
                     out.push_str(&format!("{}if {} {{\n", "  ".repeat(ind), r(c)));
                     ops(out, t, ind + 1, regs);

@@ -229,6 +229,10 @@ fn run_ops(ops: &[Op], kinds: &[K], r: &mut [i128], mem: &mut [u8], f: usize) ->
                 let ps = f + s.base as usize + s.off.map(|x| r[x as usize] as u64 as usize).unwrap_or(0);
                 mem.copy_within(ps..ps + *n as usize, pd);
             }
+            Op::Zero(d, n) => {
+                let pd = f + d.base as usize + d.off.map(|x| r[x as usize] as u64 as usize).unwrap_or(0);
+                mem[pd..pd + *n as usize].fill(0);
+            }
         }
     }
     Ok(())

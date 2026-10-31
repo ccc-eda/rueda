@@ -832,10 +832,15 @@ fn let_stmt(n: &str, e: Expr, line: u32) -> Stmt { Stmt { kind: StmtKind::Let { 
 fn assign(n: &str, e: Expr, line: u32) -> Stmt { Stmt { kind: StmtKind::Assign { target: path(n, line), op: None, value: e }, line } }
 
 /// the task `decl` as states; `outs` are its output channel parameters (closed at the end)
-pub fn lower(decl: &FnDecl, consts: &HashSet<String>) -> R<Cfg> {
+pub fn lower(decl: &FnDecl, consts: &HashSet<String>) -> R<Cfg> { lower_opts(decl, consts, true) }
+
+/// the same; `mem_states` false: memories stay arrays (an access is not a state of its own: a
+/// simulation that is not hardware, fluxa-emu)
+pub fn lower_opts(decl: &FnDecl, consts: &HashSet<String>, mem_states: bool) -> R<Cfg> {
     let mut rn = Renamer { scopes: vec![HashMap::new()], n: 0, mem: None, consts: consts.clone() };
     let params: Vec<String> = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
+    if !mem_states { return lower_body(decl, &params, &body, vec![]); }
     let mut mems = vec![];
     mems_of(&body, &params, &mut mems);
     if !mems.is_empty() {

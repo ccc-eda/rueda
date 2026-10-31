@@ -41,6 +41,30 @@ fn specialize(prog: &Arc<Program>, decl: &FnDecl, args: &[(String, Arg)]) -> R<A
     Ok(Arc::new(Program { files: prog.files.clone(), consts_decl: prog.consts_decl.clone(), fns: prog.fns.clone(), tests: prog.tests.clone(), consts: std::sync::RwLock::new(consts) }))
 }
 
+/// `serial for` loops without channel operations as plain loops (iterations take a clock each in
+/// hardware; here they are unrolled)
+fn plain_serial(decl: &FnDecl) -> FnDecl {
+    use fluxa::ast::{Block, ExprKind, LoopAttr, Stmt, StmtKind};
+    /// a channel operation inside (a `for` over a variable may read a channel: kept too)
+    fn chans(b: &Block) -> bool {
+        let mut found = false;
+        fluxa_synth::walk_block(b, &mut |e| if let ExprKind::Method(_, n, _, _) = &e.kind { if n == "send" || n == "recv" || n == "close" { found = true; } });
+        found || b.stmts.iter().any(|s| match &s.kind { StmtKind::For { iter, body, .. } => matches!(&iter.kind, ExprKind::Path(_)) || chans(body), _ => false })
+    }
+    fn block(b: &Block) -> Block { Block { stmts: b.stmts.iter().map(stmt).collect(), tail: b.tail.clone() } }
+    fn stmt(s: &Stmt) -> Stmt {
+        let kind = match &s.kind {
+            StmtKind::For { attr, pat, iter, body } => {
+                let a = if matches!(attr, LoopAttr::Serial) && !chans(body) { LoopAttr::None } else { attr.clone() };
+                StmtKind::For { attr: a, pat: pat.clone(), iter: iter.clone(), body: block(body) }
+            }
+            k => k.clone(),
+        };
+        Stmt { kind, line: s.line }
+    }
+    FnDecl { body: block(&decl.body), ..decl.clone() }
+}
+
 /// a value's scalars, in memory order
 fn flatten(v: &Value, out: &mut Vec<i128>) {
     match v {
@@ -118,7 +142,10 @@ impl Builder {
                 Some(c) => *c,
                 None => {
                     let consts = p.consts.read().unwrap().keys().cloned().collect();
-                    let cfg = fluxa_synth::lower::lower(&decl, &consts).map_err(|e| format!("{}: {}", task, e))?;
+                    // not hardware: a memory access is no state of its own, a serial loop without
+                    // channel operations is unrolled
+                    let decl = plain_serial(&decl);
+                    let cfg = fluxa_synth::lower::lower_opts(&decl, &consts, false).map_err(|e| format!("{}: {}", task, e))?;
                     let mut code = emit::compile_task(&p, &decl, &cfg, &kinds).map_err(|e| format!("{}: {}", task, e))?;
                     opt::optimize(&mut code);
                     self.codes.push(code);

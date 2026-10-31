@@ -140,6 +140,8 @@ pub struct Em<'p> {
     dry: bool,
     /// the line of the statement being compiled (for messages)
     line: u32,
+    /// the lowered block being compiled
+    block: usize,
 }
 
 fn err<T>(line: u32, prog: &Program, m: impl Into<String>) -> R<T> { Err(format!("{}: {}", prog.loc(line), m.into())) }
@@ -151,7 +153,7 @@ impl<'p> Em<'p> {
         Em {
             prog, it: Interp::new(sh, 0, "emu".into()), regs: vec![], ops: vec![], vars: HashMap::new(), untyped: HashSet::new(), grew: false,
             slots: HashMap::new(), frame: 0, init: vec![], env: HashMap::new(), dirty: HashSet::new(), depth: 0, rename: 1_000_000, traps: vec![],
-            rom: HashMap::new(), consts, local_arrays: HashMap::new(), port_bufs: HashMap::new(), data: vec![], dry: false, line: 0,
+            rom: HashMap::new(), consts, local_arrays: HashMap::new(), port_bufs: HashMap::new(), data: vec![], dry: false, line: 0, block: 0,
         }
     }
 
@@ -996,6 +998,21 @@ impl<'p> Em<'p> {
         match &s.kind {
             StmtKind::Let { pat, ty, init, .. } => {
                 let t = match ty { Some(t) => self.ty_opt(t, line)?, None => None };
+                // a task's array cleared, `[0; N]`: zeros into the frame (a large memory is not
+                // unrolled into stores)
+                if let (Pattern::Ident(n), Some(t), Some(Expr { kind: ExprKind::Repeat(x, _), .. })) = (pat, &t, init) {
+                    if self.depth == 0 && has_array(t) && matches!(x.kind, ExprKind::Int(0)) {
+                        self.untyped.remove(n.as_str());
+                        self.vars.entry(n.clone()).or_insert(t.clone());
+                        // (the type pass: no place yet)
+                        let base = self.slots.get(n.as_str()).copied().unwrap_or(0);
+                        // the task's first block runs once, on a frame of zeros (a memory the
+                        // outside loaded first keeps its words)
+                        if self.block != 0 { self.op(Op::Zero(Addr { base, off: None }, size(t))); }
+                        self.env.insert(n.clone(), EV::M(Place { base, off: None, ty: t.clone() }));
+                        return Ok(());
+                    }
+                }
                 let v = match init {
                     Some(e) => self.eval(e)?,
                     None => match &t { Some(t) => self.zero(t), None => return err(line, self.prog, "`let` needs an initializer or a type") },
@@ -1651,6 +1668,14 @@ pub fn compile_task(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &[(St
     for (m, ..) in &cfg.mems {
         if let (Some(off), Some(Ty::Array(e, n))) = (em.slots.get(m), task.mems.get(m)) { mems.push((base(m).to_string(), *off, leaf_kind(e), *n as u32)); }
     }
+    // the task's arrays of scalars (memories that stayed arrays among them), by their names
+    let mut arrays: Vec<(&String, &Ty)> = em.vars.iter().collect();
+    arrays.sort_by(|a, b| a.0.cmp(b.0));
+    for (n, t) in arrays {
+        if let (Some(off), Ty::Array(e, k)) = (em.slots.get(n), t) {
+            if e.is_scalar() && !mems.iter().any(|m| m.0 == base(n)) { mems.push((base(n).to_string(), *off, leaf_kind(e), *k as u32)); }
+        }
+    }
     Ok(Code { name: decl.name.clone(), regs: em.regs, frame: em.frame.next_multiple_of(16), states, ports: code_ports, init: em.init, data: em.data.clone(), traps: em.traps, mems })
 }
 
@@ -1723,6 +1748,7 @@ fn emit_all(em: &mut Em, task: &Task, dry: bool) -> R<Vec<State>> {
     let n0 = cfg.blocks.len() as u32;
     let new_state = |extra: &mut Vec<State>, s: State| -> u32 { extra.push(s); n0 + extra.len() as u32 - 1 };
     for (si, b) in cfg.blocks.iter().enumerate() {
+        em.block = si;
         em.env.clear();
         em.dirty.clear();
         em.ops.clear();

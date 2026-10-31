@@ -214,6 +214,11 @@ impl Gen<'_> {
                 if s.base > 0 { self.f.i32c(s.base as i32).op(I32_ADD); }
                 self.f.i32c(*n as i32).memcopy();
             }
+            Op::Zero(d, n) => {
+                self.addr(d);
+                if d.base > 0 { self.f.i32c(d.base as i32).op(I32_ADD); }
+                self.f.i32c(0).i32c(*n as i32).op(0xfc).u(11).op(0);
+            }
         }
     }
 
