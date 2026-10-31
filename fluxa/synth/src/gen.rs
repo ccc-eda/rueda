@@ -23,7 +23,19 @@ use std::sync::Arc;
 pub enum ParamHw {
     InChan(Ty),
     OutChan(Ty),
-    Scalar(Ty, Option<i128>),
+    /// a parameter that is not a channel: a constant (a value) or an input port (None)
+    Scalar(Ty, Option<Value>),
+}
+
+/// a constant parameter's value in hardware (an array of constants: a ROM, folded into gates)
+fn const_hv(g: &mut Builder, v: &Value, t: &Ty) -> Option<HV> {
+    Some(match (v, t) {
+        (Value::Array(xs), Ty::Array(e, n)) if xs.len() == *n => HV::A(xs.iter().map(|x| const_hv(g, x, e)).collect::<Option<_>>()?),
+        (Value::Tuple(xs), Ty::Tuple(ts)) if xs.len() == ts.len() => HV::A(xs.iter().zip(ts).map(|(x, t)| const_hv(g, x, t)).collect::<Option<_>>()?),
+        (Value::Int(k), t) if t.is_scalar() => HV::S(fit(g, &SVal::konst(*k), t)),
+        (Value::Bool(b), t) if t.is_scalar() => HV::S(fit(g, &SVal::konst(*b as i128), t)),
+        _ => return None,
+    })
 }
 
 pub struct Gen<'p> {
@@ -687,8 +699,8 @@ type MemRead = (Vec<Bit>, Vec<Bit>);
 /// a memory write: when, address, word
 type MemWrite = (Bit, Vec<Bit>, Vec<Bit>);
 
-/// the task `decl` lowered to `cfg` as a netlist; `params` fixes scalar parameters to constants
-pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &HashMap<String, i128>) -> R<crate::Synth> {
+/// the task `decl` lowered to `cfg` as a netlist; `params` fixes parameters to constants
+pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &crate::Params) -> R<crate::Synth> {
     let mut warnings = vec![];
     let mut gen = Gen::new(prog);
     let mut hw = vec![];
@@ -704,8 +716,11 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             }
             t => {
                 let ty = gen.ty(t, decl.line)?;
-                // an array parameter is an input port of all its bits (a constant only when scalar)
-                let k = if ty.is_scalar() { params.get(&p.name).copied() } else { None };
+                // a constant (an array: a ROM), else an input port of all its bits
+                let k = params.get(&p.name).cloned();
+                if let Some(v) = &k {
+                    if const_hv(&mut Builder::new(), v, &ty).is_none() { return Err(format!("{}: parameter `{}`: the value ({}) does not have its type", prog.loc(decl.line), p.name, fluxa::value::kind(v))); }
+                }
                 ParamHw::Scalar(ty, k)
             }
         };
@@ -777,7 +792,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 ports.push(Port { name: format!("{}_ready", n), dir: Dir::In, bits: vec![ready] });
                 cp.insert(u.clone(), ChanPorts { data: vec![], close: Bit::C0, valid: Bit::C0, ready });
             }
-            ParamHw::Scalar(t, Some(k)) => { let v = fit(&mut g.g, &SVal::konst(*k), t); scalars.insert(u.clone(), HV::S(v)); }
+            ParamHw::Scalar(t, Some(k)) => { let v = const_hv(&mut g.g, k, t).unwrap(); scalars.insert(u.clone(), v); }
             ParamHw::Scalar(t, None) => {
                 let bits = g.g.wires(t.width() as u32);
                 ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
@@ -1074,7 +1089,7 @@ fn scratch_env(g: &mut Gen, hw: &[(String, String, ParamHw)]) -> HashMap<String,
     for (n, t) in vars { let w = g.g.wires(t.width() as u32); env.insert(n, HV::of_ty(&w, &t)); }
     for (_, u, h) in hw {
         if let ParamHw::Scalar(t, k) = h {
-            let v = match k { Some(k) => HV::S(fit(&mut g.g, &SVal::konst(*k), t)), None => HV::of_ty(&g.g.wires(t.width() as u32), t) };
+            let v = match k { Some(k) => const_hv(&mut g.g, k, t).unwrap(), None => HV::of_ty(&g.g.wires(t.width() as u32), t) };
             env.insert(u.clone(), v);
         }
     }

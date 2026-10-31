@@ -87,9 +87,16 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以综合的 task
   FIFO，约 36,500 个通用门）：`reda synth --top Core --param WBD=8 fluxa/rv32i/rv32i.fx`；
   `reda gatesim opt --top Core fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx` 在它上面跑 24 个 test（看门狗那个要跑
   3,000 条指令，约半小时；其余 23 个约一分钟）。
-  它的程序与数据是输入端口（4,096 个引脚），所以还放不进 FPGA 的引脚：要把它们变成常数（ROM／有初值的 block RAM）。
-- 还不能综合的：用参数当初值的 `mem`（留成寄存器）、RV64 处理器（它的 FPU 的除法与移位量只在运行时才有防护，
-  而且整个做成一个周期的组合逻辑太大）。
+- `--param` 的值若不是整数，就是在程序里求值的 Fluxa 表达式，所以数组参数也能是常数：用索引读它就是 ROM
+  （并进逻辑门），用它当初值的存储器一开始就是这些字。程序与数据内建的 RV32I `Core` 只剩两条输出流当端口，
+  复位后就跑程序，在 ECP5 上完成布局布线（21,163 LUT4、5,516 FF、72 个 IO，约 16 MHz）：
+  ```
+  reda fpga --arch ecp5 --bit core.bit --top Core --param WBD=8 --param 'data=dimage([])' \
+       --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), ecall()])' \
+       fluxa/rv32i/rv32i.fx
+  ```
+- 还不能综合的：用参数当初值的 `mem` 变成寄存器，不是有初值的 block RAM；RV64 处理器（它的 FPU 的除法与
+  移位量只在运行时才有防护，而且整个做成一个周期的组合逻辑太大）。
 - 网页 IDE 的 Fluxa 项目也有「⚙ 综合」：① 显示 task 与它的实例，②–⑦ 和 Veryl 一样；
   「仿真对象」选通用门 / iCE40 / 标准单元时，▶ 运行 会把综合顶层换成它的网表再跑 test，
   「✔ 全面验证」把每种实现的结果并排比对。虚拟板不接收 Fluxa（它的端口是数据流，不是板子的引脚）。

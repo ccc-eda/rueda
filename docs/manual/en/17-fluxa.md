@@ -93,10 +93,18 @@ reda synth --list fluxa/examples/pipeline.fx        # the tasks that can be synt
   gates): `reda synth --top Core --param WBD=8 fluxa/rv32i/rv32i.fx`, and
   `reda gatesim opt --top Core fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx` runs the 24 tests on it (the watchdog test runs
   3,000 instructions and takes about half an hour; the other 23, a minute).
-  Its program and data are input ports (4,096 pins), so it does not fit an FPGA's pins yet: that needs them as
-  constants (ROM / initialized block RAM).
-- Not synthesized yet: a `mem` initialized from a parameter (it stays registers), the RV64 processor (its FPU
-  divides and shifts by amounts that are guarded only at run time, and is far too large as one clock of logic).
+- A `--param` value that is not an integer is a Fluxa expression evaluated in the program, so an array parameter can
+  be a constant too: read with an index it is a ROM (folded into gates), and a memory initialized from it starts
+  with its words. RV32I's `Core` with its program and data built in has only its two output streams as ports, runs
+  the program out of reset, and is placed and routed on the ECP5 (21,163 LUT4, 5,516 FF, 72 IO, about 16 MHz):
+  ```
+  reda fpga --arch ecp5 --bit core.bit --top Core --param WBD=8 --param 'data=dimage([])' \
+       --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), ecall()])' \
+       fluxa/rv32i/rv32i.fx
+  ```
+- Not synthesized yet: a `mem` initialized from a parameter becomes registers, not block RAM with initial contents;
+  the RV64 processor (its FPU divides and shifts by amounts that are guarded only at run time, and is far too large
+  as one clock of logic).
 - In the web IDE a Fluxa project has **⚙ Synthesize** too: ① shows the task and its instances, ②–⑦ are the same as
   for Veryl. With the simulation target set to generic gates / iCE40 / standard cells, **▶ Run** runs the tests with
   the synthesis top replaced by its netlist, and **✔ Verify all** compares every implementation side by side. The

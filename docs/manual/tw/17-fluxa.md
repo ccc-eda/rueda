@@ -87,9 +87,16 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以合成的 task
   FIFO，約 36,500 個通用閘）：`reda synth --top Core --param WBD=8 fluxa/rv32i/rv32i.fx`；
   `reda gatesim opt --top Core fluxa/rv32i/rv32i.fx fluxa/rv32i/tests_basic.fx` 在它上面跑 24 個 test（看門狗那個要跑
   3,000 個指令，約半小時；其餘 23 個約一分鐘）。
-  它的程式與資料是輸入埠（4,096 支腳），所以還放不進 FPGA 的腳位：要把它們變成常數（ROM／有初值的 block RAM）。
-- 還不能合成的：用參數當初值的 `mem`（留成暫存器）、RV64 處理器（它的 FPU 的除法與位移量只在執行時才有防護，
-  而且整個做成一個週期的組合邏輯太大）。
+- `--param` 的值若不是整數，就是在程式裡求值的 Fluxa 運算式，所以陣列參數也能是常數：用索引讀它就是 ROM
+  （併進邏輯閘），用它當初值的記憶體一開始就是這些字。程式與資料內建的 RV32I `Core` 只剩兩條輸出串流當埠，
+  重置後就跑程式，在 ECP5 上完成佈局佈線（21,163 LUT4、5,516 FF、72 支 IO，約 16 MHz）：
+  ```
+  reda fpga --arch ecp5 --bit core.bit --top Core --param WBD=8 --param 'data=dimage([])' \
+       --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), ecall()])' \
+       fluxa/rv32i/rv32i.fx
+  ```
+- 還不能合成的：用參數當初值的 `mem` 變成暫存器，不是有初值的 block RAM；RV64 處理器（它的 FPU 的除法與
+  位移量只在執行時才有防護，而且整個做成一個週期的組合邏輯太大）。
 - 網頁 IDE 的 Fluxa 專案也有「⚙ 合成」：① 顯示 task 與它的實例，②–⑦ 和 Veryl 一樣；
   「模擬對象」選通用閘 / iCE40 / 標準元件時，▶ 執行 會把合成頂層換成它的網表再跑 test，
   「✔ 全面驗證」把每種實作的結果並排比對。虛擬板不收 Fluxa（它的埠是串流，不是板子的腳位）。

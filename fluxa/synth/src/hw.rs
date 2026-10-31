@@ -63,7 +63,7 @@ fn bits_tok(b: &[bool], t: &Ty) -> Tok {
 }
 
 /// a parameter's value as `t`'s bits (scalars, arrays, tuples)
-fn value_bits(v: &Value, t: &Ty) -> Option<Vec<bool>> {
+pub fn value_bits(v: &Value, t: &Ty) -> Option<Vec<bool>> {
     match (v, t) {
         (Value::Int(k), t) => Some(int_bits(*k, t)),
         (Value::Bool(b), t) => Some(int_bits(*b as i128, t)),
@@ -166,7 +166,7 @@ impl Provider {
     fn netlist(&self, task: &str) -> Result<(&'static Netlist, &'static Iface), String> { self.netlist_with(task, task, &Default::default()) }
 
     /// `task` with scalar parameters `params` (a network's are constants), cached as `key`
-    fn netlist_with(&self, key: &str, task: &str, params: &HashMap<String, i128>) -> Result<(&'static Netlist, &'static Iface), String> {
+    fn netlist_with(&self, key: &str, task: &str, params: &crate::Params) -> Result<(&'static Netlist, &'static Iface), String> {
         let mut b = self.built.lock().unwrap();
         if let Some(r) = b.get(key) { return r.clone(); }
         let r = crate::synthesize(&self.prog, task, params).and_then(|s| {
@@ -203,9 +203,9 @@ impl HwProvider for Provider {
         // netlist per set of them
         let net = crate::graph::is_graph(decl);
         let fixed = |n: &str| net || decl.generics.iter().any(|g| g.name == n);
-        let ps: HashMap<String, i128> = args.iter().filter(|(n, _)| fixed(n)).filter_map(|(n, v)| match v { Value::Int(k) => Some((n.clone(), *k)), Value::Bool(b) => Some((n.clone(), *b as i128)), _ => None }).collect();
+        let ps: crate::Params = args.iter().filter(|(n, _)| fixed(n)).filter(|(_, v)| matches!(v, Value::Int(_) | Value::Bool(_))).cloned().collect();
         let built = if ps.is_empty() { self.netlist(task) } else {
-            let mut key: Vec<String> = ps.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+            let mut key: Vec<String> = ps.iter().map(|(k, v)| format!("{}={}", k, match v { Value::Bool(b) => *b as i128, Value::Int(k) => *k, _ => 0 })).collect();
             key.sort();
             self.netlist_with(&format!("{}({})", task, key.join(",")), task, &ps)
         };

@@ -89,7 +89,7 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
-pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i128>) -> R<crate::Synth> {
+pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) -> R<crate::Synth> {
     // ---- the network, as the simulator builds it
     let rec = Arc::new(Recorder::default());
     let sh = Shared::with_hw(prog.clone(), false, true, Some(rec.clone()));
@@ -109,7 +109,7 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
                 top_chans.push((p.name.clone(), id, p.out));
             }
             _ => match params.get(&p.name) {
-                Some(v) => args.push((None, Value::Int(*v))),
+                Some(v) => args.push((None, v.clone())),
                 None => {
                     let t = block_on(it.eval_type(&p.ty)).map_err(|e| format!("{}: {:?}", decl.name, e))?;
                     match (&t, sentinel(&t, &mut seed)) {
@@ -144,24 +144,23 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &HashMap<String, i
             let ps: String = (0..outs.len()).map(|k| format!(", o{}: out chan<{}>", k, elem)).collect();
             let src_text = format!("task Broadcast(x: in chan<{}>{}) {{ for v in x {{ {}}} }}", elem, ps, sends);
             let p2 = fluxa::load_many(&[("broadcast.fx".into(), src_text)])?;
-            let s = crate::synthesize(&p2, "Broadcast", &HashMap::new())?;
+            let s = crate::synthesize(&p2, "Broadcast", &Default::default())?;
             let mut ends = vec![("x".to_string(), *src, false)];
             for (k, c) in outs.iter().enumerate() { ends.push((format!("o{}", k), *c, true)); }
             (s, ends, vec![])
         } else {
             let sub = prog.fns.get(task).ok_or_else(|| format!("no task `{}`", task))?;
-            let mut sp = HashMap::new();
+            let mut sp = crate::Params::new();
             let mut ends = vec![];
             let mut passes = vec![];
             for (n, v) in a {
                 match v {
-                    Value::Int(x) => { sp.insert(n.clone(), *x); }
-                    Value::Bool(b) => { sp.insert(n.clone(), *b as i128); }
                     Value::Rx(c) => ends.push((n.clone(), *c, false)),
                     Value::Tx(c) => ends.push((n.clone(), *c, true)),
+                    // an array the network got as an input port: passed on; any other value is a constant
                     other => match passed.iter().position(|(_, _, v)| same(v, other)) {
                         Some(k) => passes.push((n.clone(), k)),
-                        None => return Err(format!("spawn {}: argument `{}` ({}) is not synthesized (an array must be a parameter of the network, passed on as it is)", task, n, fluxa::value::kind(other))),
+                        None => { sp.insert(n.clone(), other.clone()); }
                     },
                 }
             }

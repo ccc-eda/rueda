@@ -29,8 +29,11 @@ pub struct Synth {
     pub insts: Vec<(String, String)>,
 }
 
-/// synthesize task `top` of `prog`; `params` fixes scalar parameters (else they are inputs)
-pub fn synthesize(prog: &Arc<Program>, top: &str, params: &HashMap<String, i128>) -> Result<Synth, String> {
+/// parameters fixed to constants (`--param`, a spawn's arguments): integers, booleans, arrays, tuples
+pub type Params = HashMap<String, fluxa::value::Value>;
+
+/// synthesize task `top` of `prog`; `params` fixes parameters (else they are inputs)
+pub fn synthesize(prog: &Arc<Program>, top: &str, params: &Params) -> Result<Synth, String> {
     let decl = prog.fns.get(top).ok_or_else(|| format!("no task `{}`", top))?.clone();
     if decl.kind != FnKind::Task { return Err(format!("`{}` is not a task", top)); }
     let prog = &specialize(prog, &decl, params)?;
@@ -43,13 +46,13 @@ pub fn synthesize(prog: &Arc<Program>, top: &str, params: &HashMap<String, i128>
 
 /// a generic task's program: its const generics (values from `params`, i.e. `--param` or the
 /// spawn's `::<…>`) as constants of the program, so types, patterns and expressions see them
-fn specialize(prog: &Arc<Program>, decl: &FnDecl, params: &HashMap<String, i128>) -> Result<Arc<Program>, String> {
+fn specialize(prog: &Arc<Program>, decl: &FnDecl, params: &Params) -> Result<Arc<Program>, String> {
     if decl.generics.is_empty() { return Ok(prog.clone()); }
     let mut consts = prog.consts.read().unwrap().clone();
     for g in &decl.generics {
         if !g.is_const { return Err(format!("`{}`: type parameter `{}` is not synthesized", decl.name, g.name)); }
         let Some(v) = params.get(&g.name) else { return Err(format!("`{}`: generic `{}` needs a value (--param {}=…)", decl.name, g.name, g.name)) };
-        consts.insert(g.name.clone(), fluxa::value::Value::Int(*v));
+        consts.insert(g.name.clone(), v.clone());
     }
     Ok(Arc::new(Program {
         files: prog.files.clone(),

@@ -467,3 +467,31 @@ fn rv32i_pipeline_in_gates() {
     let e = fluxa_synth::synthesize(&prog, "Core", &HashMap::new()).err().unwrap();
     assert!(e.contains("generic `WBD` needs a value"), "{}", e);
 }
+
+/// the RV32I Core as a chip: its program and data built in (`--param prog=…`, a ROM and the data
+/// memory's initial words), so its only ports are the two output streams; it runs the program
+/// out of reset
+#[test]
+fn rv32i_core_with_program_built_in() {
+    let rd = |f: &str| std::fs::read_to_string(format!("{}/../rv32i/{}", env!("CARGO_MANIFEST_DIR"), f)).unwrap();
+    let prog = fluxa::load_many(&[("rv32i.fx".into(), rd("rv32i.fx"))]).unwrap();
+    let fib = "image([lui(10, 0x10000), addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 10), sw(1, 10, 0), add(4, 1, 2),
+                      addi(1, 2, 0), addi(2, 4, 0), addi(3, 3, -1), bne(3, 0, -20), lw(5, 0, 4), ecall()])";
+    let mut ps = fluxa_synth::Params::new();
+    ps.insert("WBD".into(), Value::Int(8));
+    ps.insert("prog".into(), fluxa::eval_str(&prog, fib).unwrap());
+    ps.insert("data".into(), fluxa::eval_str(&prog, "dimage([7, 42])").unwrap());
+    let s = fluxa_synth::synthesize(&prog, "Core", &ps).unwrap();
+    assert!(s.iface.scalars.is_empty() && s.iface.ins.is_empty(), "{:?}", s.iface);
+    let mut hw = fluxa_synth::hw::HwSim::new(&s.netlist, &s.iface, &[]);
+    let outs = hw.run_streams(&[], 5000);
+    let ints = |v: &[HwTok]| v.iter().filter_map(|t| if let HwTok::Data(x) = t { Some(*x) } else { None }).collect::<Vec<i128>>();
+    let (io, dump) = (ints(&outs[0]), ints(&outs[1]));
+    assert_eq!(io, [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
+    // the dump: cause 0 (ECALL) at pc 44, and x5 = data word 1
+    assert_eq!((dump[0], dump[1], dump[4 + 5]), (0, 44, 42));
+    // a value that is not of the parameter's type is an error
+    ps.insert("data".into(), Value::Int(3));
+    let e = fluxa_synth::synthesize(&prog, "Core", &ps).err().unwrap();
+    assert!(e.contains("`data`") && e.contains("[u32; 64]"), "{}", e);
+}

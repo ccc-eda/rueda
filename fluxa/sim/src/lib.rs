@@ -77,6 +77,18 @@ pub fn load_many(files: &[(String, String)]) -> Result<Arc<Program>, String> {
     Ok(prog)
 }
 
+/// 在程式的環境裡求一個運算式的值（常數與函式可用），例如 `reda synth --param prog=image(demo())`
+pub fn eval_str(prog: &Arc<Program>, src: &str) -> Result<value::Value, String> {
+    let p = parser::parse_program("--param", &format!("const __value = {};", src)).map_err(|e| format!("`{}`: syntax error: {}", src, e.msg))?;
+    let [c] = p.consts_decl.as_slice() else { return Err(format!("`{}`: not one expression", src)) };
+    let sh = Shared::new(prog.clone(), false, false);
+    let mut it = Interp::new(sh, 0, "const".to_string());
+    block_on(it.eval(&c.value)).map_err(|e| match e {
+        RtErr::Msg(_, m) => format!("`{}`: {}", src, m),
+        other => format!("`{}`: {:?}", src, other),
+    })
+}
+
 pub fn run_test(prog: &Arc<Program>, t: &TestDecl, opts: &Options) -> TestResult {
     let coop = opts.coop || cfg!(target_arch = "wasm32");
     let sh = Shared::with_hw(prog.clone(), opts.trace, coop, opts.hw.clone());

@@ -1,7 +1,6 @@
 //! `reda synth / fpga / asic` for Fluxa (.fx) files: the front end (the program, the top task,
 //! `--param`) here, the rest of the flow is `eda::flow`, as for Veryl.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// set by `reda` to its subcommand: argument errors point to `reda help <subcommand>`
@@ -17,7 +16,7 @@ fn usage() -> ! {
 pub fn main(all: Vec<String>) {
     let (opts, rest) = eda::flow::Opts::parse(&all).unwrap_or_else(|e| { eprintln!("{}", e); usage() });
     let (mut top, mut list, mut gatesim) = (None::<String>, false, None::<String>);
-    let mut params: HashMap<String, i128> = HashMap::new();
+    let mut params: Vec<(String, String)> = vec![];
     let mut files = vec![];
     let mut a = rest.into_iter();
     while let Some(x) = a.next() {
@@ -27,8 +26,7 @@ pub fn main(all: Vec<String>) {
             "--param" | "-P" => {
                 let kv = a.next().unwrap_or_else(|| usage());
                 let (k, v) = kv.split_once('=').unwrap_or_else(|| { eprintln!("--param takes NAME=VALUE"); usage() });
-                let v: i128 = v.parse().unwrap_or_else(|_| { eprintln!("--param {}: not an integer", kv); usage() });
-                params.insert(k.to_string(), v);
+                params.push((k.to_string(), v.to_string()));
             }
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
             "-h" | "--help" => usage(),
@@ -50,6 +48,13 @@ pub fn main(all: Vec<String>) {
     if let Some(kind) = gatesim {
         std::process::exit(gate_tests(&prog, top.as_deref(), &kind));
     }
+    // a value: an integer, else a Fluxa expression evaluated in the program (an array: `prog=image(demo())`)
+    let mut ps = crate::Params::new();
+    for (k, v) in params {
+        let x = match v.parse::<i128>() { Ok(n) => fluxa::value::Value::Int(n), Err(_) => fluxa::eval_str(&prog, &v).unwrap_or_else(|e| { eprintln!("--param {}: {}", k, e); std::process::exit(1) }) };
+        ps.insert(k, x);
+    }
+    let params = ps;
     let top = top.or_else(|| crate::default_top(&prog)).unwrap_or_else(|| { eprintln!("no task to synthesize"); std::process::exit(1) });
     opts.apply().unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(2) });
     let s = crate::synthesize(&prog, &top, &params).unwrap_or_else(|e| { eprintln!("synthesis error in '{}': {}", top, e); std::process::exit(1) });
