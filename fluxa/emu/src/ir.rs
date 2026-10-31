@@ -104,6 +104,8 @@ pub struct Code {
     pub data: Vec<(String, u32, Vec<K>, u32)>,
     /// the messages of `Op::Trap`
     pub traps: Vec<String>,
+    /// the memories (`mem<T, N>`) in the frame: (name, offset, a word's kind, words)
+    pub mems: Vec<(String, u32, K, u32)>,
 }
 
 /// a channel between two instances (or to the outside)

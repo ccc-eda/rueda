@@ -43,9 +43,16 @@ flowchart LR
 |---|---|---|
 | E1 ✓ | crate `fluxa/emu`：elab、emit、opt、Rust 執行器、`reda emu x.fx` | 所有範例、RV32I、RV64（basic、mmu、amo、fp、irq、system）每個 test 與模擬器相同；37 萬條指令的 RV64 迴圈：模擬器 1,247 秒，執行器 30 秒 |
 | E2 ✓ | WebAssembly 後端（`wgen.rs`：每個程式碼一個 `step` 函式，`br_table` 跳到狀態；128 位元的乘、移位、除是輔助函式）、Node 測試平台（`fluxa/emu/js/emu.mjs`）、`reda emu -o x.wasm` | `fluxa/emu/tests/wasm.sh`：範例、RV32I、RV64 共 222 台機器，錄下執行器的輸入、輸出 token，wasm 重播後輸出相同；RV64 在 Node 上每秒約 234 萬條指令（Rust 執行器的 17 倍） |
-| E3 | 加速：等待迴圈、變數留在暫存器、排程 | RV64 每秒百萬個指令級 |
-| L1 | Fluxa RV64 開 Linux：共用 RAM、C 擴充、CLINT / PLIC / UART / GPIO / 螢幕 / 關機裝置 | OpenSBI + Linux 開到 shell |
+| L1 ✓ | `fluxa/rv64/linux/soc.fx`：Fluxa 寫的 Rv64Soc。`Hart` 一個 task（RV64IMAC + Zicsr + Zicntr + Zifencei + Sstc + Svadu、M / S / U、Sv39、512 項 TLB、RAM、CLINT），照 riscv-emu 的 `cpu.rs`；`Devices`（UART、PLIC、GPIO、關機裝置）照 `bus.rs`；外界（UART 收字、GPIO 輸入）用詢問通道。`boot.mjs` 在 Node 上開機 | `fluxa/rv64/linux/test.sh`：同一個映像（`web/dist/img_linux.js`）開到 busybox shell、執行指令；前 100 萬條指令的 commit log 和 riscv-emu 逐行相同。8,450 萬條指令 9.8 秒（每秒 860 萬條） |
+| E3 | 加速：變數留在暫存器、排程 | |
 | L2 | IDE：Fluxa 開發板範例、模擬機引擎 fluxa-emu | npm test、瀏覽器實測 |
+
+## 為什麼 Linux 用另一顆 RV64
+
+`fluxa/rv64/rv64.fx` 是 task 串成的管線（Fetch、Decode、Execute、Mem、Fpu、MulDiv），指令 ROM 與資料
+記憶體分開（都從位址 0 起），112 個 test 依賴這個映射；每條指令要經過好幾次通道交接，加上三個等待迴圈。
+開 Linux 需要和 Rv64Soc 一樣的記憶體映射與 ISA（同一個映像，裝置樹在 OpenSBI 裡），所以 `linux/soc.fx` 是另一顆：
+一個 hart task 自己擁有 RAM（像 Veryl 的多週期 Rv64Core），周邊在另一個 task。照 riscv-emu 寫，才能逐條比對 commit log。
 
 ## 量測
 

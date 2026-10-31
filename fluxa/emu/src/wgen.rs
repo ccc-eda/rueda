@@ -435,7 +435,10 @@ fn jstr(s: &str) -> String { format!("\"{}\"", s.replace('\\', "\\\\").replace('
 /// what the harness needs: the instances (descriptor, code), the channels (address, depth, token
 /// layout), the outside's channels, the codes' trap messages
 fn meta(m: &Machine, l: &Layout) -> String {
-    let insts: Vec<String> = m.insts.iter().enumerate().map(|(i, x)| format!("{{\"name\":{},\"desc\":{},\"code\":{}}}", jstr(&x.name), l.desc[i], x.code)).collect();
+    let insts: Vec<String> = m.insts.iter().enumerate().map(|(i, x)| {
+        let mems: Vec<String> = m.codes[x.code].mems.iter().map(|(n, off, k, w)| format!("{}:{{\"addr\":{},\"word\":{},\"words\":{}}}", jstr(n), l.frames[i] + off, k.size(), w)).collect();
+        format!("{{\"name\":{},\"desc\":{},\"code\":{},\"mems\":{{{}}}}}", jstr(&x.name), l.desc[i], x.code, mems.join(","))
+    }).collect();
     let chans: Vec<String> = m.chans.iter().enumerate().map(|(k, c)| format!(
         "{{\"name\":{},\"addr\":{},\"depth\":{},\"tok\":{},\"leaves\":[{}],\"signed\":[{}]}}",
         jstr(&c.name), l.chans[k], c.depth, l.tok[k],

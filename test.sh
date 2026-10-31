@@ -74,7 +74,11 @@ fluxa_cpus() {
     "$ROOT/fluxa/rv32i.sh"
     "$ROOT/fluxa/rv64.sh"
     # fluxa-emu: its WebAssembly modules replay the executor's runs
-    if command -v node > /dev/null; then "$ROOT/fluxa/emu/tests/wasm.sh"; fi
+    if command -v node > /dev/null; then
+        "$ROOT/fluxa/emu/tests/wasm.sh"
+        # Linux on the Fluxa Rv64Soc (fluxa-emu): the same commit log as riscv-emu, a shell
+        "$ROOT/fluxa/rv64/linux/test.sh"
+    fi
 }
 run fluxa fluxa_cpus
 

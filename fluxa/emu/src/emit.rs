@@ -1648,7 +1648,11 @@ pub fn compile_task(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &[(St
             code_ports.push(Port { name: name.clone(), out: *out, leaves: leaves(t).iter().map(leaf_kind).collect(), buf });
         }
     }
-    Ok(Code { name: decl.name.clone(), regs: em.regs, frame: em.frame.next_multiple_of(16), states, ports: code_ports, init: em.init, data: em.data.clone(), traps: em.traps })
+    let mut mems = vec![];
+    for (m, ..) in &cfg.mems {
+        if let (Some(off), Some(Ty::Array(e, n))) = (em.slots.get(m), task.mems.get(m)) { mems.push((base(m).to_string(), *off, leaf_kind(e), *n as u32)); }
+    }
+    Ok(Code { name: decl.name.clone(), regs: em.regs, frame: em.frame.next_multiple_of(16), states, ports: code_ports, init: em.init, data: em.data.clone(), traps: em.traps, mems })
 }
 
 impl Em<'_> {
