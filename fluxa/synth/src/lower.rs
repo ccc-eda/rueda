@@ -46,8 +46,8 @@ pub struct Cfg {
     pub params: Vec<String>,
     /// variables made by lowering (the receive temporaries, loop counters) with the type to give them
     pub temps: Vec<(String, Temp)>,
-    /// the memories (`mem_of`): name, word type, size
-    pub mems: Vec<(String, TypeExpr, Expr)>,
+    /// the memories (`mems_of`)
+    pub mems: Vec<MemDecl>,
     pub warnings: Vec<String>,
 }
 
@@ -244,17 +244,28 @@ fn mem_op(m: &str, op: &str, args: Vec<Expr>, line: u32) -> Expr {
     Expr { kind: ExprKind::Method(Box::new(path(m, line)), op.into(), vec![], args), line }
 }
 
-/// the memories of a body: `let m: mem<T, N>` starting all 0 (`[0; N]` or nothing), as
-/// (name, element type, size)
-fn mems_of(b: &Block, out: &mut Vec<(String, TypeExpr, Expr)>) {
+/// a memory: name, word type, size, the parameter its initial words come from (else all 0)
+pub type MemDecl = (String, TypeExpr, Expr, Option<String>);
+
+/// the memories of a body: `let m: mem<T, N>` starting all 0 (`[0; N]` or nothing) or with an
+/// array parameter's words (`= data`)
+fn mems_of(b: &Block, params: &[String], out: &mut Vec<MemDecl>) {
     for s in &b.stmts {
         match &s.kind {
             StmtKind::Let { pat: Pattern::Ident(n), ty: Some(TypeExpr::Mem(t, k)), init, .. } => {
                 let zero = |e: &Expr| matches!(e.kind, ExprKind::Int(0));
-                let ok = match init { None => true, Some(e) => matches!(&e.kind, ExprKind::Repeat(x, _) if zero(x)) };
-                if ok { out.push((n.clone(), (**t).clone(), (**k).clone())); }
+                let from = match init {
+                    None => Some(None),
+                    Some(e) => match &e.kind {
+                        ExprKind::Repeat(x, _) if zero(x) => Some(None),
+                        // its initial words are an array parameter's
+                        ExprKind::Path(p) if p.len() == 1 && params.contains(&p[0]) => Some(Some(p[0].clone())),
+                        _ => None,
+                    },
+                };
+                if let Some(from) = from { out.push((n.clone(), (**t).clone(), (**k).clone(), from)); }
             }
-            StmtKind::For { body, .. } => mems_of(body, out),
+            StmtKind::For { body, .. } => mems_of(body, params, out),
             _ => {}
         }
     }
@@ -263,7 +274,7 @@ fn mems_of(b: &Block, out: &mut Vec<(String, TypeExpr, Expr)>) {
 /// memories become one-clock accesses: `m[i]` → `m.$read(i)` (the word comes out of the memory
 /// a clock later, as from a block RAM), `m[i] = v` → `m.$write(i, v)`. None when a memory is
 /// used some other way (it then stays an array of registers).
-fn mem_rewrite(body: &Block, mems: &[(String, TypeExpr, Expr)]) -> Option<Block> {
+fn mem_rewrite(body: &Block, mems: &[MemDecl]) -> Option<Block> {
     let names = mems.iter().map(|m| m.0.clone()).collect();
     let mut rw = Renamer { scopes: vec![HashMap::new()], n: 0, mem: Some(MemRw { names, bad: false }), consts: HashSet::new() };
     let b = rw.block(body);
@@ -279,10 +290,30 @@ fn is_chan_op(e: &Expr) -> bool { matches!(&e.kind, ExprKind::Method(_, n, _, _)
 
 /// does the expression contain a channel operation (it then needs states, not just gates)?
 pub fn has_chan(e: &Expr) -> bool {
-    if is_chan_op(e) || has_return(e) { return true; }
+    if is_chan_op(e) || has_return(e) || expr_serial(e) { return true; }
     let mut found = false;
     visit(e, &mut |x| if is_chan_op(x) { found = true });
     found
+}
+
+/// does a block contain a `serial for`? Its iterations take a clock each (states, one per
+/// iteration), where another loop without channel operations is unrolled into gates
+fn block_serial(b: &Block) -> bool {
+    b.stmts.iter().any(|s| match &s.kind {
+        StmtKind::For { attr: LoopAttr::Serial, .. } => true,
+        StmtKind::For { body, .. } => block_serial(body),
+        StmtKind::Let { init: Some(e), .. } | StmtKind::Carry { init: e, .. } | StmtKind::Expr(e) | StmtKind::Assign { value: e, .. } => expr_serial(e),
+        _ => false,
+    }) || b.tail.as_ref().is_some_and(|t| expr_serial(t))
+}
+
+fn expr_serial(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Block(b) => block_serial(b),
+        ExprKind::If(_, t, el) => block_serial(t) || el.as_ref().is_some_and(|x| expr_serial(x)),
+        ExprKind::Match(_, arms) => arms.iter().any(|a| expr_serial(&a.body)),
+        _ => false,
+    }
 }
 
 /// does an `if` / `match` / block contain a `return` (a jump to the task's end: states too)?
@@ -307,7 +338,7 @@ fn stmt_has_chan(s: &Stmt, chans: &HashSet<String>) -> bool {
         StmtKind::Let { init, .. } => init.as_ref().is_some_and(has_chan),
         StmtKind::Carry { init, .. } => has_chan(init),
         StmtKind::Assign { target, value, .. } => has_chan(target) || has_chan(value),
-        StmtKind::For { iter, body, .. } => has_chan(iter) || block_has_chan(body, chans) || is_chan_path(iter, chans),
+        StmtKind::For { attr, iter, body, .. } => matches!(attr, LoopAttr::Serial) || has_chan(iter) || block_has_chan(body, chans) || is_chan_path(iter, chans),
         StmtKind::Spawn(_) | StmtKind::Parallel(_) | StmtKind::Return(_) => true,
         StmtKind::Assert { .. } => false,
         StmtKind::Expr(e) => has_chan(e),
@@ -789,7 +820,7 @@ pub fn lower(decl: &FnDecl, consts: &HashSet<String>) -> R<Cfg> {
     let params: Vec<String> = decl.params.iter().map(|p| rn.bind(&p.name)).collect();
     let body = rn.block(&decl.body);
     let mut mems = vec![];
-    mems_of(&body, &mut mems);
+    mems_of(&body, &params, &mut mems);
     if !mems.is_empty() {
         let names: Vec<&str> = mems.iter().map(|m| base(&m.0)).collect();
         let why = match mem_rewrite(&body, &mems) {
@@ -805,7 +836,7 @@ pub fn lower(decl: &FnDecl, consts: &HashSet<String>) -> R<Cfg> {
 
 fn base(n: &str) -> &str { crate::gen::base(n) }
 
-fn lower_body(decl: &FnDecl, params: &[String], body: &Block, mems: Vec<(String, TypeExpr, Expr)>) -> R<Cfg> {
+fn lower_body(decl: &FnDecl, params: &[String], body: &Block, mems: Vec<MemDecl>) -> R<Cfg> {
     let params = params.to_vec();
     let chans: HashSet<String> = decl.params.iter().zip(&params).filter(|(p, _)| matches!(p.ty, TypeExpr::Chan(..))).map(|(_, u)| u.clone()).collect();
     let mut regs = vec![];

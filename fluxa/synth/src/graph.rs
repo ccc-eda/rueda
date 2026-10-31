@@ -207,7 +207,10 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     let mut ports = vec![Port { name: "clk".into(), dir: Dir::In, bits: vec![clk] }, Port { name: "rst".into(), dir: Dir::In, bits: vec![rst] }];
     // every instance's cells copied with fresh wires; its ports by name
     let mut iports: Vec<HashMap<String, Vec<Bit>>> = vec![];
-    for inst in &insts {
+    // an instance's named nets (its variables, state, memories) under its name: `mem3.dmem.2`, `$mem:mem3.dmem.2:clk`
+    let mut nets: Vec<(String, Vec<Bit>)> = vec![];
+    let inst_name = |k: usize, inst: &Inst| format!("{}{}", inst.name.trim_start_matches('$').to_lowercase(), k);
+    for (k, inst) in insts.iter().enumerate() {
         let nl = &inst.s.netlist;
         let base = b.next_wire;
         let maxw = nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()))
@@ -219,6 +222,11 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
         b.next_wire = base + maxw + 1;
         let mut pm = HashMap::new();
         for p in &nl.ports { pm.insert(p.name.clone(), p.bits.iter().map(|x| map(*x)).collect::<Vec<Bit>>()); }
+        let me = inst_name(k, inst);
+        for (n, bits) in &nl.nets {
+            let n = match n.strip_prefix("$mem:") { Some(r) => format!("$mem:{}.{}", me, r), None => format!("{}.{}", me, n) };
+            nets.push((n, bits.iter().map(|x| map(*x)).collect()));
+        }
         // the instance's clock and reset are the network's
         for (n, to) in [("clk", clk), ("rst", rst)] { if let Some(bits) = pm.get(n) { if let Bit::W(w) = bits[0] { alias.insert(w, to); } } }
         iports.push(pm);
@@ -238,14 +246,21 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
         ports.push(Port { name: format!("{}_ready", n), dir: Dir::In, bits: vec![r] });
         top_out_ready.insert(n.clone(), r);
     }
-    // the array parameters: input ports, wired to the instances given them
+    // the array parameters: input ports, wired to the instances given them; an instance memory's
+    // initial words are loaded (the network's memory load)
     for (n, t, _) in &passed {
         let ty = Ty::of_rt(t)?;
+        for (k, inst) in insts.iter().enumerate() {
+            for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n) {
+                if let Some((_, m, mt)) = inst.s.iface.mem_inits.iter().find(|x| &x.0 == q) { iface.mem_inits.push((n.clone(), format!("{}.{}", inst_name(k, inst), m), mt.clone())); }
+            }
+        }
+        if !insts.iter().any(|inst| inst.passes.iter().any(|(q, j)| passed[*j].0 == *n && inst.s.iface.scalars.iter().any(|s| &s.0 == q))) { continue; }
         let bits = b.wires(ty.width() as u32);
         ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
         iface.scalars.push((n.clone(), ty));
         for (k, inst) in insts.iter().enumerate() {
-            for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n) {
+            for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n && inst.s.iface.scalars.iter().any(|s| s.0 == x.0)) {
                 let to = iports[k].get(q).ok_or_else(|| format!("instance {} has no port {}", inst.name, q))?;
                 for (t, f) in to.iter().zip(&bits) { if let Bit::W(w) = t { alias.insert(*w, *f); } }
             }
@@ -290,13 +305,13 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     }
     ports.extend(out_ports);
     // an instance input left unconnected (a scalar given no value) is an error
-    let nl: Netlist = netlist::optimize(b, &alias, ports, vec![], &decl.name)?;
+    let nl: Netlist = netlist::optimize(b, &alias, ports, nets, &decl.name)?;
     let mut warnings = vec![];
     for inst in &insts { warnings.extend(inst.s.warnings.iter().map(|w| format!("{}: {}", inst.name, w))); }
     // instance k of task T is `t<k>` (its own instances below it)
     let mut tree = vec![(String::new(), decl.name.clone())];
     for (k, inst) in insts.iter().enumerate() {
-        let me = format!("{}{}", inst.name.trim_start_matches('$').to_lowercase(), k);
+        let me = inst_name(k, inst);
         for (p, t) in &inst.s.insts { tree.push((if p.is_empty() { me.clone() } else { format!("{}.{}", me, p) }, t.clone())); }
     }
     Ok(crate::Synth { netlist: nl, iface, warnings, insts: tree })

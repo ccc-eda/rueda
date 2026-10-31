@@ -178,6 +178,7 @@ pub fn map(nl: &Netlist) -> R<Netlist> {
     // synchronous-read memories -> SB_RAM40_4K (they take no part in LUT mapping)
     let inf = crate::bram::infer(nl);
     let nl = &inf.nl;
+    crate::bram::check_inits(nl, "the iCE40")?;
     // combinational gates by output wire; nl.cells keeps them in topological order
     let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
     let mut node: HashMap<u32, usize> = HashMap::new();

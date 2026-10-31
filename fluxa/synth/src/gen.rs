@@ -25,6 +25,9 @@ pub enum ParamHw {
     OutChan(Ty),
     /// a parameter that is not a channel: a constant (a value) or an input port (None)
     Scalar(Ty, Option<Value>),
+    /// an array parameter that is only a memory's initial words, given at run time (no port:
+    /// the simulation loads the memory, `Iface::mem_inits`)
+    MemInit(Ty),
 }
 
 /// a constant parameter's value in hardware (an array of constants: a ROM, folded into gates)
@@ -182,11 +185,19 @@ impl<'p> Gen<'p> {
         }
     }
 
+    /// the same; None for a type the simulator leaves open (`_`, or an integer wider than Fluxa's
+    /// 120 bits such as `i128`): the value keeps its own type, as there
+    pub fn ty_opt(&mut self, t: &TypeExpr, line: u32) -> R<Option<Ty>> {
+        let rt = block_on(self.it.eval_type(t)).map_err(|e| format!("{}: type: {:?}", self.here(line), e))?;
+        if matches!(rt, fluxa::value::RtType::Any) { return Ok(None); }
+        Ty::of_rt(&rt).map(Some).map_err(|m| format!("{}: {}", self.here(line), m))
+    }
+
     fn stmt(&mut self, s: &Stmt) -> R<()> {
         let line = s.line;
         match &s.kind {
             StmtKind::Let { pat, ty, init, .. } => {
-                let t = match ty { Some(t) => Some(self.ty(t, line)?), None => None };
+                let t = match ty { Some(t) => self.ty_opt(t, line)?, None => None };
                 let v = match init {
                     Some(e) => self.eval(e)?,
                     None => match &t { Some(t) => HV::konst_of(t), None => return err(line, self.prog, "`let` needs an initializer or a type") },
@@ -720,10 +731,14 @@ impl<'p> Gen<'p> {
         let mut positional = vals.iter().filter(|(n, _)| n.is_none()).map(|(_, v)| v.clone());
         for (p, u) in decl.params.iter().zip(&params) {
             let v = match vals.iter().find(|(n, _)| n.as_deref() == Some(p.name.as_str())) { Some((_, v)) => v.clone(), None => match positional.next() { Some(v) => v, None => return err(line, self.prog, format!("missing argument `{}`", p.name)) } };
-            let t = self.ty(&p.ty, line)?;
-            self.declare(u, Some(t.clone()), v.clone())?;
-            let k = fit_keep(&mut self.g, &v, &t)?;
-            self.env.insert(u.clone(), k);
+            match self.ty_opt(&p.ty, line)? {
+                Some(t) => {
+                    self.declare(u, Some(t.clone()), v.clone())?;
+                    let k = fit_keep(&mut self.g, &v, &t)?;
+                    self.env.insert(u.clone(), k);
+                }
+                None => self.declare(u, None, v)?,
+            }
         }
         self.depth += 1;
         let mut stmts = body.stmts.clone();
@@ -734,7 +749,10 @@ impl<'p> Gen<'p> {
         let r = self.stmts(&stmts).and_then(|_| match &tail { Some(t) => self.eval(t), None => Ok(HV::S(SVal::konst(0))) });
         self.depth -= 1;
         let v = r?;
-        match &decl.ret { Some(rt) => { let t = self.ty(rt, line)?; fit_keep(&mut self.g, &v, &t) } None => Ok(v) }
+        match &decl.ret {
+            Some(rt) => match self.ty_opt(rt, line)? { Some(t) => fit_keep(&mut self.g, &v, &t), None => Ok(v) },
+            None => Ok(v),
+        }
     }
 }
 
@@ -743,6 +761,78 @@ impl<'p> Gen<'p> {
 pub enum PathStep {
     Const(usize),
     Var(SVal),
+}
+
+/// the blocks a terminator goes to
+fn succs(t: &Term, me: usize) -> Vec<usize> {
+    match t {
+        Term::Goto(b) => vec![*b],
+        Term::Branch(_, a, b) => vec![*a, *b],
+        Term::Recv { closed, next, .. } => closed.iter().copied().chain([*next]).collect(),
+        Term::Send { next, .. } | Term::Close { next, .. } | Term::CloseOwned { next, .. } | Term::MemRead { next, .. } | Term::MemWrite { next, .. } => vec![*next],
+        Term::Pipe { exit, .. } => vec![me, *exit],
+        Term::Halt => vec![],
+    }
+}
+
+/// the names an expression of a block or its terminator reads
+fn block_reads(b: &crate::lower::Bb) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let blk = Block { stmts: b.stmts.clone(), tail: None };
+    crate::walk_block(&blk, &mut |e| if let ExprKind::Path(p) = &e.kind { if p.len() == 1 { out.insert(p[0].clone()); } });
+    let mut ex = |e: &Expr| crate::walk_paths(e, &mut |p| { out.insert(p.to_string()); });
+    match &b.term {
+        Term::Branch(c, ..) => ex(c),
+        Term::Send { val, .. } => ex(val),
+        Term::MemRead { addr, .. } => ex(addr),
+        Term::MemWrite { addr, val, .. } => { ex(addr); ex(val); }
+        Term::Pipe { cond, sends, .. } => { if let Some(c) = cond { ex(c); } for (_, v) in sends { out.insert(v.clone()); } }
+        _ => {}
+    }
+    out
+}
+
+/// Reads of one memory whose words can go into one register (a block RAM's output register):
+/// wherever the word read by read r is used, r is the memory's latest read (a forward pass over
+/// the states: which reads may be the latest one), and nothing else assigns it. The word of
+/// every such read → the first one's register.
+fn shared_reads(cfg: &Cfg) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let n = cfg.blocks.len();
+    let mut by_mem: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
+    for (i, b) in cfg.blocks.iter().enumerate() {
+        if let Term::MemRead { dst, mem, .. } = &b.term { by_mem.entry(mem.as_str()).or_default().push((i, dst.as_str())); }
+    }
+    let reads: Vec<HashSet<String>> = cfg.blocks.iter().map(block_reads).collect();
+    let mut assigned: HashSet<String> = HashSet::new();
+    for b in &cfg.blocks {
+        for s in &b.stmts {
+            match &s.kind {
+                StmtKind::Let { pat: Pattern::Ident(x), .. } => { assigned.insert(x.clone()); }
+                StmtKind::Assign { target, .. } => crate::walk_paths(target, &mut |p| { assigned.insert(p.to_string()); }),
+                _ => {}
+            }
+        }
+        if let Term::Recv { dst, .. } = &b.term { assigned.insert(dst.clone()); }
+    }
+    for (_, rs) in by_mem {
+        if rs.len() < 2 || rs.iter().any(|(_, d)| assigned.contains(*d)) { continue; }
+        // latest[b]: the reads (block index; n = none yet) that may be the latest at b's start
+        let mut latest: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+        latest[0].insert(n);
+        let mut work = vec![0usize];
+        while let Some(b) = work.pop() {
+            let out_set: HashSet<usize> = if rs.iter().any(|(i, _)| *i == b) { [b].into() } else { latest[b].clone() };
+            for s in succs(&cfg.blocks[b].term, b) {
+                let before = latest[s].len();
+                latest[s].extend(out_set.iter().copied());
+                if latest[s].len() != before { work.push(s); }
+            }
+        }
+        let ok = rs.iter().all(|(r, d)| (0..n).all(|x| !reads[x].contains(*d) || latest[x].iter().all(|k| *k == *r || *k == n)));
+        if ok { for (_, d) in &rs[1..] { out.insert(d.to_string(), rs[0].1.to_string()); } }
+    }
+    out
 }
 
 /// after an arm: a variable it did not change gets its range from before the condition back
@@ -773,7 +863,8 @@ pub fn base(n: &str) -> &str { n.split(['.', '~']).next().unwrap_or(n) }
 struct Chan { ty: Ty, out: bool }
 
 /// a memory read port: address, word read
-type MemRead = (Vec<Bit>, Vec<Bit>);
+/// a memory read: the state doing it, the address
+type MemRead = (Bit, Vec<Bit>);
 /// a memory write: when, address, word
 type MemWrite = (Bit, Vec<Bit>, Vec<Bit>);
 
@@ -810,12 +901,30 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         _ => None,
     }).collect();
 
-    // the memories: word type and size
+    // the memories: word type and size; initial words: a constant's bits, or loaded at run time
     let mut mems: HashMap<String, (Ty, usize)> = HashMap::new();
-    for (m, t, n) in &cfg.mems {
-        match gen.ty(&TypeExpr::Mem(Box::new(t.clone()), Box::new(n.clone())), decl.line)? {
-            Ty::Array(e, n) if e.is_scalar() => { mems.insert(m.clone(), (*e, n)); }
+    let mut mem_init: HashMap<String, Vec<Bit>> = HashMap::new();
+    let mut mem_loads: Vec<(String, String, Ty)> = vec![];
+    for (m, t, n, from) in &cfg.mems {
+        let mt = gen.ty(&TypeExpr::Mem(Box::new(t.clone()), Box::new(n.clone())), decl.line)?;
+        match &mt {
+            Ty::Array(e, n) if e.is_scalar() => { mems.insert(m.clone(), ((**e).clone(), *n)); }
             _ => return Err(format!("{}: memory `{}`: words that are arrays or tuples are not synthesized", prog.loc(decl.line), base(m))),
+        }
+        let Some(p) = from else { continue };
+        let Some(h) = hw.iter_mut().find(|x| &x.1 == p) else { continue };
+        let pname = h.0.clone();
+        match &h.2 {
+            ParamHw::Scalar(_, Some(v)) => {
+                let bits = crate::hw::value_bits(v, &mt).ok_or_else(|| format!("{}: memory `{}`: parameter `{}` is not a {:?}", prog.loc(decl.line), base(m), pname, mt))?;
+                mem_init.insert(m.clone(), bits.into_iter().map(Bit::of).collect());
+            }
+            ParamHw::Scalar(_, None) | ParamHw::MemInit(_) => {
+                h.2 = ParamHw::MemInit(mt.clone());
+                mem_loads.push((pname.clone(), m.clone(), mt.clone()));
+                warnings.push(format!("memory `{}` starts with parameter `{}`'s words: give them with --param {}=… (a simulation loads them)", base(m), pname, pname));
+            }
+            _ => return Err(format!("{}: memory `{}`: `{}` is a channel", prog.loc(decl.line), base(m), pname)),
         }
     }
     warnings.extend(cfg.warnings.iter().cloned());
@@ -876,12 +985,17 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
                 ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
                 scalars.insert(u.clone(), HV::of_ty(&bits, t));
             }
+            ParamHw::MemInit(_) => {}
         }
     }
-    // registers: the variables, the state, which channels are closed
+    // registers: the variables, the state, which channels are closed; the words read from one
+    // memory share a register when they can (`shared_reads`): a block RAM has one
     let mut names: Vec<String> = vars.keys().cloned().collect();
     names.sort();
-    let q: HashMap<String, HV> = names.iter().map(|n| { let t = &vars[n]; let w = g.g.wires(t.width() as u32); (n.clone(), HV::of_ty(&w, t)) }).collect();
+    let share = shared_reads(cfg);
+    let canon = |n: &String| share.get(n).unwrap_or(n).clone();
+    let mut q: HashMap<String, HV> = names.iter().filter(|n| canon(n) == **n).map(|n| { let t = &vars[n]; let w = g.g.wires(t.width() as u32); (n.clone(), HV::of_ty(&w, t)) }).collect();
+    for (n, c) in &share { if let Some(v) = q.get(c).cloned() { q.insert(n.clone(), v); } }
     let nst = cfg.blocks.len();
     let sw = bits_for(nst).max(1);
     let state = g.g.wires(sw as u32);
@@ -893,6 +1007,9 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     let mut store: HashMap<String, Vec<Vec<Bit>>> = HashMap::new();
     for (m, (t, n)) in &mems { store.insert(m.clone(), (0..*n).map(|_| g.g.wires(t.width() as u32)).collect()); }
     let mut mem_reads: HashMap<String, Vec<MemRead>> = HashMap::new();
+    // one read port per memory: the word read (wired to the memory at the end, `alias`)
+    let rd_of: HashMap<String, Vec<Bit>> = mems.iter().map(|(m, (t, _))| (m.clone(), g.g.wires(t.width() as u32))).collect();
+    let mut alias: HashMap<u32, Bit> = HashMap::new();
     let mut mem_writes: HashMap<String, Vec<MemWrite>> = HashMap::new();
     let mut var_d: HashMap<String, Vec<(Bit, Vec<Bit>)>> = HashMap::new();
     let mut state_d: Vec<(Bit, Vec<Bit>)> = vec![];
@@ -982,9 +1099,8 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             Term::MemRead { dst, mem, addr, next } => {
                 let a = g.scalar(addr)?;
                 let a = mem_addr(&a, mems[mem].1);
-                let rd = g.g.select(&store[mem], &a);
-                g.env.insert(dst.clone(), HV::S(SVal::of_ty(rd.clone(), &mems[mem].0)));
-                mem_reads.entry(mem.clone()).or_default().push((a, rd));
+                g.env.insert(dst.clone(), HV::S(SVal::of_ty(rd_of[mem].clone(), &mems[mem].0)));
+                mem_reads.entry(mem.clone()).or_default().push((is_s, a));
                 (Bit::C1, konst(*next))
             }
             Term::MemWrite { mem, addr, val, next } => {
@@ -1037,7 +1153,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             let Some(v) = g.env.get(n).cloned() else { continue };
             let v = fit_hv(&mut g.g, &v, &vars[n])?;
             let vb = v.flat();
-            if vb != q[n].flat() { var_d.entry(n.clone()).or_default().push((go, vb)); }
+            if vb != q[n].flat() { var_d.entry(canon(n)).or_default().push((go, vb)); }
         }
     }
 
@@ -1045,10 +1161,16 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
     let ff = |g: &mut Builder, d: Bit, qb: Bit| g.ff("$_DFF_P_".into(), vec![("C", clk), ("D", d), ("Q", qb)]);
     let ffr = |g: &mut Builder, d: Bit, qb: Bit| g.ff("$_SDFF_PP0_".into(), vec![("C", clk), ("D", d), ("R", rst), ("Q", qb)]);
     let mut nets = vec![];
-    for n in &names {
+    for n in names.iter().filter(|n| canon(n) == **n) {
         let qb = q[n].flat();
         let mut d = qb.clone();
-        for (c, v) in var_d.get(n).into_iter().flatten() { d = g.g.muxv(*c, &d, v); }
+        // states give a register the same value (a memory's word read): one condition (the states'
+        // conditions exclude each other, so the order does not matter)
+        let mut ups: Vec<(Bit, Vec<Bit>)> = vec![];
+        for (c, v) in var_d.get(n).into_iter().flatten() {
+            match ups.iter_mut().find(|u| u.1 == *v) { Some(u) => u.0 = g.g.or(u.0, *c), None => ups.push((*c, v.clone())) }
+        }
+        for (c, v) in &ups { d = g.g.muxv(*c, &d, v); }
         for (i, b) in qb.iter().enumerate() { ff(&mut g.g, if d[i] == *b { Bit::C0 } else { d[i] }, *b); }
         nets.push((n.clone(), qb));
     }
@@ -1071,13 +1193,20 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             for (i, b) in w.iter().enumerate() { ff(&mut g.g, d[i], *b); }
         }
         nets.push((m.clone(), words.concat()));
+        if let Some(bits) = mem_init.get(m) { nets.push((format!("$mem:{}:init", m), bits.clone())); }
         nets.push((format!("$mem:{}:clk", m), vec![clk]));
         nets.push((format!("$mem:{}:we", m), vec![we]));
         nets.push((format!("$mem:{}:wa", m), wa));
         nets.push((format!("$mem:{}:wd", m), wd));
-        for (i, (ra, rd)) in mem_reads.get(m).into_iter().flatten().enumerate() {
-            nets.push((format!("$mem:{}:ra{}", m, i), ra.clone()));
-            nets.push((format!("$mem:{}:rd{}", m, i), rd.clone()));
+        // the read port: the address of the state reading, the word there
+        let reads = mem_reads.get(m).cloned().unwrap_or_default();
+        if let Some((_, a0)) = reads.first() {
+            let mut ra = a0.clone();
+            for (s, a) in reads.iter().skip(1) { ra = g.g.muxv(*s, &ra, a); }
+            let rd = g.g.select(words, &ra);
+            for (p, r) in rd_of[m].iter().zip(&rd) { if let Bit::W(w) = p { alias.insert(*w, *r); } }
+            nets.push((format!("$mem:{}:ra0", m), ra));
+            nets.push((format!("$mem:{}:rd0", m), rd_of[m].clone()));
         }
     }
     let mut sd = state.clone();
@@ -1116,16 +1245,17 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
             _ => {}
         }
     }
-    let netlist = netlist::optimize(g.g, &HashMap::new(), ports, nets, &decl.name)?;
+    let netlist = netlist::optimize(g.g, &alias, ports, nets, &decl.name)?;
     let mut iface = crate::hw::Iface::default();
     for (n, _, h) in &hw {
         match h {
             ParamHw::InChan(t) => iface.ins.push((n.clone(), t.clone())),
             ParamHw::OutChan(t) => iface.outs.push((n.clone(), t.clone())),
             ParamHw::Scalar(t, None) => iface.scalars.push((n.clone(), t.clone())),
-            ParamHw::Scalar(_, Some(_)) => {}
+            ParamHw::Scalar(_, Some(_)) | ParamHw::MemInit(_) => {}
         }
     }
+    iface.mem_inits = mem_loads;
     Ok(crate::Synth { netlist, iface, warnings, insts: vec![(String::new(), decl.name.clone())] })
 }
 

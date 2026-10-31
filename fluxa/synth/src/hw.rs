@@ -20,6 +20,8 @@ pub struct Iface {
     pub outs: Vec<(String, Ty)>,
     /// scalar parameters that are input ports (not fixed with `--param`)
     pub scalars: Vec<(String, Ty)>,
+    /// memories whose initial words are a parameter given at run time: (parameter, memory net, type)
+    pub mem_inits: Vec<(String, String, Ty)>,
 }
 
 pub struct HwSim<'n> {
@@ -31,6 +33,8 @@ pub struct HwSim<'n> {
     pub changed: bool,
     /// clock cycles run since the reset
     pub cycles: usize,
+    /// memories to load (`Iface::mem_inits`) that the netlist does not have
+    pub missing: Vec<String>,
 }
 
 /// a scalar as `t`'s bits (two's complement)
@@ -62,6 +66,13 @@ fn bits_tok(b: &[bool], t: &Ty) -> Tok {
     }
 }
 
+/// an array of scalars as memory words (each word `t`'s bits, low first)
+fn value_words(v: &Value, t: &Ty) -> Option<Vec<u128>> {
+    let (Value::Array(xs), Ty::Array(e, n)) = (v, t) else { return None };
+    if xs.len() != *n { return None; }
+    xs.iter().map(|x| value_bits(x, e).map(|b| b.iter().enumerate().take(128).fold(0u128, |a, (i, y)| a | ((*y as u128) << i)))).collect()
+}
+
 /// a parameter's value as `t`'s bits (scalars, arrays, tuples)
 pub fn value_bits(v: &Value, t: &Ty) -> Option<Vec<bool>> {
     match (v, t) {
@@ -78,18 +89,21 @@ impl<'n> HwSim<'n> {
     /// the circuit after a reset cycle, with the scalar inputs set
     pub fn new(nl: &'n Netlist, io: &'n Iface, scalars: &[i128]) -> HwSim<'n> {
         let bits: Vec<Vec<bool>> = io.scalars.iter().zip(scalars).map(|((_, t), v)| int_bits(*v, t)).collect();
-        HwSim::with_inputs(nl, io, &bits)
+        HwSim::with_inputs(nl, io, &bits, &[])
     }
 
-    /// the same, the parameter inputs (arrays too) given as bits
-    pub fn with_inputs(nl: &'n Netlist, io: &'n Iface, inputs: &[Vec<bool>]) -> HwSim<'n> {
+    /// the same, the parameter inputs (arrays too) given as bits, and the words of the memories
+    /// whose initial contents are given at run time (`Iface::mem_inits`; missing: all 0)
+    pub fn with_inputs(nl: &'n Netlist, io: &'n Iface, inputs: &[Vec<bool>], mems: &[Vec<u128>]) -> HwSim<'n> {
         let mut sim = NetSim::new(nl);
         for ((n, _), v) in io.scalars.iter().zip(inputs) { sim.poke_bits(n, v); }
+        let mut missing = vec![];
+        for ((_, m, _), w) in io.mem_inits.iter().zip(mems) { if sim.load_mem(m, w) == 0 { missing.push(m.clone()); } }
         sim.set("rst", 1);
         sim.step();
         sim.set("rst", 0);
         let state = nl.cells.iter().filter(|c| c.is_ff()).map(|c| c.out()).collect();
-        HwSim { sim, io, state, changed: true, cycles: 0 }
+        HwSim { sim, io, state, changed: true, cycles: 0, missing }
     }
 
     /// one clock: `offer` is the token each input channel offers (None: nothing),
@@ -221,6 +235,16 @@ impl HwProvider for Provider {
                 None => return Some(Err(format!("hardware `{}`: parameter `{}` needs a value of type {:?}", task, n, t))),
             }
         }
-        Some(Ok(Box::new(Running(HwSim::with_inputs(nl, io, &inputs)))))
+        let mut mems = vec![];
+        for (n, m, t) in &io.mem_inits {
+            match args.iter().find(|(a, _)| a == n).and_then(|(_, v)| value_words(v, t)) {
+                Some(w) => mems.push(w),
+                None => return Some(Err(format!("hardware `{}`: memory `{}` needs parameter `{}` of type {:?}", task, m, n, t))),
+            }
+        }
+        let sim = HwSim::with_inputs(nl, io, &inputs, &mems);
+        // the memory must be found in the netlist of this kind (flip-flops or block RAMs)
+        if let Some(m) = sim.missing.first() { return Some(Err(format!("hardware `{}`: memory `{}` is not in the {} netlist", task, m, self.kind))); }
+        Some(Ok(Box::new(Running(sim))))
     }
 }

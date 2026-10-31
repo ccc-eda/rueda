@@ -462,7 +462,14 @@ fn rv32i_pipeline_in_gates() {
         assert!(r.passed, "{}: {}", name, r.message);
     }
     let built = p.report();
-    assert!(matches!(built.as_slice(), [(n, Ok(c))] if n == "Core(WBD=8)" && *c > 30000), "{:?}", built);
+    assert!(matches!(built.as_slice(), [(n, Ok(c))] if n == "Core(WBD=8)" && *c > 20000), "{:?}", built);
+    // the data memory's initial words are loaded at the start (no ports for them): into its
+    // flip-flops above, into the iCE40's block RAMs here
+    let p = Arc::new(Provider::new(&prog, "Core", "ice40").unwrap());
+    let opts = fluxa::Options { coop: true, hw: Some(p.clone()), ..Default::default() };
+    let t = prog.tests.iter().find(|t| t.name == "load_use_hazard").unwrap();
+    let r = fluxa::run_test(&prog, t, &opts);
+    assert!(r.passed, "load_use_hazard on iCE40 gates: {}", r.message);
     // without the generic's value it says what is missing
     let e = fluxa_synth::synthesize(&prog, "Core", &HashMap::new()).err().unwrap();
     assert!(e.contains("generic `WBD` needs a value"), "{}", e);
@@ -482,14 +489,20 @@ fn rv32i_core_with_program_built_in() {
     ps.insert("prog".into(), fluxa::eval_str(&prog, fib).unwrap());
     ps.insert("data".into(), fluxa::eval_str(&prog, "dimage([7, 42])").unwrap());
     let s = fluxa_synth::synthesize(&prog, "Core", &ps).unwrap();
-    assert!(s.iface.scalars.is_empty() && s.iface.ins.is_empty(), "{:?}", s.iface);
-    let mut hw = fluxa_synth::hw::HwSim::new(&s.netlist, &s.iface, &[]);
-    let outs = hw.run_streams(&[], 5000);
-    let ints = |v: &[HwTok]| v.iter().filter_map(|t| if let HwTok::Data(x) = t { Some(*x) } else { None }).collect::<Vec<i128>>();
-    let (io, dump) = (ints(&outs[0]), ints(&outs[1]));
-    assert_eq!(io, [0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
-    // the dump: cause 0 (ECALL) at pc 44, and x5 = data word 1
-    assert_eq!((dump[0], dump[1], dump[4 + 5]), (0, 44, 42));
+    assert!(s.iface.scalars.is_empty() && s.iface.ins.is_empty() && s.iface.mem_inits.is_empty(), "{:?}", s.iface);
+    // the generic gates (the data memory's flip-flops start with its words) and the ECP5's (a
+    // block RAM whose INITVAL holds them)
+    for kind in ["opt", "ecp5"] {
+        let nl = eda::netsim::mapped(&s.netlist, kind).unwrap();
+        if kind == "ecp5" { assert!(nl.cells.iter().any(|c| c.typ == "DP16KD")); }
+        let mut hw = fluxa_synth::hw::HwSim::new(&nl, &s.iface, &[]);
+        let outs = hw.run_streams(&[], 5000);
+        let ints = |v: &[HwTok]| v.iter().filter_map(|t| if let HwTok::Data(x) = t { Some(*x) } else { None }).collect::<Vec<i128>>();
+        let (io, dump) = (ints(&outs[0]), ints(&outs[1]));
+        assert_eq!(io, [0, 1, 1, 2, 3, 5, 8, 13, 21, 34], "{}", kind);
+        // the dump: cause 0 (ECALL) at pc 44, and x5 = data word 1
+        assert_eq!((dump[0], dump[1], dump[4 + 5]), (0, 44, 42), "{}", kind);
+    }
     // a value that is not of the parameter's type is an error
     ps.insert("data".into(), Value::Int(3));
     let e = fluxa_synth::synthesize(&prog, "Core", &ps).err().unwrap();

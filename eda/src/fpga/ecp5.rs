@@ -19,6 +19,7 @@ pub const PASS_INIT: u16 = 0xFFFF;
 pub fn map(nl: &Netlist) -> R<Netlist> {
     let (nl_owned, rams) = brams(nl);
     let nl = &nl_owned;
+    crate::bram::check_inits(nl, "the ECP5")?;
     let gates: Vec<&Cell> = nl.cells.iter().filter(|c| !c.is_ff()).collect();
     let mut node: HashMap<u32, usize> = HashMap::new();
     for (i, c) in gates.iter().enumerate() {
@@ -162,6 +163,54 @@ pub const ADB: [&str; 14] = ["ADB0", "ADB1", "ADB2", "ADB3", "ADB4", "ADB5", "AD
 pub const DIA: [&str; 9] = ["DIA0", "DIA1", "DIA2", "DIA3", "DIA4", "DIA5", "DIA6", "DIA7", "DIA8"];
 pub const DOB: [&str; 9] = ["DOB0", "DOB1", "DOB2", "DOB3", "DOB4", "DOB5", "DOB6", "DOB7", "DOB8"];
 
+/// the 64 names of a DP16KD's initial contents
+pub const INITVAL: [&str; 64] = ["INITVAL_00", "INITVAL_01", "INITVAL_02", "INITVAL_03", "INITVAL_04", "INITVAL_05", "INITVAL_06", "INITVAL_07",
+    "INITVAL_08", "INITVAL_09", "INITVAL_0A", "INITVAL_0B", "INITVAL_0C", "INITVAL_0D", "INITVAL_0E", "INITVAL_0F",
+    "INITVAL_10", "INITVAL_11", "INITVAL_12", "INITVAL_13", "INITVAL_14", "INITVAL_15", "INITVAL_16", "INITVAL_17",
+    "INITVAL_18", "INITVAL_19", "INITVAL_1A", "INITVAL_1B", "INITVAL_1C", "INITVAL_1D", "INITVAL_1E", "INITVAL_1F",
+    "INITVAL_20", "INITVAL_21", "INITVAL_22", "INITVAL_23", "INITVAL_24", "INITVAL_25", "INITVAL_26", "INITVAL_27",
+    "INITVAL_28", "INITVAL_29", "INITVAL_2A", "INITVAL_2B", "INITVAL_2C", "INITVAL_2D", "INITVAL_2E", "INITVAL_2F",
+    "INITVAL_30", "INITVAL_31", "INITVAL_32", "INITVAL_33", "INITVAL_34", "INITVAL_35", "INITVAL_36", "INITVAL_37",
+    "INITVAL_38", "INITVAL_39", "INITVAL_3A", "INITVAL_3B", "INITVAL_3C", "INITVAL_3D", "INITVAL_3E", "INITVAL_3F"];
+
+/// INITVAL_00..3F of a DP16KD in the 2048 × 9 shape, as nextpnr-ecp5 takes them ("0x" and 80 hex
+/// digits, 320 bits): INITVAL_k holds 16 slots of 20 bits, slot j = words 2(16k + j) (bits 0..8)
+/// and 2(16k + j) + 1 (bits 9..17), the layout yosys's synth_ecp5 writes
+pub fn initval(words: &[u16]) -> Vec<(&'static str, String)> {
+    INITVAL.iter().enumerate().map(|(k, name)| {
+        let mut nib = [0u8; 80];
+        for j in 0..16 {
+            let a = 2 * (16 * k + j);
+            let slot = (words.get(a).copied().unwrap_or(0) as u32 & 0x1ff) | ((words.get(a + 1).copied().unwrap_or(0) as u32 & 0x1ff) << 9);
+            for b in 0..20 { if (slot >> b) & 1 == 1 { let bit = 20 * j + b; nib[79 - bit / 4] |= 1 << (bit % 4); } }
+        }
+        (*name, format!("0x{}", nib.iter().map(|x| format!("{:X}", x)).collect::<String>()))
+    }).collect()
+}
+
+/// INITVAL bit `bit` (0 = least significant) of a "0x…" value or a 320-character bit string
+fn initval_bit(v: &str, bit: usize) -> bool {
+    match v.strip_prefix("0x") {
+        Some(h) => h.len() > bit / 4 && h.as_bytes()[h.len() - 1 - bit / 4].is_ascii_hexdigit()
+            && (((h.as_bytes()[h.len() - 1 - bit / 4] as char).to_digit(16).unwrap() >> (bit % 4)) & 1 == 1),
+        None => v.len() > bit && v.as_bytes()[v.len() - 1 - bit] == b'1',
+    }
+}
+
+/// the 2048 9-bit words a DP16KD starts with (its INITVAL parameters; none: all 0)
+pub fn initval_words(c: &Cell) -> Vec<u128> {
+    let mut words = vec![0u128; 2048];
+    for (k, name) in INITVAL.iter().enumerate() {
+        let Some((_, v)) = c.params.iter().find(|x| x.0 == *name) else { continue };
+        for j in 0..16 {
+            let slot = (0..20).fold(0u32, |s, i| s | ((initval_bit(v, 20 * j + i) as u32) << i));
+            words[2 * (16 * k + j)] = (slot & 0x1ff) as u128;
+            words[2 * (16 * k + j) + 1] = ((slot >> 9) & 0x1ff) as u128;
+        }
+    }
+    words
+}
+
 /// Memories with synchronous reads (`bram::find_mems`) as `DP16KD` blocks in the
 /// 2048 × 9 shape: port A writes (ADA13..3 = address), port B reads (CEB = read
 /// enable, DOB8..0 registered, NOREG). Wider words use blocks side by side; a deeper
@@ -234,12 +283,18 @@ pub fn brams(nl: &Netlist) -> (Netlist, Vec<Cell>) {
                         outs.push(o);
                     }
                     rows.push(outs);
-                    rams.push(Cell { typ: "DP16KD".into(), conns, params: vec![
+                    let mut params: Vec<(&'static str, String)> = vec![
                         ("DATA_WIDTH_A", format!("{:032b}", 9)), ("DATA_WIDTH_B", format!("{:032b}", 9)),
                         ("REGMODE_A", "NOREG".into()), ("REGMODE_B", "NOREG".into()), ("RESETMODE", "SYNC".into()),
                         ("CSDECODE_A", "0b000".into()), ("CSDECODE_B", "0b000".into()),
                         ("WRITEMODE_A", "NORMAL".into()), ("WRITEMODE_B", "NORMAL".into()), ("GSR", "DISABLED".into()),
-                        (crate::bram::SLOT, format!("{}:{}:{}:{}", m.name, pi, r, c))] });
+                        (crate::bram::SLOT, format!("{}:{}:{}:{}", m.name, pi, r, c))];
+                    if let Some(w) = &m.init {
+                        // block (r, c): words r·2048.., data bits 9c..9c+8
+                        let words: Vec<u16> = (0..2048).map(|a| (w.get(r * 2048 + a).copied().unwrap_or(0) >> (9 * c)) as u16 & 0x1ff).collect();
+                        params.extend(initval(&words));
+                    }
+                    rams.push(Cell { typ: "DP16KD".into(), conns, params });
                 }
                 if hi == 0 { continue; }
                 for d in 0..9 {
@@ -314,4 +369,19 @@ fn topo(cells: Vec<Cell>) -> Vec<Cell> {
     }
     let mut slots: Vec<Option<Cell>> = cells.into_iter().map(Some).collect();
     order.into_iter().map(|i| slots[i].take().unwrap()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// a 2048 × 9 memory starting with word a = (37a + 5) mod 512: INITVAL_00 and _3F as yosys's
+    /// synth_ecp5 writes them (converted to hex), and back
+    #[test]
+    fn initval_layout_is_yosys() {
+        let words: Vec<u16> = (0..2048u32).map(|a| ((a * 37 + 5) & 0x1ff) as u16).collect();
+        let iv = super::initval(&words);
+        assert_eq!(iv[0].1, "0x1005B06C113D9C73457D2B13321CE91889F0F4550600B3CDC1339772A52D210E317C990E84F05405");
+        assert_eq!(iv[63].1, "0x3C1BB32D7129927204DD170930DC49049FF3B5B53216B28D211F8D71648D0D04303DF93A9AF31565");
+        let c = crate::netlist::Cell { typ: "DP16KD".into(), conns: vec![], params: iv };
+        assert!(super::initval_words(&c).iter().zip(&words).all(|(a, b)| *a == *b as u128));
+    }
 }

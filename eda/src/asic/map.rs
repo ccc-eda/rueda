@@ -27,6 +27,10 @@ struct Match {
 }
 
 pub fn map(nl: &Netlist) -> R<Netlist> {
+    // a chip's flip-flops and SRAM macros have no power-up contents
+    if let Some((n, _)) = nl.nets.iter().find(|(n, _)| n.starts_with("$mem:") && n.ends_with(":init")) {
+        return Err(format!("memory `{}` has initial contents: an ASIC has no power-up values (load it after reset instead)", &n[5..n.len() - 5]));
+    }
     // memories with synchronous reads become SRAM macros (one per read port),
     // in a technology that has them
     let tech = crate::pdk::tech();

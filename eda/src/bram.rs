@@ -34,6 +34,30 @@ pub struct Mem {
     pub waddr: Vec<Bit>,
     pub wdata: Vec<Bit>,
     pub reads: Vec<ReadPort>,
+    /// initial contents (`init_words`), if it has any
+    pub init: Option<Vec<u128>>,
+}
+
+/// After block RAM inference: a memory with initial contents that is still flip-flops (they power
+/// up at 0 on `target`) is an error
+pub fn check_inits(nl: &Netlist, target: &str) -> Result<(), String> {
+    let ffq: std::collections::HashSet<Bit> = nl.cells.iter().filter(|c| c.is_ff()).map(|c| c.out()).collect();
+    for (n, _) in &nl.nets {
+        let Some(m) = n.strip_prefix("$mem:").and_then(|r| r.strip_suffix(":init")) else { continue };
+        let Some((_, q)) = nl.nets.iter().find(|(x, _)| x == m) else { continue };
+        if q.iter().any(|b| ffq.contains(b)) {
+            return Err(format!("memory `{}` has initial contents but is not a block RAM on {} (its flip-flops start at 0): read it as m[i] into a register (a synchronous read)", m, target));
+        }
+    }
+    Ok(())
+}
+
+/// A memory's initial contents in a generic netlist: the net `$mem:NAME:init`, constant bits laid
+/// out as the words of `NAME` (word k at bits k·width..); the words, low bits first
+pub fn init_words(nl: &Netlist, name: &str, width: usize) -> Option<Vec<u128>> {
+    let bits = &nl.nets.iter().find(|(n, _)| *n == format!("$mem:{}:init", name))?.1;
+    if width == 0 || width > 128 { return None; }
+    Some(bits.chunks(width).map(|w| w.iter().enumerate().fold(0u128, |a, (i, b)| a | ((*b == Bit::C1) as u128) << i)).collect())
 }
 
 pub struct ReadPort {
@@ -112,7 +136,8 @@ pub fn find_mems(nl: &Netlist) -> (Netlist, Vec<Mem>) {
         if reads.is_empty() { continue; }
         if (0..width).any(|j| missing[j] && reads.iter().any(|r| r.data[j].is_some())) { continue; }
         for i in elems.into_iter().chain(gone_all) { dead[i] = true; }
-        mems.push(Mem { name: q.clone(), depth, width, clk, we, waddr: wa, wdata: wd, reads });
+        let init = init_words(nl, &q, width);
+        mems.push(Mem { name: q.clone(), depth, width, clk, we, waddr: wa, wdata: wd, reads, init });
     }
     let mut cells: Vec<Cell> = nl.cells.iter().enumerate().filter(|(i, _)| !dead[*i]).map(|x| x.1.clone()).collect();
     let mut roots: Vec<Bit> = nl.ports.iter().filter(|p| p.dir == Dir::Out).flat_map(|p| p.bits.clone()).collect();
@@ -169,7 +194,13 @@ pub fn infer(nl: &Netlist) -> Inferred {
                     conns.push((RDATA[i], b));
                 }
                 let mut params: Vec<(&'static str, String)> = vec![("READ_MODE", format!("{:032b}", mode)), ("WRITE_MODE", format!("{:032b}", mode))];
-                for name in INIT { params.push((name, "0".repeat(256))); }
+                match &m.init {
+                    Some(w) => {
+                        let words: Vec<u64> = w.iter().map(|x| *x as u64).collect();
+                        for (name, v) in INIT.iter().zip(init_strings(mode, k, &words)) { params.push((name, v)); }
+                    }
+                    None => for name in INIT { params.push((name, "0".repeat(256))); },
+                }
                 params.push((SLOT, format!("{}:{}", m.name, k)));
                 rams.push(Cell { typ: "SB_RAM40_4K".into(), conns, params });
             }

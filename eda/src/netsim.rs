@@ -14,7 +14,64 @@ pub struct NetSim<'n> {
 }
 
 impl<'n> NetSim<'n> {
-    pub fn new(nl: &'n Netlist) -> Self { NetSim { nl, v: HashMap::new(), ram: HashMap::new(), sram: HashMap::new() } }
+    /// the netlist at power-up: flip-flops 0, memories their initial contents (`$mem:NAME:init`
+    /// nets of a generic netlist, the INIT parameters of block RAMs)
+    pub fn new(nl: &'n Netlist) -> Self {
+        let mut s = NetSim { nl, v: HashMap::new(), ram: HashMap::new(), sram: HashMap::new() };
+        for (n, bits) in &nl.nets {
+            let Some(m) = n.strip_prefix("$mem:").and_then(|r| r.strip_suffix(":init")) else { continue };
+            let Some((_, q)) = nl.nets.iter().find(|(x, _)| x == m) else { continue };
+            for (b, i) in q.iter().zip(bits) { if let Bit::W(w) = b { s.v.insert(*w, *i == Bit::C1); } }
+        }
+        for (i, c) in nl.cells.iter().enumerate() {
+            match c.typ.as_str() {
+                "SB_RAM40_4K" => { s.ram.insert(i, ram40_words(c)); }
+                "DP16KD" => { s.sram.insert(i, crate::fpga::ecp5::initval_words(c)); }
+                _ => {}
+            }
+        }
+        s
+    }
+
+    /// give memory `name` the contents `words` (as a test bench's `$readmemh`): its flip-flops in a
+    /// generic netlist, else the block RAMs holding it; the number of places changed
+    pub fn load_mem(&mut self, name: &str, words: &[u128]) -> usize {
+        let mut n = 0;
+        if let (Some((_, q)), Some((_, wd))) = (self.nl.nets.iter().find(|(x, _)| x == name), self.nl.nets.iter().find(|(x, _)| *x == format!("$mem:{}:wd", name))) {
+            let w = wd.len();
+            for (k, b) in q.iter().enumerate() {
+                if let Bit::W(x) = b { self.v.insert(*x, (words.get(k / w.max(1)).copied().unwrap_or(0) >> (k % w.max(1))) & 1 == 1); n += 1; }
+            }
+            if n > 0 { return 1; }
+        }
+        for (i, c) in self.nl.cells.iter().enumerate() {
+            let Some(slot) = c.params.iter().find(|x| x.0 == crate::bram::SLOT).map(|x| x.1.clone()) else { continue };
+            match c.typ.as_str() {
+                "SB_RAM40_4K" => {
+                    let Some((m, k, mode)) = crate::bram::slot_of(c) else { continue };
+                    if m != name { continue; }
+                    let ws: Vec<u64> = words.iter().map(|x| *x as u64).collect();
+                    let mut cell = c.clone();
+                    for (p, v) in crate::bram::INIT.iter().zip(crate::bram::init_strings(mode, k, &ws)) {
+                        if let Some(x) = cell.params.iter_mut().find(|x| x.0 == *p) { x.1 = v; }
+                    }
+                    self.ram.insert(i, ram40_words(&cell));
+                    n += 1;
+                }
+                "DP16KD" => {
+                    // NAME:port:row:column
+                    let parts: Vec<&str> = slot.rsplitn(4, ':').collect();
+                    if parts.len() != 4 || parts[3] != name { continue; }
+                    let (Ok(r), Ok(col)) = (parts[1].parse::<usize>(), parts[0].parse::<usize>()) else { continue };
+                    let mem: Vec<u128> = (0..2048).map(|a| (words.get(r * 2048 + a).copied().unwrap_or(0) >> (9 * col)) & 0x1ff).collect();
+                    self.sram.insert(i, mem);
+                    n += 1;
+                }
+                _ => {}
+            }
+        }
+        n
+    }
 
     fn get_bit(&self, b: Bit) -> bool {
         match b { Bit::C0 => false, Bit::C1 => true, Bit::W(w) => *self.v.get(&w).unwrap_or(&false) }
@@ -272,6 +329,18 @@ impl<'n> NetSim<'n> {
         for (w, d) in next_ram { self.v.insert(w, d); }
         self.settle();
     }
+}
+
+/// the 256 words of an SB_RAM40_4K from its INIT_0..INIT_F (msb first, 16 words each)
+fn ram40_words(c: &Cell) -> Vec<u16> {
+    let mut ram = vec![0u16; 256];
+    for (i, name) in crate::bram::INIT.iter().enumerate() {
+        let Some((_, v)) = c.params.iter().find(|x| x.0 == *name) else { continue };
+        let b = v.as_bytes();
+        if b.len() != 256 { continue; }
+        for bit in 0..256 { if b[255 - bit] == b'1' { ram[i * 16 + bit / 16] |= 1 << (bit % 16); } }
+    }
+    ram
 }
 
 /// a netlist for gate-level simulation of the given kind: "opt" (the generic gates as they
