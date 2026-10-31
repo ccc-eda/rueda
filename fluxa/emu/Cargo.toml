@@ -1,0 +1,18 @@
+[package]
+name = "rueda-fluxa-emu"
+description = "fluxa-emu: Fluxa programs compiled for fast simulation (tasks as state machines, channels as ring buffers; a Rust executor and WebAssembly)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../README.md"
+keywords = ["fluxa", "hls", "wasm", "emulator"]
+categories = ["simulation", "wasm"]
+
+[lib]
+name = "fluxa_emu"
+
+[dependencies]
+fluxa.workspace = true
+fluxa-synth.workspace = true

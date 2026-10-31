@@ -109,6 +109,8 @@ pub trait HwTask: Send {
     /// `offer`：每條輸入通道提供的 token；`room`：每條輸出通道還能不能收。
     /// 回傳：哪些輸入 token 被收下、每條輸出通道送出了什麼、內部狀態有沒有改變
     fn cycle(&mut self, offer: &[Option<HwTok>], room: &[bool]) -> (Vec<bool>, Vec<Option<HwTok>>, bool);
+    /// the program failed inside the hardware (a compiled task's assertion): the test fails with it
+    fn error(&self) -> Option<String> { None }
 }
 
 /// 決定哪些任務以硬體執行：`start` 對要取代的任務回傳 Some（參數依宣告順序：名稱與值；
@@ -646,6 +648,7 @@ impl Shared {
                 )
             };
             let (taken, sent, changed) = hw.cycle(&offer, &room);
+            if let Some(e) = hw.error() { return Err(RtErr::Msg(0, e)); }
             let mut moved = false;
             {
                 let mut w = self.lock();

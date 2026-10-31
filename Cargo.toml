@@ -11,6 +11,7 @@ members = [
     "veryl/emu",
     "fluxa/sim",
     "fluxa/synth",
+    "fluxa/emu",
     "web/wasm",
 ]
 
@@ -34,6 +35,7 @@ veryl-synth = { package = "rueda-veryl-synth", path = "veryl/synth", version = "
 veryl-emu = { package = "rueda-veryl-emu", path = "veryl/emu", version = "0.6.0" }
 fluxa = { package = "rueda-fluxa", path = "fluxa/sim", version = "0.6.0" }
 fluxa-synth = { package = "rueda-fluxa-synth", path = "fluxa/synth", version = "0.6.0" }
+fluxa-emu = { package = "rueda-fluxa-emu", path = "fluxa/emu", version = "0.6.0" }
 
 [profile.release]
 opt-level = 3

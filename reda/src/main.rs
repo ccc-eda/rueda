@@ -99,13 +99,18 @@ Fluxa (FILE.fx...): the program's tests run with TASK (--top) replaced by its sy
 netlist, its channels connected to the netlist's stream ports; without --top every task that
 synthesizes runs as gates.
 examples: reda gatesim ice40 fifo.veryl     reda gatesim asic fluxa/examples/mac.fx"),
-    ("emu", "compile a Veryl design to WebAssembly (fast cycle-based simulation)", "\
+    ("emu", "compile for fast simulation (Veryl: WebAssembly; Fluxa: tasks compiled)", "\
 usage: reda emu [--top MODULE] [--stop SIGNAL,...] [-o OUT.wasm] FILE.veryl...
+       reda emu [--top TASK] [--test NAME]... FILE.fx...
 
-Compiles MODULE (RTL, one clock) into a WebAssembly module OUT.wasm (default emu.wasm) and
-OUT.json (the signals' offsets), for a harness in Node or the browser that drives its ports.
+Veryl: compiles MODULE (RTL, one clock) into a WebAssembly module OUT.wasm (default emu.wasm)
+and OUT.json (the signals' offsets), for a harness in Node or the browser that drives its ports.
   --stop SIGNAL,...  signals whose rising value stops a run
-example: reda emu --top Rv64Soc -o rv64.wasm rv64core.veryl rv64soc.veryl"),
+Fluxa (fluxa-emu): runs the program's tests with its tasks (or TASK and the network it builds)
+compiled instead of interpreted: states of straight-line code on 64- / 128-bit registers,
+channels as ring buffers. The results must be the simulator's.
+examples: reda emu --top Rv64Soc -o rv64.wasm rv64core.veryl rv64soc.veryl
+          reda emu --top Core fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx fluxa/rv64/tests_basic.fx"),
     ("cc", "compile C (or assemble .s) for the RISC-V SoC, run it", "\
 usage: reda cc PROG.c [-o PROG.bin] [-S PROG.s] [-L PROG.lst] [--run [N]] [--mem BYTES]
        reda cc PROG.c --linux [-o PROG] [-S PROG.s] [-L PROG.lst]
@@ -200,7 +205,10 @@ fn main() {
             a.extend(rest[1..].iter().cloned());
             synth(&rest, a)
         }
-        "emu" => veryl_emu::cli::main(&rest),
+        "emu" => match lang(&rest) {
+            Lang::Veryl => veryl_emu::cli::main(&rest),
+            Lang::Fluxa => fluxa_emu::cli::main(&rest),
+        },
         "cc" => rvtools::cli::cc(&rest),
         "rvemu" => riscv_emu::cli::main(&rest),
         "pdk" => {
