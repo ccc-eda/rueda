@@ -51,7 +51,7 @@ reda list fluxa/examples/fir.fx                 # 列出 test
   `[PASS]` / `[FAIL]` 與原因，以及通道統計。
 - 範例庫有 **Fluxa** 一組：基本語法、FIR 濾波器、乘加器、脈動陣列矩陣乘法、broadcast 扇出、（故意的）死結，
   4 階 FIR、任務網路，用四個管線任務寫成的 RV32I 處理器，
-  以及 RV64G 處理器（M/S/U 特權模式、Sv39、IEEE-754 FPU、迷你 OS；90 個 test）。
+  以及 RV64G 處理器（M/S/U 特權模式、Sv39、IEEE-754 FPU、迷你 OS；93 個 test）。
 
 ## 合成
 
@@ -95,8 +95,22 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以合成的 task
        --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), ecall()])' \
        fluxa/rv32i/rv32i.fx
   ```
-- 還不能合成的：用參數當初值的 `mem` 變成暫存器，不是有初值的 block RAM；RV64 處理器（它的 FPU 的除法與
-  位移量只在執行時才有防護，而且整個做成一個週期的組合邏輯太大）。
+- 值域：`if` 的每個分支裡（以及 `&&` / `||` 的右邊），條件界定的變數有較窄的值域，所以
+  `if sh <= 0 { x << (0 - sh) }`、`if b != 0 { a / b }` 都能合成；函式的回傳值保留比宣告型別窄的值域。
+- 沒有通道操作的 `serial for` 每次迭代一個時脈（狀態）；其他這種迴圈展開成邏輯閘。長的運算就是這樣變成
+  多週期單元，迭代結束就是時脈邊界。
+- 用陣列參數當初值的記憶體（`let m: mem<T, N> = data`）一開始就是它的字：有 `--param data=…` 時是
+  block RAM 的初值（iCE40 `INIT_*`、ECP5 `INITVAL_*`），否則閘級模擬時直接載入（不佔腳位）。同一個記憶體的
+  讀取共用一個讀埠。
+- RV64G 處理器（`fluxa/rv64`）合成成一個網表，在 ECP5-85 上完成佈局佈線：72,834 個 LUT 位置（87%）、
+  12,179 FF、32 個 DP16KD、8.35 MHz。它的 FPU 是 `fpu.fx` 裡的多週期 task `Fpu`（乘法 53 拍、除法 116 拍、
+  開方 60 拍，精確加法器與捨入器只有一份、大家共用），在 `tests_fpu.fx` 的每個向量上與 `comb fn` 參考模型
+  `fp_op` 逐位元相同；M 擴充是 64 拍的 task `MulDiv`。
+  ```
+  reda fpga --arch ecp5 --clock 5 --bit rv64.bit --top Core --param WBD=8 --param TLBN=8 --param 'data=dimage([])' \
+       --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), simexit()])' \
+       fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx
+  ```
 - 網頁 IDE 的 Fluxa 專案也有「⚙ 合成」：① 顯示 task 與它的實例，②–⑦ 和 Veryl 一樣；
   「模擬對象」選通用閘 / iCE40 / 標準元件時，▶ 執行 會把合成頂層換成它的網表再跑 test，
   「✔ 全面驗證」把每種實作的結果並排比對。虛擬板不收 Fluxa（它的埠是串流，不是板子的腳位）。

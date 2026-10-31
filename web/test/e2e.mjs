@@ -167,7 +167,7 @@ for (const size of SIZES) {
     await page.waitForSelector('#p-results .banner', { timeout: 120000 });
     const banner = await page.textContent('#p-results .banner');
     await ctx.close();
-    return /✓ 90 /.test(banner) ? null : `tests: ${banner}`;
+    return /✓ 93 /.test(banner) ? null : `tests: ${banner}`;
   });
 
   // a Fluxa example from the list: the deadlock is reported (the first step is the tests)

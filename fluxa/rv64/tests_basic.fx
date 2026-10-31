@@ -516,3 +516,38 @@ test independent_writes_exceed_wb_depth {
     assert reg(a, 29) == 29;
     assert reg(a, 30) == 0;
 }
+
+// 多週期的 MulDiv task（合成用）與參考模型 alu_m / alu_m_w 逐一比對：邊界值兩兩配對 + 虛擬亂數
+test muldiv_unit_matches_alu_m {
+    let (qtx, qrx) = chan::<(u3, bool, u64, u64)>(depth = 2);
+    let (rtx, rrx) = chan::<u64>(depth = 2);
+    spawn MulDiv(qrx, rtx);
+    let edge = [0, 1, 2, 3, 7, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 0x100000000, 0x7FFFFFFFFFFFFFFF,
+                0x8000000000000000, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFE, 0xFFFFFFFF80000000, 12345678901234567];
+    let mut pairs = [];
+    for a in edge { for b in edge { pairs = concat(pairs, [(a, b)]); } }
+    let mut x: u64 = 0x0123456789ABCDEF;
+    for _ in 0..200 {
+        x = x ^ (x << 13).wrap::<u64>();
+        x = x ^ (x >> 7);
+        x = x ^ (x << 17).wrap::<u64>();
+        let a = x;
+        x = x ^ (x << 13).wrap::<u64>();
+        x = x ^ (x >> 7);
+        x = x ^ (x << 17).wrap::<u64>();
+        pairs = concat(pairs, [(a, x >> (a & 63))]);       // 不同大小的除數
+    }
+    let mut bad: u32 = 0;
+    for p in pairs {
+        for f3 in 0..8 {
+            qtx.send((f3, false, p.0, p.1));
+            if rrx.recv() != alu_m(f3, p.0, p.1) { bad += 1; }
+            if f3 == 0 || f3 >= 4 {
+                qtx.send((f3, true, p.0, p.1));
+                if rrx.recv() != alu_m_w(f3, p.0, p.1) { bad += 1; }
+            }
+        }
+    }
+    qtx.close();
+    assert bad == 0, "MulDiv differs from alu_m";
+}

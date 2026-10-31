@@ -51,7 +51,7 @@ reda list fluxa/examples/fir.fx                 # 列出 test
   `[PASS]` / `[FAIL]` 与原因，以及通道统计。
 - 示例库有 **Fluxa** 一组：基本语法、FIR 滤波器、乘加器、脉动阵列矩阵乘法、broadcast 扇出、（故意的）死锁，
   4 阶 FIR、任务网络，用四个流水线任务写成的 RV32I 处理器，
-  以及 RV64G 处理器（M/S/U 特权模式、Sv39、IEEE-754 FPU、迷你 OS；90 个 test）。
+  以及 RV64G 处理器（M/S/U 特权模式、Sv39、IEEE-754 FPU、迷你 OS；93 个 test）。
 
 ## 综合
 
@@ -95,8 +95,22 @@ reda synth --list fluxa/examples/pipeline.fx        # 可以综合的 task
        --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), ecall()])' \
        fluxa/rv32i/rv32i.fx
   ```
-- 还不能综合的：用参数当初值的 `mem` 变成寄存器，不是有初值的 block RAM；RV64 处理器（它的 FPU 的除法与
-  移位量只在运行时才有防护，而且整个做成一个周期的组合逻辑太大）。
+- 值域：`if` 的每个分支里（以及 `&&` / `||` 的右边），条件界定的变量有较窄的值域，所以
+  `if sh <= 0 { x << (0 - sh) }`、`if b != 0 { a / b }` 都能综合；函数的返回值保留比声明类型窄的值域。
+- 没有通道操作的 `serial for` 每次迭代一个时钟（状态）；其他这种循环展开成逻辑门。长的运算就是这样变成
+  多周期单元，迭代结束就是时钟边界。
+- 用数组参数当初值的存储器（`let m: mem<T, N> = data`）一开始就是它的字：有 `--param data=…` 时是
+  block RAM 的初值（iCE40 `INIT_*`、ECP5 `INITVAL_*`），否则门级仿真时直接加载（不占引脚）。同一个存储器的
+  读取共用一个读端口。
+- RV64G 处理器（`fluxa/rv64`）综合成一个网表，在 ECP5-85 上完成布局布线：72,834 个 LUT 位置（87%）、
+  12,179 FF、32 个 DP16KD、8.35 MHz。它的 FPU 是 `fpu.fx` 里的多周期 task `Fpu`（乘法 53 拍、除法 116 拍、
+  开方 60 拍，精确加法器与舍入器只有一份、大家共用），在 `tests_fpu.fx` 的每个向量上与 `comb fn` 参考模型
+  `fp_op` 逐位相同；M 扩展是 64 拍的 task `MulDiv`。
+  ```
+  reda fpga --arch ecp5 --clock 5 --bit rv64.bit --top Core --param WBD=8 --param TLBN=8 --param 'data=dimage([])' \
+       --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), simexit()])' \
+       fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx
+  ```
 - 网页 IDE 的 Fluxa 项目也有「⚙ 综合」：① 显示 task 与它的实例，②–⑦ 和 Veryl 一样；
   「仿真对象」选通用门 / iCE40 / 标准单元时，▶ 运行 会把综合顶层换成它的网表再跑 test，
   「✔ 全面验证」把每种实现的结果并排比对。虚拟板不接收 Fluxa（它的端口是数据流，不是板子的引脚）。

@@ -462,27 +462,140 @@ comb fn norm116h(sig: u120, e: i32) -> (u120, i32) {
     if bl <= 116 { (sig << (116 - bl), e - (116 - bl)) } else { (sig, e) }
 }
 
-/// jam 的硬體版（k ≥ 0）
+/// jam 的硬體版（k ≥ 0）：移出的位元用遮罩檢查（不必再左移回來比較）
 comb fn jamh(x: u120, k: i32) -> u120 {
     if k <= 0 { x }
     else if k > 118 { if x != 0 { 1 } else { 0 } }
-    else {
-        let q = x >> k;
-        q | (if (q << k) != x { 1 } else { 0 })
-    }
+    else { (x >> k) | (if (x & ((1 << k) - 1)) != 0 { 1 } else { 0 }) }
 }
 
-/// add_core 的精確加法部分：(精確相消, 符號, 指數, 有效數)，捨入由呼叫者做
+/// add_core 的精確加法部分：(精確相消, 符號, 指數, 有效數)，捨入由呼叫者做。
+/// 指數大的放前面，只對齊另一個（一份 jamh）；加法對兩邊對稱，交換不影響結果。
 comb fn add_h(sx: bool, x: u120, ex: i32, sy: bool, y: u120, ey: i32) -> (bool, bool, i32, u120) {
     let (nx, nex) = norm116h(x, ex);
     let (ny, ney) = norm116h(y, ey);
+    add_al(sx, nx, nex, sy, ny, ney)
+}
+
+/// add_h 的後半：兩數已正規化到 116 位，對齊、相加、取絕對值（Fpu 把前後半放在不同時脈）
+comb fn add_al(sx: bool, nx: u120, nex: i32, sy: bool, ny: u120, ney: i32) -> (bool, bool, i32, u120) {
     let dd = nex - ney;
-    let mut eb = nex;
-    let mut xa = nx;
-    let mut ya = ny;
-    if dd >= 0 { ya = jamh(ny, dd); } else { eb = ney; xa = jamh(nx, 0 - dd); }
-    let v = (if sx { 0 - xa } else { xa }) + (if sy { 0 - ya } else { ya });
-    (v == 0, v < 0, eb, if v < 0 { 0 - v } else { v })
+    let sw = dd < 0;
+    let k = if dd >= 0 { dd } else { 0 - dd };
+    let big = if sw { ny } else { nx };
+    let small = jamh(if sw { nx } else { ny }, k);
+    let sb = if sw { sy } else { sx };
+    let ss = if sw { sx } else { sy };
+    let v = (if sb { 0 - big } else { big }) + (if ss { 0 - small } else { small });
+    (v == 0, v < 0, if sw { ney } else { nex }, if v < 0 { 0 - v } else { v })
+}
+
+/// shift_round 的硬體版，結果逐位元相同：guard 位元與保留部分由同一個右移器出來，
+/// sticky 用遮罩（shift_round 用四個位移器）
+comb fn shift_round_h(sig: u120, sh: i32, rm: u3, s: bool) -> (u120, bool, bool) {
+    if sh <= 0 { (sig << (0 - sh), false, false) }
+    else if sh > 120 { (0, rround(rm, s, false, -1, sig != 0), sig != 0) }
+    else {
+        let t = sig >> (sh - 1);
+        let kept = t >> 1;
+        let g = (t & 1) == 1;
+        let st = (sig & ((1 << (sh - 1)) - 1)) != 0;
+        let c: i2 = if !g { -1 } else if st { 1 } else { 0 };
+        (kept, rround(rm, s, (kept & 1) == 1, c, g || st), g || st)
+    }
+}
+
+/// fcvt_to_int 的硬體版（用 shift_round_h）
+comb fn fcvt_to_int_h(d: bool, a: u64, rm: u3, k: u5) -> (u64, u5) {
+    let lo: i128 = if k == 0 { 0 - (1 << 31) } else if k == 2 { 0 - (1 << 63) } else { 0 };
+    let hi: i128 = if k == 0 { (1 << 31) - 1 } else if k == 1 { (1 << 32) - 1 }
+                   else if k == 2 { (1 << 63) - 1 } else { (1 << 64) - 1 };
+    let c = fcls(d, a);
+    let s = fneg(d, a);
+    let mut v: i128 = 0;
+    let mut fl: u5 = 0;
+    if c >= 3 {
+        v = hi;
+        fl = FL_NV;
+    } else if c == 2 {
+        v = if s { lo } else { hi };
+        fl = FL_NV;
+    } else if c == 1 {
+        let e = fexp(d, a);
+        let sig = fsig(d, a);
+        if e >= 0 && e + bitlen(sig) > 65 {
+            v = if s { lo } else { hi };                      // 必然超出範圍
+            fl = FL_NV;
+        } else {
+            let (kept, up, nx) = shift_round_h(sig, 0 - e, rm, s);
+            let mag = kept + (if up { 1 } else { 0 });
+            let sv = if s { 0 - mag } else { mag };
+            if sv < lo || sv > hi {
+                v = if s { lo } else { hi };
+                fl = FL_NV;
+            } else {
+                v = sv;
+                fl = if nx { FL_NX } else { 0 };
+            }
+        }
+    }
+    (if k <= 1 { v.wrap::<i32>().wrap::<u64>() } else { v.wrap::<u64>() }, fl)
+}
+
+/// round_pack 的硬體版，結果逐位元相同（tests_fp.fx 比對兩者）：先把 sig 正規化到最高位在
+/// bit 119，正規數的捨入位置固定（格式決定），非正規數再多右移 emin − emsb 位。只用一個左移器
+/// （正規化）與一個右移器（保留部分與 guard 位元一起出來），sticky 用遮罩；round_pack 用四個位移器。
+comb fn round_h(d: bool, s: bool, e: i32, sig: u120, rm: u3) -> (u64, u5) {
+    let (nsig, emsb) = round_norm(e, sig);
+    round_fin(d, s, nsig, emsb, rm)
+}
+
+/// round_h 的前半：最高位的指數，與正規化到最高位在 bit 119 的有效數
+comb fn round_norm(e: i32, sig: u120) -> (u120, i32) {
+    let bl = bitlen(sig);
+    (if bl >= 1 && bl <= 120 { sig << (120 - bl) } else { sig }, e + bl - 1)
+}
+
+/// round_h 的後半（Fpu 把前後半放在不同時脈）
+comb fn round_fin(d: bool, s: bool, nsig: u120, emsb: i32, rm: u3) -> (u64, u5) {
+    let m = fmb(d);
+    let bias = fbias(d);
+    let emin = 1 - bias;
+    let r0 = 119 - m;                                       // 正規數：保留 m + 1 位
+    let k0 = emin - emsb;
+    let k = if k0 > 0 { k0 } else { 0 };                    // 非正規數多移的位數
+    let rt = r0 + k;
+    let mut kept: u120 = 0;
+    let mut guard = false;
+    let mut sticky = nsig != 0;
+    if rt <= 120 {
+        let t = nsig >> (rt - 1);
+        kept = t >> 1;
+        guard = (t & 1) == 1;
+        sticky = (nsig & ((1 << (rt - 1)) - 1)) != 0;
+    }
+    let c: i2 = if !guard { -1 } else if sticky { 1 } else { 0 };
+    let nz = guard || sticky;
+    let up = rround(rm, s, (kept & 1) == 1, c, nz);
+    let mag = ((if k0 > 0 { 0 } else { emsb + bias - 1 }) << m) + kept + (if up { 1 } else { 0 });
+    let inf = finf(d, false);
+    if mag >= inf {
+        let to_inf = rm == RM_RNE || rm == RM_RMM || (rm == RM_RUP && !s) || (rm == RM_RDN && s);
+        ((if to_inf { inf } else { inf - 1 }) | fzero(d, s), FL_OF | FL_NX)
+    } else {
+        // tininess（捨入後）：在正規數的位置（固定）捨入，看是否仍 < 2^emin
+        let mut tiny = false;
+        if k0 > 0 {
+            let t2 = nsig >> (r0 - 1);
+            let k2 = t2 >> 1;
+            let g2 = (t2 & 1) == 1;
+            let s2 = (nsig & ((1 << (r0 - 1)) - 1)) != 0;
+            let c2: i2 = if !g2 { -1 } else if s2 { 1 } else { 0 };
+            let up2 = rround(rm, s, (k2 & 1) == 1, c2, g2 || s2);
+            tiny = !(emsb == emin - 1 && k2 + (if up2 { 1 } else { 0 }) == (1 << (m + 1)));
+        }
+        (mag | fzero(d, s), (if nz { FL_NX } else { 0 }) | (if nz && tiny { FL_UF } else { 0 }))
+    }
 }
 
 task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
@@ -504,10 +617,12 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
         let eb = fexp(d, ub);
         let ma = fsig(d, ua);
         let mb = fsig(d, ub);
+        let (nma, nea) = norm116h(ma, ea);      // 除法與開方都要（共用一份）
 
         // 第一段：結果 (res, fl)，或要做的事
         //   job：0 = 完成、1 = 捨入 (s, e, sig)、2 = 精確加法 (s, sig, e) + (sy, y, ey) 後捨入
-        //   乘法 sig = mx × my；除法 sig = na / dv（加 sticky）；開方 sig = isqrt(n1)（加 sticky）
+        //   乘法 sig = opa × opb；除法 sig = opa / opb（加 sticky）；開方 sig = isqrt(opa)（加 sticky）：
+        //   一條指令只做其中一種，運算元共用 opa、opb 兩個暫存器
         let mut res: u64 = 0;
         let mut fl: u5 = 0;
         let mut boxit = true;
@@ -519,13 +634,10 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
         let mut y: u120 = 0;
         let mut ey: i32 = 0;
         let mut mul = false;
-        let mut mx: u120 = 0;
-        let mut my: u64 = 0;
         let mut div = false;
-        let mut na: u120 = 0;
-        let mut dv: u120 = 0;
         let mut sqrt = false;
-        let mut n1: u120 = 0;
+        let mut opa: u120 = 0;
+        let mut opb: u64 = 0;
         if op != 0x53 {
             // FMADD / FMSUB / FNMSUB / FNMADD（ffma）
             let negp = op == 0x4B || op == 0x4F;
@@ -546,8 +658,8 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
                 if cc == 0 { res = fzero(d, if sp == sc { sp } else { rm == RM_RDN }); }
                 else { job = 1; s = sc; e = fexp(d, uc); sig = fsig(d, uc); }
             }
-            else if cc == 0 { job = 1; mul = true; s = sp; e = ea + eb; mx = ma; my = mb; }
-            else { job = 2; mul = true; s = sp; e = ea + eb; mx = ma; my = mb; sy = sc; y = fsig(d, uc); ey = fexp(d, uc); }
+            else if cc == 0 { job = 1; mul = true; s = sp; e = ea + eb; opa = ma; opb = mb; }
+            else { job = 2; mul = true; s = sp; e = ea + eb; opa = ma; opb = mb; sy = sc; y = fsig(d, uc); ey = fexp(d, uc); }
         } else if f5 <= 0x01 {
             // fadd / fsub
             let sb2 = sb != (f5 == 0x01);
@@ -566,7 +678,7 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
             else if (ca == 2 && cb == 0) || (ca == 0 && cb == 2) { res = fqnan(d); fl = FL_NV; }
             else if ca == 2 || cb == 2 { res = finf(d, sp); }
             else if ca == 0 || cb == 0 { res = fzero(d, sp); }
-            else { job = 1; mul = true; s = sp; e = ea + eb; mx = ma; my = mb; }
+            else { job = 1; mul = true; s = sp; e = ea + eb; opa = ma; opb = mb; }
         } else if f5 == 0x03 {
             // fdiv
             let sp = sa != sb;
@@ -575,10 +687,7 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
             else if ca == 2 { res = finf(d, sp); }
             else if cb == 0 { res = finf(d, sp); fl = FL_DZ; }
             else if ca == 0 || cb == 2 { res = fzero(d, sp); }
-            else {
-                let (n, en) = norm116h(ma, ea);
-                job = 1; div = true; s = sp; na = n; dv = mb; e = en - eb - 1;
-            }
+            else { job = 1; div = true; s = sp; opa = nma; opb = mb; e = nea - eb - 1; }
         } else if f5 == 0x0B {
             // fsqrt
             if ca >= 3 { res = fqnan(d); fl = if ca == 4 { FL_NV } else { 0 }; }
@@ -586,11 +695,10 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
             else if sa { res = fqnan(d); fl = FL_NV; }
             else if ca == 2 { res = ua; }
             else {
-                let (n0, e0) = norm116h(ma, ea);
-                let odd = (e0 & 1) != 0;
+                let odd = (nea & 1) != 0;
                 job = 1; sqrt = true;
-                n1 = if odd { n0 >> 1 } else { n0 };
-                e = ((if odd { e0 + 1 } else { e0 }) >> 1) - 1;
+                opa = if odd { nma >> 1 } else { nma };
+                e = ((if odd { nea + 1 } else { nea }) >> 1) - 1;
             }
         } else if f5 == 0x04 { res = fsgnj(d, ua, ub, rm); }
         else if f5 == 0x05 { let r = fminmax(d, ua, ub, rm == 1); res = r.0; fl = r.1; }
@@ -605,7 +713,7 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
             else { job = 1; s = sf; e = fexp(!d, fa); sig = fsig(!d, fa); }
         }
         else if f5 == 0x14 { let r = fcmp(d, ua, ub, rm); res = r.0; fl = r.1; boxit = false; }
-        else if f5 == 0x18 { let r = fcvt_to_int(d, ua, rm, rs2); res = r.0; fl = r.1; boxit = false; }
+        else if f5 == 0x18 { let r = fcvt_to_int_h(d, ua, rm, rs2); res = r.0; fl = r.1; boxit = false; }
         else if f5 == 0x1A {
             let v = if rs2 == 0 { a.wrap::<i32>() } else if rs2 == 1 { a.wrap::<u32>() }
                           else if rs2 == 2 { a.wrap::<i64>() } else { a };
@@ -621,21 +729,20 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
         if mul {
             let mut p: u120 = 0;
             serial for _ in 0..53 {
-                if (my & 1) == 1 { p = p + mx; }
-                mx = mx << 1;
-                my = my >> 1;
+                if (opb & 1) == 1 { p = p + opa; }
+                opa = opa << 1;
+                opb = opb >> 1;
             }
             sig = p;
         }
         if div {
-            // na < 2^116：每拍移入一位，餘數 r < dv
+            // 被除數 opa < 2^116：每拍移入一位，餘數 r < opb
             let mut q: u120 = 0;
             let mut r: u120 = 0;
-            let mut n: u120 = na;
             serial for _ in 0..116 {
-                r = (r << 1) | (n >> 115);
-                n = (n & ((1 << 115) - 1)) << 1;
-                if r >= dv { r = r - dv; q = (q << 1) | 1; } else { q = q << 1; }
+                r = (r << 1) | (opa >> 115);
+                opa = (opa & ((1 << 115) - 1)) << 1;
+                if r >= opb { r = r - opb; q = (q << 1) | 1; } else { q = q << 1; }
             }
             sig = (q << 1) | (if r != 0 { 1 } else { 0 });
         }
@@ -643,25 +750,39 @@ task Fpu(req: in chan<(u32, u64, u64, u64)>, resp: out chan<(u64, u5)>) {
             // 一次兩位：root = ⌊√n1⌋、rem = n1 − root²
             let mut rem: u120 = 0;
             let mut root: u120 = 0;
-            let mut n: u120 = n1;
             serial for _ in 0..60 {
-                rem = (rem << 2) | (n >> 118);
-                n = (n & ((1 << 118) - 1)) << 2;
+                rem = (rem << 2) | (opa >> 118);
+                opa = (opa & ((1 << 118) - 1)) << 2;
                 let t = (root << 2) | 1;
                 if rem >= t { rem = rem - t; root = (root << 1) | 1; } else { root = root << 1; }
             }
             sig = (root << 1) | (if rem != 0 { 1 } else { 0 });
         }
 
-        // 第三段：唯一的一份加法與捨入
-        if job == 2 {
-            let (z, sv, eh, mag) = add_h(s, sig, e, sy, y, ey);
-            if z { job = 0; res = fzero(d, rm == RM_RDN); } else { job = 1; s = sv; e = eh; sig = mag; }
+        // 第三段：唯一的一份加法與捨入，分成四拍（組合路徑短，時脈才快）。serial for 的一次迭代
+        // 是一個時脈，迭代結束時變數進暫存器：下一個迴圈從暫存器開始，兩段之間沒有組合路徑。
+        serial for _ in 0..1 {
+            if job == 2 {
+                let (nx, nex) = norm116h(sig, e);
+                let (ny, ney) = norm116h(y, ey);
+                sig = nx; e = nex; y = ny; ey = ney;
+            }
         }
-        if job == 1 {
-            let r = round_pack(d, s, e, sig, rm);
-            res = r.0;
-            fl = r.1;
+        serial for _ in 0..1 {
+            if job == 2 {
+                let (z, sv, eh, mag) = add_al(s, sig, e, sy, y, ey);
+                if z { job = 0; res = fzero(d, rm == RM_RDN); } else { job = 1; s = sv; e = eh; sig = mag; }
+            }
+        }
+        serial for _ in 0..1 {
+            if job == 1 { let (n, em) = round_norm(e, sig); sig = n; e = em; }
+        }
+        serial for _ in 0..1 {
+            if job == 1 {
+                let r = round_fin(d, s, sig, e, rm);
+                res = r.0;
+                fl = r.1;
+            }
         }
         resp.send((if boxit { box(d, res) } else { res }, fl));
     }

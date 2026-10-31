@@ -57,6 +57,12 @@ pub struct Builder {
     cache: HashMap<(&'static str, [Bit; 3]), Bit>,
     /// x <-> !x, so that double negation and x & !x fold away
     inv: HashMap<Bit, Bit>,
+    /// fold a multiplexer into one of its inputs that selects between the same values
+    /// (`s ? (t ? v : a) : a` = `(s & t) ? v : a`): a conditional write into an array under
+    /// nested conditions costs a multiplexer per bit, not one per condition (Fluxa sets it)
+    pub fold_mux: bool,
+    /// a multiplexer's output → its (A, B, S)
+    muxes: HashMap<Bit, [Bit; 3]>,
 }
 
 impl Default for Builder {
@@ -65,7 +71,7 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        Builder { cells: vec![], next_wire: 2, cache: HashMap::new(), inv: HashMap::new() }
+        Builder { cells: vec![], next_wire: 2, cache: HashMap::new(), inv: HashMap::new(), fold_mux: false, muxes: HashMap::new() }
     }
 
     pub fn wire(&mut self) -> Bit {
@@ -148,7 +154,23 @@ impl Builder {
             (_, _, Bit::C1) => self.or(s, a),
             (_, Bit::C1, _) => { let ns = self.not(s); self.or(ns, b) }
             (_, _, Bit::C0) => { let ns = self.not(s); self.and(ns, a) }
-            _ => self.gate("$_MUX_", &[("A", a), ("B", b), ("S", s)]),
+            _ => {
+                if self.fold_mux {
+                    if let Some([ba, bb, bs]) = self.muxes.get(&b).copied() {
+                        // s ? (bs ? bb : a) : a  /  s ? (bs ? a : ba) : a
+                        if ba == a { let c = self.and(s, bs); return self.mux(c, a, bb); }
+                        if bb == a { let n = self.not(bs); let c = self.and(s, n); return self.mux(c, a, ba); }
+                    }
+                    if let Some([aa, ab, as_]) = self.muxes.get(&a).copied() {
+                        // s ? b : (as ? b : aa)  /  s ? b : (as ? ab : b)
+                        if ab == b { let c = self.or(s, as_); return self.mux(c, aa, b); }
+                        if aa == b { let n = self.not(s); let c = self.and(n, as_); return self.mux(c, b, ab); }
+                    }
+                }
+                let y = self.gate("$_MUX_", &[("A", a), ("B", b), ("S", s)]);
+                if self.fold_mux { self.muxes.insert(y, [a, b, s]); }
+                y
+            }
         }
     }
 

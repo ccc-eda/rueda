@@ -153,3 +153,47 @@ test fp_loop_determinism {
     }
     assert retired(a) == retired(b);
 }
+
+// Fpu 用的 round_h（硬體版捨入）與參考的 round_pack 逐位元比對：兩種格式、五種捨入模式、
+// 各種長度的有效數，指數涵蓋溢位、正規、非正規與完全捨去
+test round_h_matches_round_pack {
+    let mut x: u64 = 0x9E3779B97F4A7C15;
+    let mut bad: u32 = 0;
+    for i in 0..3000 {
+        x = x ^ (x << 13).wrap::<u64>();
+        x = x ^ (x >> 7);
+        x = x ^ (x << 17).wrap::<u64>();
+        let hi = x;
+        x = x ^ (x << 13).wrap::<u64>();
+        x = x ^ (x >> 7);
+        x = x ^ (x << 17).wrap::<u64>();
+        let bits = 1 + (hi % 118);                       // 有效數 1..118 位
+        let raw = ((hi >> 10) << 64) | x;                // 118 位的亂數
+        let sig = (raw >> (118 - bits)) | (1 << (bits - 1));
+        let d = (i & 1) == 1;
+        let span: i128 = if d { 2400 } else { 400 };
+        let e = (x % span) - span / 2 - bits;
+        let rm = i % 5;
+        let s = (x & 2) != 0;
+        if round_h(d, s, e, sig, rm) != round_pack(d, s, e, sig, rm) { bad += 1; }
+    }
+    assert bad == 0, "round_h differs from round_pack";
+}
+
+// shift_round_h（Fpu 的浮點 → 整數用）與 shift_round 逐位元比對：位移量涵蓋左移、0、1..120 與超過 120
+test shift_round_h_matches_shift_round {
+    let mut x: u64 = 0x2545F4914F6CDD1D;
+    let mut bad: u32 = 0;
+    for i in 0..3000 {
+        x = x ^ (x << 13).wrap::<u64>();
+        x = x ^ (x >> 7);
+        x = x ^ (x << 17).wrap::<u64>();
+        let bits = 1 + (x % 64);
+        let sig = (x >> (64 - bits)) | (1 << (bits - 1));
+        let sh = ((x >> 20) % 150) - 20;
+        let rm = i % 5;
+        let s = (x & 4) != 0;
+        if shift_round_h(sig, sh, rm, s) != shift_round(sig, sh, rm, s) { bad += 1; }
+    }
+    assert bad == 0, "shift_round_h differs from shift_round";
+}

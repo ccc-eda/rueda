@@ -60,7 +60,9 @@ fn err<T>(line: u32, prog: &fluxa::ast::Program, m: impl Into<String>) -> R<T> {
 impl<'p> Gen<'p> {
     pub fn new(prog: &'p Arc<fluxa::ast::Program>) -> Gen<'p> {
         let sh = Shared::new(prog.clone(), false, false);
-        Gen { g: Builder::new(), prog, it: Interp::new(sh, 0, "synth".into()), vars: HashMap::new(), untyped: Default::default(), env: HashMap::new(), grew: false, rename: 1_000_000, depth: 0 }
+        let mut g = Builder::new();
+        g.fold_mux = true;
+        Gen { g, prog, it: Interp::new(sh, 0, "synth".into()), vars: HashMap::new(), untyped: Default::default(), env: HashMap::new(), grew: false, rename: 1_000_000, depth: 0 }
     }
 
     fn here(&self, line: u32) -> String { self.prog.loc(line) }
@@ -333,7 +335,13 @@ impl<'p> Gen<'p> {
             }
             ExprKind::Binary(op, l, r) => {
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    let (a, b) = (self.scalar(l)?, self.scalar(r)?);
+                    // the right side only matters when the left is true (&&) or false (||): it
+                    // sees the variables the left side bounds
+                    let a = self.scalar(l)?;
+                    let n = self.narrow(l, *op == BinOp::And);
+                    let b = self.scalar(r);
+                    unnarrow(&mut self.env, &n);
+                    let b = b?;
                     let (x, y) = (truth(&mut self.g, &a), truth(&mut self.g, &b));
                     return Ok(HV::S(SVal::bit(if *op == BinOp::And { self.g.and(x, y) } else { self.g.or(x, y) })));
                 }
@@ -411,12 +419,12 @@ impl<'p> Gen<'p> {
                 // value is only used when the arm is taken, so `if sh <= 0 { x << (0 - sh) }` is fine)
                 let nt = self.narrow(c, true);
                 let tv = { self.stmts(&t.stmts)?; match &t.tail { Some(x) => self.eval(x)?, None => HV::S(SVal::konst(0)) } };
-                let mut after_t = std::mem::replace(&mut self.env, before.clone());
-                unnarrow(&mut after_t, &nt, &before);
+                let mut after_t = std::mem::replace(&mut self.env, before);
+                unnarrow(&mut after_t, &nt);
                 let nf = self.narrow(c, false);
                 let fv = match el { Some(x) => self.eval(x)?, None => HV::S(SVal::konst(0)) };
                 let mut after_f = std::mem::take(&mut self.env);
-                unnarrow(&mut after_f, &nf, &before);
+                unnarrow(&mut after_f, &nf);
                 self.env = self.merge(cb, after_t, after_f)?;
                 Ok(select_hv(&mut self.g, cb, &tv, &fv).unwrap_or(tv))
             }
@@ -427,14 +435,15 @@ impl<'p> Gen<'p> {
     }
 
     /// the variables condition `c` bounds when it is `truth` (`x < k`, `x != 0`, `a && b`, …,
-    /// with k a constant or a variable), narrowed in the environment; returns the narrowed values
-    fn narrow(&mut self, c: &Expr, truth: bool) -> Vec<(String, HV)> {
+    /// with k a constant or a variable), narrowed in the environment; returns (name, narrowed
+    /// value, value before)
+    fn narrow(&mut self, c: &Expr, truth: bool) -> Vec<(String, HV, HV)> {
         let mut out = vec![];
         self.bounds(c, truth, &mut out);
         out
     }
 
-    fn bounds(&mut self, c: &Expr, truth: bool, out: &mut Vec<(String, HV)>) {
+    fn bounds(&mut self, c: &Expr, truth: bool, out: &mut Vec<(String, HV, HV)>) {
         match &c.kind {
             ExprKind::Unary('!', x) => self.bounds(x, !truth, out),
             ExprKind::Binary(BinOp::And, l, r) if truth => { self.bounds(l, true, out); self.bounds(r, true, out); }
@@ -451,7 +460,7 @@ impl<'p> Gen<'p> {
     }
 
     /// `x OP y` holds: narrow variable `x` by `y`'s range
-    fn bound(&mut self, x: &Expr, op: BinOp, y: &Expr, out: &mut Vec<(String, HV)>) {
+    fn bound(&mut self, x: &Expr, op: BinOp, y: &Expr, out: &mut Vec<(String, HV, HV)>) {
         let ExprKind::Path(p) = &x.kind else { return };
         if p.len() != 1 { return; }
         let Some(HV::S(v)) = self.env.get(&p[0]).cloned() else { return };
@@ -471,9 +480,9 @@ impl<'p> Gen<'p> {
         }
         // an arm that cannot be taken keeps the old range
         if lo > hi || (lo == v.lo && hi == v.hi) { return; }
-        let n = HV::S(SVal { lo, hi, ..v });
+        let n = HV::S(SVal { lo, hi, ..v.clone() });
         self.env.insert(p[0].clone(), n.clone());
-        out.push((p[0].clone(), n));
+        out.push((p[0].clone(), n, HV::S(v)));
     }
 
     /// element `k` of `xs` (a run-time index: a multiplexer over the elements)
@@ -836,11 +845,9 @@ fn shared_reads(cfg: &Cfg) -> HashMap<String, String> {
 }
 
 /// after an arm: a variable it did not change gets its range from before the condition back
-fn unnarrow(env: &mut HashMap<String, HV>, narrowed: &[(String, HV)], before: &HashMap<String, HV>) {
-    for (n, v) in narrowed {
-        if let (Some(cur), Some(old)) = (env.get(n), before.get(n)) {
-            if cur.flat() == v.flat() { env.insert(n.clone(), old.clone()); }
-        }
+fn unnarrow(env: &mut HashMap<String, HV>, narrowed: &[(String, HV, HV)]) {
+    for (n, v, old) in narrowed {
+        if env.get(n).is_some_and(|cur| cur.flat() == v.flat()) { env.insert(n.clone(), old.clone()); }
     }
 }
 
@@ -1170,7 +1177,11 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         for (c, v) in var_d.get(n).into_iter().flatten() {
             match ups.iter_mut().find(|u| u.1 == *v) { Some(u) => u.0 = g.g.or(u.0, *c), None => ups.push((*c, v.clone())) }
         }
-        for (c, v) in &ups { d = g.g.muxv(*c, &d, v); }
+        // and a bit only takes the states that change it (in another state's clock the chain
+        // gives Q anyway): a state writing one word of an array costs that word, not the array
+        for (c, v) in &ups {
+            for i in 0..d.len() { if v[i] != qb[i] { d[i] = g.g.mux(*c, d[i], v[i]); } }
+        }
         for (i, b) in qb.iter().enumerate() { ff(&mut g.g, if d[i] == *b { Bit::C0 } else { d[i] }, *b); }
         nets.push((n.clone(), qb));
     }

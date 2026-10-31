@@ -53,7 +53,7 @@ regression tests run every example both ways and compare).
   output, `[PASS]` / `[FAIL]` with the reason, and the channel statistics.
 - The example library has a **Fluxa** group: basics, a FIR filter, a multiply-accumulate unit, a systolic-array
   matrix multiply, a broadcast fan-out, a deadlock (on purpose), a 4-tap FIR, a network of tasks, an RV32I processor written as four pipelined tasks, and an
-  RV64G processor (M/S/U modes, Sv39, an IEEE-754 FPU, a mini OS; 90 tests).
+  RV64G processor (M/S/U modes, Sv39, an IEEE-754 FPU, a mini OS; 93 tests).
 
 ## Synthesis
 
@@ -102,9 +102,23 @@ reda synth --list fluxa/examples/pipeline.fx        # the tasks that can be synt
        --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), ecall()])' \
        fluxa/rv32i/rv32i.fx
   ```
-- Not synthesized yet: a `mem` initialized from a parameter becomes registers, not block RAM with initial contents;
-  the RV64 processor (its FPU divides and shifts by amounts that are guarded only at run time, and is far too large
-  as one clock of logic).
+- Ranges: in each arm of an `if` (and on the right of `&&` / `||`) the variables the condition bounds have the
+  narrower range, so `if sh <= 0 { x << (0 - sh) }` and `if b != 0 { a / b }` synthesize; function results keep a
+  range narrower than their declared type.
+- `serial for` without channel operations takes a clock per iteration (states); other such loops are unrolled into
+  gates. It is how a long computation becomes a multi-cycle unit, and the end of an iteration is a clock boundary.
+- A memory initialized from an array parameter (`let m: mem<T, N> = data`) starts with its words: with
+  `--param data=…` they are the block RAM's initial contents (iCE40 `INIT_*`, ECP5 `INITVAL_*`); otherwise a
+  gate-level simulation loads them (no ports). All reads of a memory share one read port.
+- The RV64G processor (`fluxa/rv64`) synthesizes as one netlist and is placed and routed on the ECP5-85: 72,834 LUT
+  slots (87%), 12,179 FF, 32 DP16KD, 8.35 MHz. Its FPU is the multi-cycle task `Fpu` in `fpu.fx` (multiplication
+  53 clocks, division 116, square root 60; one exact adder and one rounder shared), bit for bit the same as the
+  `comb fn` reference `fp_op` on every vector of `tests_fpu.fx`; the M extension is the 64-clock task `MulDiv`.
+  ```
+  reda fpga --arch ecp5 --clock 5 --bit rv64.bit --top Core --param WBD=8 --param TLBN=8 --param 'data=dimage([])' \
+       --param 'prog=image([addi(1, 0, 0), addi(2, 0, 1), addi(3, 0, 11), add(1, 1, 2), addi(2, 2, 1), bne(2, 3, -8), simexit()])' \
+       fluxa/rv64/rv64.fx fluxa/rv64/fpu.fx
+  ```
 - In the web IDE a Fluxa project has **⚙ Synthesize** too: ① shows the task and its instances, ②–⑦ are the same as
   for Veryl. With the simulation target set to generic gates / iCE40 / standard cells, **▶ Run** runs the tests with
   the synthesis top replaced by its netlist, and **✔ Verify all** compares every implementation side by side. The

@@ -321,7 +321,7 @@ fn has_return(e: &Expr) -> bool {
     let blk = |b: &Block| b.stmts.iter().any(|s| match &s.kind {
         StmtKind::Return(_) => true,
         StmtKind::Expr(x) => has_return(x),
-        StmtKind::For { body, .. } => body.stmts.iter().any(|s| matches!(&s.kind, StmtKind::Return(_)) || matches!(&s.kind, StmtKind::Expr(x) if has_return(x))),
+        StmtKind::For { body, .. } => body.stmts.iter().any(|s| matches!(&s.kind, StmtKind::Return(_)) || matches!(&s.kind, StmtKind::Expr(x) if has_return(x))) || body.tail.as_ref().is_some_and(|t| has_return(t)),
         _ => false,
     }) || b.tail.as_ref().is_some_and(|t| has_return(t));
     match &e.kind {
@@ -377,7 +377,7 @@ fn visit_stmt(s: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match &s.kind {
         StmtKind::Let { init: Some(e), .. } | StmtKind::Carry { init: e, .. } | StmtKind::Expr(e) => visit(e, f),
         StmtKind::Assign { target, value, .. } => { visit(value, f); visit(target, f); }
-        StmtKind::For { iter, body, .. } => { visit(iter, f); for s in &body.stmts { visit_stmt(s, f); } }
+        StmtKind::For { iter, body, .. } => { visit(iter, f); for s in &body.stmts { visit_stmt(s, f); } if let Some(t) = &body.tail { visit(t, f); } }
         _ => {}
     }
 }
@@ -487,15 +487,8 @@ impl Lower {
                 // each branch puts its value into one variable
                 self.n += 1;
                 let v = format!("if~{}", self.n);
-                let (bt, bf) = (self.new_block(), self.new_block());
-                self.blocks[*cur].term = Term::Branch(c, bt, bf);
                 let mut ends = vec![];
-                for (start, e) in [(bt, Expr { kind: ExprKind::Block(t.clone()), line }), (bf, (**el).clone())] {
-                    let mut b = start;
-                    let x = self.lift(&e, &mut b)?;
-                    self.blocks[b].stmts.push(let_stmt(&v, x, line));
-                    ends.push(b);
-                }
+                self.if_into(c, t, el, &v, *cur, &mut ends, line)?;
                 // after the branches (the type pass sees the value assigned before it is read)
                 let join = self.new_block();
                 for b in ends { self.blocks[b].term = Term::Goto(join); }
@@ -508,6 +501,30 @@ impl Lower {
             }
             _ => Err(format!("line {}: a channel operation in this kind of expression is not synthesized; give it its own statement", line)),
         }
+    }
+
+    /// `if c { t } else { el }` from `cur`, each branch's value into `v`; an `else if` with
+    /// channel operations puts its value into the same `v` (a chain is one register, not one
+    /// per level). The blocks where the branches end go to `ends`.
+    #[allow(clippy::too_many_arguments)]
+    fn if_into(&mut self, c: Expr, t: &Block, el: &Expr, v: &str, cur: B, ends: &mut Vec<B>, line: u32) -> R<()> {
+        let (bt, bf) = (self.new_block(), self.new_block());
+        self.blocks[cur].term = Term::Branch(c, bt, bf);
+        let mut b = bt;
+        let x = self.lift(&Expr { kind: ExprKind::Block(t.clone()), line }, &mut b)?;
+        self.blocks[b].stmts.push(let_stmt(v, x, line));
+        ends.push(b);
+        let mut b = bf;
+        if let ExprKind::If(c2, t2, Some(el2)) = &el.kind {
+            if has_chan(el) {
+                let c2 = self.lift(c2, &mut b)?;
+                return self.if_into(c2, t2, el2, v, b, ends, line);
+            }
+        }
+        let x = self.lift(el, &mut b)?;
+        self.blocks[b].stmts.push(let_stmt(v, x, line));
+        ends.push(b);
+        Ok(())
     }
 
     /// `match s { p => e, .. }` with channel operations in its arms as `if s == p { e } else ..`
