@@ -720,7 +720,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
 
   // the Fluxa board (machine.json fluxa: fluxa/rv64/linux/soc.fx compiled by fluxa-emu, as the page's
   // worker runs it): boot to the shell, files, MicroPython, C, GPIO, the screen
-  const { FluxaMachine } = createRequire(import.meta.url)(path.join(dist, 'fx_machine.cjs'));
+  const { FluxaMachine, fxFingerprint } = createRequire(import.meta.url)(path.join(dist, 'fx_machine.cjs'));
   /** a Fluxa board booted to its shell; the steps are state transitions (about 40 an instruction) */
   const fluxaBoard = async (ex) => {
     const cfg = machineOf(ex);
@@ -731,15 +731,29 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     fm.reset();
     let o = '';
     while (fm.cycle < 10_000_000_000 && !o.endsWith(cfg.prompt)) o += String.fromCharCode(...fm.step(40_000_000).out);
-    return { fm, cfg, booted: o.endsWith(cfg.prompt), stats: r.stats };
+    return { fm, cfg, booted: o.endsWith(cfg.prompt), stats: r.stats, r };
   };
   for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw && machineOf(e).fluxa)) {
     const t0 = Date.now();
     let line;
     try {
-      const { fm, cfg, booted, stats } = await fluxaBoard(ex);
+      const { fm, cfg, booted, stats, r: comp } = await fluxaBoard(ex);
       const boot = Date.now() - t0, bootT = fm.cycle;
       let ok = booted, what = booted ? `shell after ${(bootT / 1e9).toFixed(1)} G transitions in ${boot} ms` : 'no shell';
+      // the bundled snapshot (made for the same compiled layout): from it, a command runs at once
+      if (ok && cfg.snapshot) {
+        vm.runInContext(fs.readFileSync(path.join(dist, `img_snap_${cfg.snapshot}.js`), 'utf8'), ctx);
+        const sn = ctx.VERYL_IMAGES[`snap_${cfg.snapshot}`];
+        const fpOk = sn.fingerprint === fxFingerprint(comp.meta);
+        const m2 = await FluxaMachine.create(fromBase64(comp.wasm), comp.meta, cfg);
+        m2.restore(await gunzip(fromBase64(sn.data)), sn.cycle);
+        const t1 = Date.now();
+        let o2 = '';
+        m2.input([...'uname -m; echo S$((6*7))N\r'].map((ch) => ch.charCodeAt(0)));
+        while (m2.cycle < sn.cycle + 4_000_000_000 && !o2.includes('S42N')) o2 += String.fromCharCode(...m2.step(40_000_000).out);
+        ok = fpOk && o2.includes('riscv64') && o2.includes('S42N');
+        what += `; snapshot (${(sn.data.length * 0.75 / 1e6).toFixed(1)} MB) ${fpOk ? '' : 'fingerprint differs, '}${ok ? `runs a command in ${Date.now() - t1} ms` : 'FAILED ' + JSON.stringify(o2.slice(-200))}`;
+      }
       if (ok) {
         const T = createRequire(import.meta.url)(tarPath);
         const c = core.call({ cmd: 'cc', name: 'ct.c', linux: true, src: 'int main(void) { gpio_write(12, 1); printf("C %d\\n", 6 * 7); return 0; }\n' });

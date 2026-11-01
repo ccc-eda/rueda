@@ -20,10 +20,20 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/fx_machine.ts
 var fx_machine_exports = {};
 __export(fx_machine_exports, {
-  FluxaMachine: () => FluxaMachine
+  FluxaMachine: () => FluxaMachine,
+  fxFingerprint: () => fxFingerprint
 });
 module.exports = __toCommonJS(fx_machine_exports);
 var RAM_BASE = 0x80000000n;
+function fxFingerprint(meta) {
+  const s = JSON.stringify(meta);
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return "fluxa:" + h.toString(16).padStart(8, "0") + ":" + s.length;
+}
 var MAX64 = 0xffffffffffffffffn;
 var FluxaMachine = class _FluxaMachine {
   constructor(mod, meta, cfg) {
@@ -47,6 +57,8 @@ var FluxaMachine = class _FluxaMachine {
   pins = 0;
   /** a wait the devices asked for, not answered yet: until (10 MHz ticks) */
   waiting = null;
+  /** the latest time the machine was told (mtime ticks): a restored machine's clock goes on from it */
+  told = 0n;
   /** the GPIO outputs and enables now */
   gout = 0;
   goe = 0;
@@ -109,7 +121,7 @@ var FluxaMachine = class _FluxaMachine {
   setGpio(bits) {
     this.pins = bits & 65535;
   }
-  /** the whole memory (its non-zero 4 KB pages) */
+  /** the whole memory (its non-zero 4 KB pages) and the time last told */
   snapshot() {
     const mem = new Uint8Array(this.x.mem.buffer);
     const pages = [];
@@ -119,13 +131,15 @@ var FluxaMachine = class _FluxaMachine {
         break;
       }
     }
-    const out = new Uint8Array(8 + pages.length * (4 + 4096));
+    const H = 16;
+    const out = new Uint8Array(H + pages.length * (4 + 4096));
     const v = new DataView(out.buffer);
     v.setUint32(0, 1180190029, true);
     v.setUint32(4, pages.length, true);
+    v.setBigUint64(8, this.told, true);
     pages.forEach((p, k) => {
-      v.setUint32(8 + k * 4100, p, true);
-      out.set(mem.subarray(p, p + 4096), 12 + k * 4100);
+      v.setUint32(H + k * 4100, p, true);
+      out.set(mem.subarray(p, p + 4096), H + 4 + k * 4100);
     });
     return out;
   }
@@ -133,15 +147,17 @@ var FluxaMachine = class _FluxaMachine {
     const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
     if (v.getUint32(0, true) !== 1180190029) throw new Error("not a Fluxa machine state");
     this.clear();
+    const H = 16;
     const mem = new Uint8Array(this.x.mem.buffer);
     const n = v.getUint32(4, true);
     for (let k = 0; k < n; k++) {
-      const p = v.getUint32(8 + k * 4100, true);
-      mem.set(data.subarray(12 + k * 4100, 12 + k * 4100 + 4096), p);
+      const p = v.getUint32(H + k * 4100, true);
+      mem.set(data.subarray(H + 4 + k * 4100, H + 4 + k * 4100 + 4096), p);
     }
     this.started = true;
     this.cycle = cycle;
-    this.t0 = performance.now();
+    this.told = v.getBigUint64(8, true);
+    this.t0 = performance.now() - Number(this.told) / 1e4;
   }
   // ---- channels to the outside (fluxa/emu/js/emu.mjs, the same layout)
   ch(c) {
@@ -198,6 +214,7 @@ var FluxaMachine = class _FluxaMachine {
       if (until !== null && !this.rx.length && t < until) return false;
     } else if (until !== null && until !== MAX64) t = until;
     const b = this.rx.length ? this.rx.shift() : null;
+    if (t > this.told) this.told = t;
     this.push(env, [b === null ? 0n : 1n, BigInt(b ?? 0), BigInt(this.pins), t]);
     return true;
   }
@@ -253,5 +270,6 @@ var FluxaMachine = class _FluxaMachine {
 };
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  FluxaMachine
+  FluxaMachine,
+  fxFingerprint
 });

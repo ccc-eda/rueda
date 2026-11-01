@@ -165,7 +165,7 @@ node fluxa/rv64/linux/boot.mjs soc.wasm fw_payload.bin --script cmds.txt     # b
 fluxa/rv64/linux/test.sh                       # the first million instructions: riscv-emu's commit log line for line; the shell
 ```
 
-The shell comes after about 84.5 M instructions, under 10 s in Node. The web IDE's example library has a "Fluxa board"
+The shell comes after about 84.5 M instructions, under 10 s in Node; the web IDE starts from a snapshot of the booted board made by the build (`web/dist/img_snap_fluxa_linux.js`), so ▶ Run runs a program on it within seconds. `fluxa/rv64/linux/tests_soc.fx` tests the hart on the Fluxa simulator (UART, multiply / divide, loads and stores, compressed instructions, traps, the timer interrupt, GPIO). The web IDE's example library has a "Fluxa board"
 group: Linux + MicroPython + C, the 8-LED chaser, Tetris, snake, breathing LEDs, the reaction game, with the RV64
 board's programs; the emulator (🖥) runs on fluxa-emu (the hardware itself, in real time) or riscv-emu (the
 instruction set).

@@ -19,6 +19,7 @@ reda fpga --pnr veryl --pcf pins.pcf --bin top.bin top.veryl   # iCE40：對應�
 reda asic --pdk sky130 --gds alu.gds alu.veryl                 # 標準元件一路做到通過 DRC 的 GDS
 reda gatesim ice40 fifo.veryl          # 在合成後的網表上跑 testbench
 reda emu --top Rv64Soc -o soc.wasm *.veryl   # 把設計編成 WebAssembly（快速模擬）
+reda emu fir.fx                        # Fluxa 的 test，task 換成編譯後的版本（fluxa-emu）；-o：WebAssembly
 reda cc --run hello.c                  # 給 RISC-V SoC 的 C 程式，在指令集模擬器上執行
 reda rvemu fw_payload.bin              # RV64 開發板模擬機（OpenSBI + Linux）
 reda help [子指令]
@@ -48,7 +49,10 @@ rueda/
 │   └── tutorial/      從零開始的教學與虛擬實驗課
 ├── fluxa/           Fluxa 語言（高階合成：任務與通道，Kahn 程序網路）
 │   ├── sim/           模擬器（多執行緒，或瀏覽器裡的協作式排程）
-│   ├── examples/      FIR、脈動陣列…；rv32i/、rv64/：用 Fluxa 寫的處理器
+│   ├── synth/         Fluxa → eda 的閘級網表（task：狀態機 + 資料路徑；網路：一個網表）
+│   ├── emu/           fluxa-emu：把 Fluxa 編譯成快速模擬（Rust 執行器、WebAssembly）
+│   ├── examples/      FIR、脈動陣列…；rv32i/、rv64/：用 Fluxa 寫的處理器；
+│   │                  rv64/linux/：用 Fluxa 寫的 RV64 開發板，開得了 Linux
 │   └── docs/          語言規格與版本紀錄
 ├── riscv/           RISC-V 軟體
 │   ├── rvtools/       C 編譯器、組譯器、RV32IMA 指令集模擬器
@@ -60,7 +64,11 @@ rueda/
 | 語言 | 模擬 | 合成、FPGA、ASIC | 網頁 IDE |
 |---|---|---|---|
 | Veryl（`.veryl`） | `reda sim`、`reda emu` | `reda synth / fpga / asic / gatesim` | 有 |
-| Fluxa（`.fx`） | `reda sim` | 還沒有（eda 的下一個前端） | 有（跑 test） |
+| Fluxa（`.fx`） | `reda sim`、`reda emu` | `reda synth / fpga / asic / gatesim`（一個 task，或 task 組成的網路） | 有 |
+
+兩種語言寫的硬體都開得了 Linux：Veryl 的 Rv64Soc（veryl-emu）和用 Fluxa 寫的同一塊板子（`fluxa/rv64/linux/soc.fx`，
+fluxa-emu）開的是同一個 OpenSBI + Linux + busybox 映像；網頁 IDE 的「RV64 開發板」與「Fluxa 開發板」範例在上面跑
+MicroPython、C 程式、跑馬燈、俄羅斯方塊、貪食蛇。各種模擬機有多快、為什麼：[docs/note/emu-compare.md](docs/note/emu-compare.md)。
 
 ## 建置與測試
 

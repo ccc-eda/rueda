@@ -105,7 +105,7 @@ const piEx = (id, dir, files, title, title_en, note, note_en, piBoard) => ({
 });
 
 // the same board written in Fluxa (fluxa/rv64/linux/soc.fx), run by fluxa-emu (or riscv-emu): the same image and programs
-const FLUXA_MACHINE = { ...RV64_MACHINE, top: undefined, reset: undefined, uart: undefined, finish: undefined, ram: undefined, snapshot: undefined,
+const FLUXA_MACHINE = { ...RV64_MACHINE, top: undefined, reset: undefined, uart: undefined, finish: undefined, ram: undefined, snapshot: 'fluxa_linux',
   gpio: { out: 'gpio', oe: 'gpio', in: 'env', n: 16 }, fluxa: { top: 'Soc', params: { RAMW: 33554432, TRACE: false } } };
 const FLUXA_HW = ['fluxa/rv64/linux/soc.fx'];
 /** an example on the Fluxa board: its programs (examples/rv64/apps/DIR/...), the board written in Fluxa */

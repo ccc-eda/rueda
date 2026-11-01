@@ -151,7 +151,7 @@ node fluxa/rv64/linux/boot.mjs soc.wasm fw_payload.bin --script cmds.txt     # �
 fluxa/rv64/linux/test.sh                       # 前 100 万个指令的 commit log 和 riscv-emu 逐行相同，开到 shell
 ```
 
-开到 shell 约 8,450 万个指令，Node 上不到 10 秒。网页 IDE 的示例库有「Fluxa 开发板」一组：Linux + MicroPython + C、
+开到 shell 约 8,450 万个指令，Node 上不到 10 秒；网页 IDE 从构建时存下的开机快照（`web/dist/img_snap_fluxa_linux.js`）开始，按下「▶ 运行」几秒内就在板子上跑。`fluxa/rv64/linux/tests_soc.fx` 是这颗 hart 在 Fluxa 仿真器上的 test（UART、乘除、load / store、压缩指令、trap、定时器中断、GPIO）。网页 IDE 的示例库有「Fluxa 开发板」一组：Linux + MicroPython + C、
 跑马灯、俄罗斯方块、贪食蛇、呼吸灯、反应时间游戏，程序和 RV64 开发板相同；🖥 仿真机的引擎选 fluxa-emu（硬件本身，
 即时）或 riscv-emu（指令集）。
 

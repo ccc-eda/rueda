@@ -1,4 +1,5 @@
-// The emulator's snapshots (v2.17): boot an emulator example (machine.json "snapshot")
+// The emulator's snapshots (v2.17): boot an emulator example (machine.json "snapshot"; a Veryl
+// machine on veryl-emu, one written in Fluxa on fluxa-emu)
 // in Node with the same core and machine as the page, to its shell prompt, and keep
 // the whole machine state (the model's linear memory: non-zero 4 KB pages, gzip) as
 // dist/img_snap_NAME.js, with the boot log and the fingerprint of the model's layout
@@ -20,15 +21,18 @@ for (const f of ['wasm.js', 'examples.js']) vm.runInContext(fs.readFileSync(path
 const req = createRequire(import.meta.url);
 const { Veryl, fromBase64 } = req(path.join(dist, 'api.cjs'));
 const { Machine, machineStops, fingerprint } = req(path.join(dist, 'emu_machine.cjs'));
+const { FluxaMachine, fxFingerprint } = req(path.join(dist, 'fx_machine.cjs'));
 const core = await Veryl.load(fromBase64(ctx.VERYL_WASM_B64));
 
 // examples on the same machine (same_hw) share its snapshot
 for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw)) {
   const cfg = JSON.parse(ex.files.find((f) => f.name === 'machine.json').src);
   if (!cfg.snapshot) continue;
-  const files = ex.files.filter((f) => f.name.endsWith('.veryl'));
-  const r = core.call({ cmd: 'emu_compile', files, top: cfg.top, stops: machineStops(cfg) });
-  const fp = fingerprint(r.meta);
+  // a Veryl machine (veryl-emu) or one written in Fluxa (fluxa-emu: mtime counts instructions here)
+  const fx = !!cfg.fluxa;
+  const r = fx ? core.call({ cmd: 'fluxa_emu_compile', files: ex.files.filter((f) => f.name.endsWith('.fx')), top: cfg.fluxa.top, params: cfg.fluxa.params ?? {} })
+    : core.call({ cmd: 'emu_compile', files: ex.files.filter((f) => f.name.endsWith('.veryl')), top: cfg.top, stops: machineStops(cfg) });
+  const fp = fx ? fxFingerprint(r.meta) : fingerprint(r.meta);
   // the images the machine loads
   const images = [];
   for (const l of cfg.load ?? []) {
@@ -44,12 +48,14 @@ for (const ex of ctx.VERYL_EXAMPLES.filter((e) => e.emu && !e.same_hw)) {
   const out = path.join(dist, `img_snap_${cfg.snapshot}.js`);
   if (fs.existsSync(out) && fs.readFileSync(out, 'utf8').includes(`"key": "${k}"`)) { console.log(`img_snap_${cfg.snapshot}.js unchanged`); continue; }
   const t0 = Date.now();
-  const m = await Machine.create(fromBase64(r.wasm), r.meta, cfg);
+  const m = fx ? await FluxaMachine.create(fromBase64(r.wasm), r.meta, cfg) : await Machine.create(fromBase64(r.wasm), r.meta, cfg);
   for (const im of images) m.load(im.bytes, im.addr ? BigInt(im.addr) : undefined);
   m.reset();
   let log = '';
   const prompt = cfg.prompt ?? '$ ';
-  while (m.cycle < 1_000_000_000 && !log.endsWith(prompt)) log += String.fromCharCode(...m.step(1_000_000).out);
+  // (fluxa-emu's steps are state transitions, about 40 an instruction)
+  const [limit, slice] = fx ? [10_000_000_000, 40_000_000] : [1_000_000_000, 1_000_000];
+  while (m.cycle < limit && !log.endsWith(prompt)) log += String.fromCharCode(...m.step(slice).out);
   if (!log.endsWith(prompt)) throw new Error(`${ex.id}: no prompt "${prompt}" after ${m.cycle} cycles`);
   const gz = zlib.gzipSync(m.snapshot(), { level: 9 });
   const info = { key: k, fingerprint: fp, cycle: m.cycle, log };

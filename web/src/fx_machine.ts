@@ -21,6 +21,14 @@ interface FxMeta {
 }
 
 const RAM_BASE = 0x8000_0000n;
+
+/** the layout of a compiled machine (a snapshot only fits the same one): FNV over its JSON */
+export function fxFingerprint(meta: object): string {
+  const s = JSON.stringify(meta);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return 'fluxa:' + h.toString(16).padStart(8, '0') + ':' + s.length;
+}
 const MAX64 = 0xffff_ffff_ffff_ffffn;
 
 export class FluxaMachine {
@@ -37,6 +45,8 @@ export class FluxaMachine {
   private pins = 0;
   /** a wait the devices asked for, not answered yet: until (10 MHz ticks) */
   private waiting: bigint | null = null;
+  /** the latest time the machine was told (mtime ticks): a restored machine's clock goes on from it */
+  private told = 0n;
   /** the GPIO outputs and enables now */
   private gout = 0;
   private goe = 0;
@@ -98,28 +108,33 @@ export class FluxaMachine {
   input(bytes: number[]): void { this.rx.push(...bytes); }
   setGpio(bits: number): void { this.pins = bits & 0xffff; }
 
-  /** the whole memory (its non-zero 4 KB pages) */
+  /** the whole memory (its non-zero 4 KB pages) and the time last told */
   snapshot(): Uint8Array {
     const mem = new Uint8Array(this.x.mem.buffer);
     const pages: number[] = [];
     for (let p = 0; p < mem.length; p += 4096) { for (let i = p; i < p + 4096; i += 8) if (this.dv.getBigUint64(i, true)) { pages.push(p); break; } }
-    const out = new Uint8Array(8 + pages.length * (4 + 4096));
+    const H = 16;
+    const out = new Uint8Array(H + pages.length * (4 + 4096));
     const v = new DataView(out.buffer);
     v.setUint32(0, 0x4658454d, true);
     v.setUint32(4, pages.length, true);
-    pages.forEach((p, k) => { v.setUint32(8 + k * 4100, p, true); out.set(mem.subarray(p, p + 4096), 12 + k * 4100); });
+    v.setBigUint64(8, this.told, true);
+    pages.forEach((p, k) => { v.setUint32(H + k * 4100, p, true); out.set(mem.subarray(p, p + 4096), H + 4 + k * 4100); });
     return out;
   }
   restore(data: Uint8Array, cycle = 0): void {
     const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
     if (v.getUint32(0, true) !== 0x4658454d) throw new Error('not a Fluxa machine state');
     this.clear();
+    const H = 16;
     const mem = new Uint8Array(this.x.mem.buffer);
     const n = v.getUint32(4, true);
-    for (let k = 0; k < n; k++) { const p = v.getUint32(8 + k * 4100, true); mem.set(data.subarray(12 + k * 4100, 12 + k * 4100 + 4096), p); }
+    for (let k = 0; k < n; k++) { const p = v.getUint32(H + k * 4100, true); mem.set(data.subarray(H + 4 + k * 4100, H + 4 + k * 4100 + 4096), p); }
     this.started = true;
     this.cycle = cycle;
-    this.t0 = performance.now();
+    // the clock goes on from the time the machine was last told
+    this.told = v.getBigUint64(8, true);
+    this.t0 = performance.now() - Number(this.told) / 1e4;
   }
 
   // ---- channels to the outside (fluxa/emu/js/emu.mjs, the same layout)
@@ -162,6 +177,7 @@ export class FluxaMachine {
       if (until !== null && !this.rx.length && t < until) return false;
     } else if (until !== null && until !== MAX64) t = until;
     const b = this.rx.length ? this.rx.shift()! : null;
+    if (t > this.told) this.told = t;
     this.push(env, [b === null ? 0n : 1n, BigInt(b ?? 0), BigInt(this.pins), t]);
     return true;
   }

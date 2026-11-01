@@ -19,6 +19,7 @@ reda fpga --pnr veryl --pcf pins.pcf --bin top.bin top.veryl   # iCE40: map, pla
 reda asic --pdk sky130 --gds alu.gds alu.veryl                 # standard cells to a DRC-clean GDS
 reda gatesim ice40 fifo.veryl          # the testbenches on the synthesized netlist
 reda emu --top Rv64Soc -o soc.wasm *.veryl   # compile a design to WebAssembly (fast simulation)
+reda emu fir.fx                        # Fluxa's tests with the tasks compiled (fluxa-emu); -o: WebAssembly
 reda cc --run hello.c                  # C for the RISC-V SoC, run on the instruction-set simulator
 reda rvemu fw_payload.bin              # the RV64 board emulator (OpenSBI + Linux)
 reda help [SUBCOMMAND]
@@ -49,7 +50,10 @@ rueda/
 │   └── tutorial/      from-zero tutorial and the virtual lab course
 ├── fluxa/           the Fluxa language (HLS: tasks and channels, a Kahn process network)
 │   ├── sim/           simulator (threads, or a cooperative scheduler in the browser)
-│   ├── examples/      FIR, systolic array, …;  rv32i/, rv64/: processors written in Fluxa
+│   ├── synth/         Fluxa → eda's gate netlist (a task: FSM + datapath; a network: one netlist)
+│   ├── emu/           fluxa-emu: Fluxa compiled for fast simulation (a Rust executor, WebAssembly)
+│   ├── examples/      FIR, systolic array, …;  rv32i/, rv64/: processors written in Fluxa;
+│   │                  rv64/linux/: the RV64 board in Fluxa, which boots Linux
 │   └── docs/          language specification and version notes
 ├── riscv/           RISC-V software
 │   ├── rvtools/       C compiler, assembler, RV32IMA instruction-set simulator
@@ -61,7 +65,12 @@ rueda/
 | Language | Simulation | Synthesis, FPGA, ASIC | Web IDE |
 |---|---|---|---|
 | Veryl (`.veryl`) | `reda sim`, `reda emu` | `reda synth / fpga / asic / gatesim` | yes |
-| Fluxa (`.fx`) | `reda sim` | `reda synth / fpga / asic / gatesim` (a task, or a network of tasks) | yes |
+| Fluxa (`.fx`) | `reda sim`, `reda emu` | `reda synth / fpga / asic / gatesim` (a task, or a network of tasks) | yes |
+
+Linux runs on hardware written in either language: Veryl's Rv64Soc (veryl-emu) and the same board written in
+Fluxa (`fluxa/rv64/linux/soc.fx`, fluxa-emu) boot the same OpenSBI + Linux + busybox image; in the IDE the
+"RV64 board" and "Fluxa board" examples run MicroPython, C programs, the 8-LED chaser, Tetris and snake on it.
+How fast each emulator is, and why: [docs/note/emu-compare.md](docs/note/emu-compare.md).
 
 ## Building and testing
 

@@ -53,3 +53,4 @@ fn rv64(t: &str) { agree(&files(&["rv64/rv64.fx", "rv64/fpu.fx", &format!("rv64/
 #[test] fn rv64_fp() { rv64("tests_fp") }
 #[test] fn rv64_irq() { rv64("tests_irq") }
 #[test] fn rv64_system() { rv64("tests_system") }
+#[test] fn rv64_linux_soc() { agree(&files(&["rv64/rv64.fx", "rv64/fpu.fx", "rv64/linux/soc.fx", "rv64/linux/tests_soc.fx"]), Some("Soc")); }

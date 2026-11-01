@@ -98,3 +98,5 @@ fn no_false_deadlocks_under_repetition() {
 #[test] fn rv64_tests_fp() { check_all_pass("rv64/tests_fp", rv64("tests_fp")); }
 #[test] fn rv64_tests_irq() { check_all_pass("rv64/tests_irq", rv64("tests_irq")); }
 #[test] fn rv64_tests_system() { check_all_pass("rv64/tests_system", rv64("tests_system")); }
+// the RV64 board in Fluxa (rv64/linux/soc.fx): small programs with rv64.fx's assembler
+#[test] fn rv64_linux_soc() { check_all_pass("rv64/linux/tests_soc", run_files(&["rv64/rv64.fx", "rv64/fpu.fx", "rv64/linux/soc.fx", "rv64/linux/tests_soc.fx"])); }

@@ -14,6 +14,7 @@ import { saveAs } from '../zip';
 import { BoardSetup, DEFAULT_SETUP, VirtualBoard } from './board';
 import { Emulator, EmuStart, Engine } from './emu';
 import { fingerprint, MachineCfg, machineStops } from '../emu_machine';
+import { fxFingerprint } from '../fx_machine';
 import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
@@ -1513,10 +1514,15 @@ async function startEmu(): Promise<EmuStart | null> {
       const r = await core.call<{ wasm: string; meta: object; stats: string }>({ cmd: 'fluxa_emu_compile', files, top: cfg.fluxa.top, params: cfg.fluxa.params ?? {} });
       const images: EmuStart['images'] = [];
       for (const l of cfg.load ?? []) images.push({ bytes: await image(l.image), addr: l.addr });
-      emuFp = `fluxa-emu:${r.wasm.length}`;
+      // a state saved in this browser, else the bundled snapshot: only for the same compiled layout
+      emuFp = fxFingerprint(r.meta);
       let snap: EmuStart['snap'];
       const saved = await idbGet<{ fingerprint: string; cycle: number; log: string; data: Uint8Array }>(`state:${proj.id}`);
       if (saved && saved.fingerprint === emuFp) snap = { data: await gunzip(saved.data), cycle: saved.cycle, log: saved.log, from: 'saved' };
+      else if (cfg.snapshot) {
+        const b = await bundledSnap(cfg.snapshot);
+        if (b && b.fingerprint === emuFp) snap = { data: b.data, cycle: b.cycle, log: b.log, from: 'bundled' };
+      }
       $('sbTest').textContent = tr('🖥 模擬機開機（fluxa-emu）', '🖥 Emulator booted (fluxa-emu)');
       return { engine: 'fluxa', wasm: fromBase64(r.wasm), meta: r.meta, cfg, images, stats: `fluxa-emu: ${r.stats}`, snap, files: cfg.files ? projectArea() : undefined };
     } finally {

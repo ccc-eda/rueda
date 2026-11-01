@@ -42,6 +42,21 @@ task 變成狀態機加資料路徑，通道變成 valid / ready 串流埠；`pi
 `mem` 在 iCE40 上變成 block RAM；建網路的 task 整個變成一個網表（內部通道是 FIFO）。
 細節見手冊第 17 章與 [`docs/synthesis-plan.md`](docs/synthesis-plan.md)。
 
+## fluxa-emu：編譯後再跑
+
+這個模擬器是直譯器，RV64 上每秒約一萬個指令。`fluxa/emu`（crate `rueda-fluxa-emu`）像 veryl-emu 一樣先編譯：
+task 照合成的切法變成狀態，運算依值域放進 64 / 128 位元暫存器，通道是環形緩衝區，產生 WebAssembly（或在 Rust
+執行器上跑）。結果必須和本模擬器相同。
+
+```
+reda emu examples/fir.fx                       # test 照跑，task 換成編譯後的版本
+reda emu -o core.wasm --top Core --param WBD=8 ... rv64/rv64.fx rv64/fpu.fx   # WebAssembly 模組 + JSON（emu/js/emu.mjs）
+cargo test --release -p rueda-fluxa-emu        # 每個範例、rv32i、rv64 的 test：與本模擬器逐個比對
+emu/tests/wasm.sh                              # WebAssembly 重播 Rust 執行器的輸入，輸出必須相同
+```
+
+設計與量測見 [`docs/emu-plan.md`](docs/emu-plan.md)；三種模擬機的速度比較見 [`../docs/note/emu-compare.md`](../docs/note/emu-compare.md)。
+
 ## 模擬模型
 
 - 每個 `task` 是一個獨立執行的程序，通道是有界 FIFO（`depth`）：滿了 `send` 阻塞、空了 `recv` 阻塞。
@@ -88,12 +103,14 @@ task 變成狀態機加資料路徑，通道變成 valid / ready 串流埠；`pi
 |---|---|---|---|
 | `rv32i/` | RV32I 管線（Fetch / Decode / Execute / Mem 四個 task），內含以位寬型別檢查立即值的組譯器函式 | `./rv32i.sh` | [`rv32i/run.md`](rv32i/run.md)、[`docs/v0.2.md`](docs/v0.2.md) |
 | `rv64/` | RV64G（IMAFD + Zicsr）、M/S/U 特權模式、Sv39 MMU、計數器與 timer 中斷、整數精確的 IEEE-754 FPU，以及一個迷你 OS 系統測試 | `./rv64.sh` | [`docs/v0.3.md`](docs/v0.3.md) |
+| `rv64/linux/` | RV64 開發板（`soc.fx`）：和 Veryl 的 Rv64Soc 同樣的記憶體映射與 ISA（RV64IMAC、Sstc、Svadu、Sv39、CLINT / PLIC / UART / GPIO），一個 hart task 加一個周邊 task，照 riscv-emu 寫；在 fluxa-emu 上開 OpenSBI + Linux + busybox（Node 約 6 秒） | `./rv64.sh`（`tests_soc.fx`）、`rv64/linux/test.sh`（開機、和 riscv-emu 比 commit log） | [`docs/emu-plan.md`](docs/emu-plan.md) |
 
 `rv64/tests_fpu.fx` 是由 `python3 rv64/fpgen.py > rv64/tests_fpu.fx` 產生的 F/D 參考向量（固定亂數種子）。
 
 ## 文件
 
 - [`docs/Fluxa語言規格v0.1.md`](docs/Fluxa語言規格v0.1.md)：語言規格（本模擬器依據的規範）
+- [`docs/emu-plan.md`](docs/emu-plan.md)：fluxa-emu 與 Fluxa 開發板（Linux）的計畫與量測
 - [`docs/v0.1.md`](docs/v0.1.md)、[`docs/v0.2.md`](docs/v0.2.md)、[`docs/v0.3.md`](docs/v0.3.md)：模擬器各版本的設計與變更紀錄
 - [`docs/Fluxa發想-gemini.md`](docs/Fluxa發想-gemini.md)、[`docs/Fluxa設計報告-claude.md`](docs/Fluxa設計報告-claude.md)：語言設計初期的發想與報告
 
@@ -107,8 +124,10 @@ sim/src/lib.rs      load / run_test   sim/src/cli.rs      命令列（reda sim /
 sim/tests/          回歸測試（examples.rs 驅動下面所有 .fx）
 synth/src/          合成：lower.rs（狀態）、gen.rs（閘）、ty.rs（位寬）、graph.rs（任務網路）、hw.rs（閘級共模擬）、cli.rs
 synth/tests/        合成與閘級共模擬的回歸測試
+emu/src/            fluxa-emu：elab.rs（展開網路）、emit.rs（狀態 → 中間碼）、opt.rs、exec.rs（Rust 執行器）、wgen.rs（WebAssembly）、cli.rs
+emu/tests/ emu/js/  與模擬器比對、WebAssembly 重播；Node / 瀏覽器的測試平台
 examples/           basics fir fir4 mac gemm fanout pipeline，以及 err_* 四個預期失敗的範例
-rv32i/ rv64/        RISC-V 處理器範例（見上）
+rv32i/ rv64/        RISC-V 處理器範例（見上）；rv64/linux/：開得了 Linux 的 RV64 開發板
 docs/           語言規格與版本紀錄
 ```
 
