@@ -68,6 +68,40 @@ pub fn default_top(prog: &Program) -> Option<String> {
     prog.fns.values().filter(|d| d.kind == FnKind::Task).max_by_key(|d| d.line).map(|d| d.name.clone())
 }
 
+/// the const generics of task `top` as the program spawns it: the first `spawn top::<…>` whose
+/// arguments are all integers or the program's constants (e.g. `spawn Core::<WB_DEPTH>` in a
+/// test), so a generic task synthesizes without `--param`. Empty if there is none.
+pub fn spawn_params(prog: &Program, top: &str) -> Params {
+    let Some(decl) = prog.fns.get(top) else { return Params::new() };
+    if decl.generics.is_empty() { return Params::new(); }
+    let consts = prog.consts.read().unwrap();
+    let mut found: Option<Params> = None;
+    let mut look = |e: &Expr| {
+        if found.is_some() { return; }
+        let ExprKind::Call(c, _) = &e.kind else { return };
+        let ExprKind::PathT(p, targs) = &c.kind else { return };
+        if p.len() != 1 || p[0] != top || targs.len() != decl.generics.len() { return; }
+        let mut ps = Params::new();
+        for (g, a) in decl.generics.iter().zip(targs) {
+            let v = match a {
+                fluxa::ast::TArg::Ex(Expr { kind: ExprKind::Int(n), .. }) => fluxa::value::Value::Int(*n),
+                fluxa::ast::TArg::Ex(Expr { kind: ExprKind::Path(x), .. }) | fluxa::ast::TArg::Ty(fluxa::ast::TypeExpr::Name(x, _)) if x.len() == 1 => match consts.get(&x[0]) {
+                    Some(v) => v.clone(),
+                    None => return,
+                },
+                _ => return,
+            };
+            ps.insert(g.name.clone(), v);
+        }
+        found = Some(ps);
+    };
+    let mut fns: Vec<&Arc<FnDecl>> = prog.fns.values().collect();
+    fns.sort_by_key(|d| d.line);
+    for d in fns { walk_block(&d.body, &mut look); }
+    for t in &prog.tests { walk_block(&t.body, &mut look); }
+    found.unwrap_or_default()
+}
+
 /// the tasks of a program, in declaration order
 pub fn tasks(prog: &Program) -> Vec<String> {
     let mut t: Vec<&Arc<FnDecl>> = prog.fns.values().filter(|d| d.kind == FnKind::Task).collect();

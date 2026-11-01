@@ -374,7 +374,14 @@ fn stages(v: &Value) -> R<(String, veryl_synth::elab::Stages, Vec<Value>)> {
         let prog = fluxa::load_many(&fs)?;
         let tasks = fluxa_synth::tasks(&prog);
         let top = match want { Some(t) if tasks.iter().any(|x| x == t) => t.to_string(), _ => fluxa_synth::default_top(&prog).ok_or("no task to synthesize")? };
-        let s = fluxa_synth::synthesize(&prog, &top, &Default::default()).map_err(|e| format!("synthesis error in '{}': {}", top, e))?;
+        // a generic task (e.g. Core<WBD>): its generics as the program spawns it
+        let ps = fluxa_synth::spawn_params(&prog, &top);
+        let mut s = fluxa_synth::synthesize(&prog, &top, &ps).map_err(|e| format!("synthesis error in '{}': {}", top, e))?;
+        if !ps.is_empty() {
+            let mut kv: Vec<String> = ps.iter().map(|(k, v)| format!("{} = {}", k, v)).collect();
+            kv.sort();
+            s.warnings.insert(0, format!("`{}`'s generics as the program spawns it: {}", top, kv.join(", ")));
+        }
         let nl = s.netlist;
         let st = veryl_synth::elab::Stages {
             insts: s.insts,

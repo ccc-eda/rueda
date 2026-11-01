@@ -473,6 +473,10 @@ fn rv32i_pipeline_in_gates() {
     // without the generic's value it says what is missing
     let e = fluxa_synth::synthesize(&prog, "Core", &HashMap::new()).err().unwrap();
     assert!(e.contains("generic `WBD` needs a value"), "{}", e);
+    // the value the program spawns it with (`spawn Core::<WB_DEPTH>`), as the IDE takes it
+    let ps = fluxa_synth::spawn_params(&prog, "Core");
+    assert!(matches!(ps.get("WBD"), Some(Value::Int(8))), "{:?}", ps);
+    assert!(fluxa_synth::synthesize(&prog, "Core", &ps).is_ok());
 }
 
 /// the RV32I Core as a chip: its program and data built in (`--param prog=…`, a ROM and the data
