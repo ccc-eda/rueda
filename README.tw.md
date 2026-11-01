@@ -78,6 +78,7 @@ MicroPython、C 程式、跑馬燈、俄羅斯方塊、貪食蛇。各種模擬�
 ./build.sh             # target/release/reda 與 web/dist（--no-web：只建 reda）
 ./test.sh              # 整個 workspace 的 cargo test、教學流程、模擬機、Fluxa 處理器、npm test
 ./test.sh --full       # 再加上 yosys 形式等價、nextpnr 流程（需要 OSS CAD Suite）
+./run.sh serve         # 用本機伺服器開 web/dist 的 IDE；./run.sh help 列出所有指令
 ```
 
 用瀏覽器打開 `web/dist/index.html` 就是 IDE（不需要伺服器）。更多：[docs/manual/tw/13-develop.md](docs/manual/tw/13-develop.md)、

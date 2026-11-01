@@ -86,6 +86,18 @@ More detail is in `AGENTS.md` and `web/PLAN.md`.
 ./build.sh --no-web        # only reda (target/release/reda)
 ```
 
+`run.sh` gathers the everyday commands (it calls build.sh, test.sh, the Fluxa scripts and web's npm scripts):
+
+```sh
+./run.sh help              # every command
+./run.sh build | web | web-fast | typecheck
+./run.sh serve [PORT]      # web/dist on http://localhost:PORT (default 8000), opens the IDE
+./run.sh open              # web/dist/index.html as a file (no server)
+./run.sh reda ARGS...      # target/release/reda (built if missing)
+./run.sh test [--full] | test-web | e2e | fluxa | fluxa-linux | rv64
+./run.sh linux | size | clean
+```
+
 The documentation comes in three languages: `README.md` (English), `README.tw.md` (Traditional), `README.cn.md` (Simplified, converted from Traditional by `tools/tocn.py`).
 Web interface text is written as `tr('繁體', 'English')`; Simplified is derived from the mapping tables automatically.
 

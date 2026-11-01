@@ -86,6 +86,18 @@ rueda 是一个 Cargo workspace。门级网表（`eda::netlist::Netlist`）是�
 ./build.sh --no-web        # 只建 reda（target/release/reda）
 ```
 
+`run.sh` 把常用的动作集中成一个入口（它调用 build.sh、test.sh、Fluxa 的脚本与 web 的 npm 脚本）：
+
+```sh
+./run.sh help              # 列出所有指令
+./run.sh build | web | web-fast | typecheck
+./run.sh serve [PORT]      # 在 http://localhost:PORT（默认 8000）提供 web/dist，并打开 IDE
+./run.sh open              # 直接打开 web/dist/index.html（不需要服务器）
+./run.sh reda ARGS...      # 执行 target/release/reda（没有就先建）
+./run.sh test [--full] | test-web | e2e | fluxa | fluxa-linux | rv64
+./run.sh linux | size | clean
+```
+
 文档有三种语言：`README.md`（英文）、`README.tw.md`（繁体）、`README.cn.md`（简体，由 `tools/tocn.py` 从繁体转换）。
 网页界面文字写成 `tr('繁體', 'English')`；简体由对照表自动产生。
 

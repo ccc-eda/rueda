@@ -80,6 +80,7 @@ Needs Rust; the web page also needs the `wasm32-unknown-unknown` target and Node
 ./build.sh             # target/release/reda and web/dist (--no-web: reda only)
 ./test.sh              # cargo test of the workspace, the tutorial's flow, the emulators, the Fluxa processors, npm test
 ./test.sh --full       # + formal equivalence with yosys, the nextpnr flows (needs OSS CAD Suite)
+./run.sh serve         # serve web/dist and open the IDE; ./run.sh help lists every command
 ```
 
 Open `web/dist/index.html` in a browser for the IDE (no server needed). More: [docs/manual/en/13-develop.md](docs/manual/en/13-develop.md),
