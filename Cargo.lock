@@ -1010,7 +1010,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rueda"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-eda",
  "rueda-fluxa",
@@ -1025,11 +1025,11 @@ dependencies = [
 
 [[package]]
 name = "rueda-bits"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "rueda-eda"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-bits",
  "rueda-rvtools",
@@ -1037,11 +1037,11 @@ dependencies = [
 
 [[package]]
 name = "rueda-fluxa"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "rueda-fluxa-emu"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-fluxa",
  "rueda-fluxa-synth",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "rueda-fluxa-synth"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-eda",
  "rueda-fluxa",
@@ -1057,15 +1057,15 @@ dependencies = [
 
 [[package]]
 name = "rueda-rvemu"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "rueda-rvtools"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "rueda-veryl-emu"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-veryl-sim",
  "veryl-parser",
@@ -1073,7 +1073,7 @@ dependencies = [
 
 [[package]]
 name = "rueda-veryl-sim"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-bits",
  "veryl-parser",
@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "rueda-veryl-synth"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-eda",
  "rueda-rvtools",
@@ -1091,7 +1091,7 @@ dependencies = [
 
 [[package]]
 name = "rueda-wasm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rueda-eda",
  "rueda-fluxa",

@@ -42,5 +42,5 @@ fi
 echo
 echo "== built in $((SECONDS - t0)) s:"
 echo "   target/release/reda   (reda help: every subcommand)"
-$WEB && echo "   web/dist/index.html (IDE), web/dist/demo.html"
+$WEB && echo "   web/dist/index.html (IDE; ./run.sh serve)"
 exit 0

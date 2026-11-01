@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ccc-eda/rueda"
@@ -26,16 +26,16 @@ homepage = "https://ccc-eda.github.io/rueda/web/dist/index.html"
 veryl-parser = "0.22"
 # the workspace's own crates: the path for building here, the version for crates.io
 # (keep it equal to workspace.package.version)
-bits = { package = "rueda-bits", path = "eda/bits", version = "0.6.0" }
-eda = { package = "rueda-eda", path = "eda", version = "0.6.0" }
-rvtools = { package = "rueda-rvtools", path = "riscv/rvtools", version = "0.6.0" }
-riscv_emu = { package = "rueda-rvemu", path = "riscv/rvemu", version = "0.6.0" }
-veryl-sim = { package = "rueda-veryl-sim", path = "veryl/sim", version = "0.6.0" }
-veryl-synth = { package = "rueda-veryl-synth", path = "veryl/synth", version = "0.6.0" }
-veryl-emu = { package = "rueda-veryl-emu", path = "veryl/emu", version = "0.6.0" }
-fluxa = { package = "rueda-fluxa", path = "fluxa/sim", version = "0.6.0" }
-fluxa-synth = { package = "rueda-fluxa-synth", path = "fluxa/synth", version = "0.6.0" }
-fluxa-emu = { package = "rueda-fluxa-emu", path = "fluxa/emu", version = "0.6.0" }
+bits = { package = "rueda-bits", path = "eda/bits", version = "0.7.0" }
+eda = { package = "rueda-eda", path = "eda", version = "0.7.0" }
+rvtools = { package = "rueda-rvtools", path = "riscv/rvtools", version = "0.7.0" }
+riscv_emu = { package = "rueda-rvemu", path = "riscv/rvemu", version = "0.7.0" }
+veryl-sim = { package = "rueda-veryl-sim", path = "veryl/sim", version = "0.7.0" }
+veryl-synth = { package = "rueda-veryl-synth", path = "veryl/synth", version = "0.7.0" }
+veryl-emu = { package = "rueda-veryl-emu", path = "veryl/emu", version = "0.7.0" }
+fluxa = { package = "rueda-fluxa", path = "fluxa/sim", version = "0.7.0" }
+fluxa-synth = { package = "rueda-fluxa-synth", path = "fluxa/synth", version = "0.7.0" }
+fluxa-emu = { package = "rueda-fluxa-emu", path = "fluxa/emu", version = "0.7.0" }
 
 [profile.release]
 opt-level = 3
