@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One entry point for the project's everyday commands: ./run.sh COMMAND [ARGS...]
 # (./run.sh help lists them). It calls the scripts that do the work (build.sh, test.sh,
-# fluxa/*.sh, web's npm scripts), so they stay the reference.
+# publish.sh, fluxa/*.sh, web's npm scripts), so they stay the reference.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(pwd)
@@ -29,6 +29,9 @@ test
   fluxa                 the Fluxa processors: fluxa/rv32i.sh, fluxa/rv64.sh
   fluxa-linux           Linux on the Fluxa Rv64Soc (fluxa-emu vs riscv-emu)
   rv64 [ARGS...]        the Veryl Rv64Core regression (veryl/examples/rv64/test.sh [--xv6] [--fpga])
+
+release
+  publish [--dry-run]   the crates to crates.io (publish.sh: checks, dry run, then the upload)
 
 other
   linux                 build the OpenSBI + Linux image (veryl/examples/rv64/linux/build.sh)
@@ -75,6 +78,7 @@ case "$cmd" in
     fluxa)       fluxa/rv32i.sh && fluxa/rv64.sh ;;
     fluxa-linux) exec fluxa/rv64/linux/test.sh "$@" ;;
     rv64)        exec veryl/examples/rv64/test.sh "$@" ;;
+    publish)     exec ./publish.sh "$@" ;;
     linux)       exec veryl/examples/rv64/linux/build.sh "$@" ;;
     size)        du -sh target web/dist web/node_modules 2>/dev/null || true ;;
     clean)       cargo clean ;;

@@ -37,6 +37,7 @@ cargo test --release                    # the whole workspace (veryl/synth's tes
 ./test.sh --full                        # + veryl/synth/test.sh (yosys / nextpnr / KLayout; OSS CAD Suite)
 ./build.sh                              # reda + web/dist (cargo --profile web for the wasm32 crates)
 ./run.sh help                           # one entry point for these (build, serve, test, fluxa, ...)
+./publish.sh [--dry-run]                # the crates to crates.io (checks, dry run, upload after a yes)
 cd web && npm test                      # the web core and IDE logic on every example (set VERYL_EDA_CHIPDB,
                                         #   e.g. from `node web/test/chipdb.mjs FILE`, for the P&R comparisons)
 cd web && npm run e2e                   # the IDE end to end in the installed Chrome (playwright-core, no browser

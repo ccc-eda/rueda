@@ -96,7 +96,12 @@ rueda 是一个 Cargo workspace。门级网表（`eda::netlist::Netlist`）是�
 ./run.sh reda ARGS...      # 执行 target/release/reda（没有就先建）
 ./run.sh test [--full] | test-web | e2e | fluxa | fluxa-linux | rv64
 ./run.sh linux | size | clean
+./run.sh publish [--dry-run]   # 把 crate 发布到 crates.io（publish.sh）
 ```
+
+发布新版：改 `Cargo.toml` 的版本（`workspace.package` 与 workspace 依赖），写 `docs/release/vX.Y.md`，
+commit、打 tag `vX.Y`、push，再 `./run.sh publish`。`publish.sh` 会检查没有未 commit 的修改、版本一致、
+tag 已 push，跑 dry run，确认后才上传。
 
 文档有三种语言：`README.md`（英文）、`README.tw.md`（繁体）、`README.cn.md`（简体，由 `tools/tocn.py` 从繁体转换）。
 网页界面文字写成 `tr('繁體', 'English')`；简体由对照表自动产生。

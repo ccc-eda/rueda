@@ -96,7 +96,12 @@ More detail is in `AGENTS.md` and `web/PLAN.md`.
 ./run.sh reda ARGS...      # target/release/reda (built if missing)
 ./run.sh test [--full] | test-web | e2e | fluxa | fluxa-linux | rv64
 ./run.sh linux | size | clean
+./run.sh publish [--dry-run]   # the crates to crates.io (publish.sh)
 ```
+
+A release: set the version in `Cargo.toml` (`workspace.package` and the workspace dependencies), write
+`docs/release/vX.Y.md`, commit, tag `vX.Y`, push, then `./run.sh publish`. `publish.sh` checks that the tree
+is committed, the versions agree and the tag is pushed, runs the dry run, and uploads after a yes.
 
 The documentation comes in three languages: `README.md` (English), `README.tw.md` (Traditional), `README.cn.md` (Simplified, converted from Traditional by `tools/tocn.py`).
 Web interface text is written as `tr('繁體', 'English')`; Simplified is derived from the mapping tables automatically.
