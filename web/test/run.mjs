@@ -261,6 +261,26 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const sg = core.call({ cmd: 'board_run', cycles: 100_000, inputs: [] }).segs[0];
   const digits = sg.map((d) => d.slice(0, 7).map((x) => (x > 0.2 ? 1 : 0)).reverse().join(''));
   if (digits.join() !== '1011011,0000110') problems.push('7-segment shows ' + digits.join());
+  // B1: a .board plugged into PMOD1A (eda::pcb): Thermo reads the LM75 over I²C, shows it on the 74HC595's LEDs
+  b = ex('lab_thermo');
+  core.call({ cmd: 'board_load', files: b.files.filter((f) => f.name.endsWith('.veryl')), top: 'Thermo', pcf: b.pcf });
+  const pcb = core.call({ cmd: 'board_periph', pcb: b.files.find((f) => f.name.endsWith('.board')).src }).pcb;
+  if (pcb.erc.length || pcb.parts.length !== 22) problems.push(`thermo.board: ${pcb.parts.length} parts, ERC ${JSON.stringify(pcb.erc)}`);
+  // the nets drawing's data: every part's pins, every net's pins, the nets' levels
+  const u2 = pcb.parts.find((p) => p.id === 'U2');
+  if (pcb.nets.length !== 24 || u2.pins.length !== 16 || !pcb.nets.some((n) => n.name === 'GND' && n.rail === false)) problems.push(`thermo.board nets ${pcb.nets.length}, U2 pins ${u2.pins.length}`);
+  const shows = (r) => Object.fromEntries(r.pcb.map((x) => [x[0], x[2]]));
+  let ps = shows(core.call({ cmd: 'board_run', cycles: 20_000, inputs: [] }));
+  const leds = (p) => [0, 1, 2, 3, 4, 5, 6, 7].reduce((a, k) => a | ((p[`D${k}`] > 0.99 ? 1 : 0) << k), 0);
+  ps = shows(core.call({ cmd: 'board_run', cycles: 1000, inputs: [] }));
+  const lr = core.call({ cmd: 'board_run', cycles: 1000, inputs: [] });
+  ps = shows(lr);
+  const lv = (name) => lr.pcb_levels[pcb.nets.findIndex((n) => n.name === name)];
+  if (lv('3V3') !== 1 || lv('GND') !== 0 || lv('Q0') !== 1 || lv('Q3') !== 0) problems.push(`net levels 3V3 ${lv('3V3')} GND ${lv('GND')} Q0 ${lv('Q0')} Q3 ${lv('Q3')}`);
+  if (ps.U2 !== 23 || leds(ps) !== 23) problems.push(`thermometer shows ${ps.U2} (LEDs ${leds(ps)}), not 23`);
+  core.call({ cmd: 'board_run', cycles: 1_300_000, inputs: [], pcb_temp: [['U1', 41]] });
+  ps = shows(core.call({ cmd: 'board_run', cycles: 1000, inputs: [] }));
+  if (ps.U2 !== 41 || leds(ps) !== 41 || ps.U1 !== 41) problems.push(`thermometer at 41 °C shows ${ps.U2} (LEDs ${leds(ps)})`);
   b = ex('vga');
   core.call({ cmd: 'board_load', files: b.files, top: 'VgaDemo', pcf: b.pcf });
   core.call({ cmd: 'board_periph', vga: { hs: 42, vs: 36, r: [45, 47, 2, 4], g: [31, 34, 38, 43], b: [44, 46, 48, 3] } });

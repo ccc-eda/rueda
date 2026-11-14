@@ -72,8 +72,8 @@
     list(files) {
       return this.call({ cmd: "list", files }).modules;
     }
-    simulate(files, top, opts = {}) {
-      return this.call({ cmd: "simulate", files, top: top || null, max_time: opts.maxTime ?? 1e6, vcd: !!opts.vcd });
+    simulate(files, top2, opts = {}) {
+      return this.call({ cmd: "simulate", files, top: top2 || null, max_time: opts.maxTime ?? 1e6, vcd: !!opts.vcd });
     }
   };
   async function gunzip(gz2) {
@@ -874,38 +874,38 @@
     return out;
   }
   function asicRouteLines(r, opts) {
-    const out = [], top = [];
+    const out = [], top2 = [];
     r.route.nets.forEach((n, ni) => {
       const s = n.segs;
       const sel = opts.net === ni;
       for (let i = 0; i < s.length; i += 4) {
         const [ax, ay] = gc(r, s[i], s[i + 1]), [bx, by] = gc(r, s[i + 2], s[i + 3]);
         const pts = [ax, ay, bx, by];
-        if (opts.dim && n.crit) top.push({ pts, color: "#ff5c5c", width: 2.4 });
-        else if (sel) top.push({ pts, color: "#ffd479", width: 2.4 });
+        if (opts.dim && n.crit) top2.push({ pts, color: "#ff5c5c", width: 2.4 });
+        else if (sel) top2.push({ pts, color: "#ffd479", width: 2.4 });
         else if (opts.dim) out.push({ pts, color: "rgba(126,150,180,0.15)", width: 0.8 });
         else out.push({ pts, color: n.clock ? "rgba(87,194,122,0.8)" : s[i + 1] === s[i + 3] ? "rgba(94,159,214,0.55)" : "rgba(180,142,173,0.6)", width: 0.9 });
       }
     });
-    return out.concat(top);
+    return out.concat(top2);
   }
   var LAYER_COLOR = ["rgba(94,159,214,0.75)", "rgba(224,108,117,0.7)", "rgba(87,194,122,0.7)", "rgba(229,192,123,0.75)"];
   function detailLines(r, sel, layers) {
     const d = r.detail;
     const t = r.die.row_h / d.tracks;
     const H = r.die.h * S;
-    const out = [], top = [];
+    const out = [], top2 = [];
     d.nets.forEach((n, ni) => {
       const s = n.segs;
       for (let i = 0; i < s.length; i += 5) {
         const l = s[i];
         if (!layers[l]) continue;
         const pts = [s[i + 1] * t * S, H - s[i + 2] * t * S, s[i + 3] * t * S, H - s[i + 4] * t * S];
-        if (ni === sel) top.push({ pts, color: "#ffd479", width: 1.6 });
+        if (ni === sel) top2.push({ pts, color: "#ffd479", width: 1.6 });
         else out.push({ pts, color: LAYER_COLOR[l], width: 0.5 });
       }
     });
-    return out.concat(top);
+    return out.concat(top2);
   }
   function powerScene(r) {
     const d = r.die, H = d.h * S, f = r.pdn.fillers;
@@ -1085,10 +1085,10 @@
     end.setUint16(10, files.length, true);
     end.setUint32(12, csize, true);
     end.setUint32(16, off, true);
-    const all = [...parts, ...central, new Uint8Array(end.buffer)];
-    const out = new Uint8Array(all.reduce((a, b) => a + b.length, 0));
+    const all2 = [...parts, ...central, new Uint8Array(end.buffer)];
+    const out = new Uint8Array(all2.reduce((a, b) => a + b.length, 0));
     let p = 0;
-    for (const a of all) {
+    for (const a of all2) {
       out.set(a, p);
       p += a.length;
     }
@@ -1346,7 +1346,7 @@
     });
     return { scene: { boxes, lines: [], texts }, cellBox, portBox, pinPorts, outPorts };
   }
-  function netLines(nl, lev, lay, all, sel) {
+  function netLines(nl, lev, lay, all2, sel) {
     const bx = lay.scene.boxes;
     const right = (id) => [bx[id].x + bx[id].w, bx[id].y + bx[id].h / 2];
     const left = (id) => [bx[id].x, bx[id].y + bx[id].h / 2];
@@ -1370,7 +1370,7 @@
       });
       for (const [w, ids] of lay.outPorts) for (const id of ids) for (const s of sources(w)) if (only === void 0 || only === id || only === s) fn(s, id);
     };
-    if (all) each((a, b) => edge(a, b, "rgba(126,195,255,0.18)"));
+    if (all2) each((a, b) => edge(a, b, "rgba(126,195,255,0.18)"));
     if (sel !== null) {
       each((a, b) => edge(a, b, b === sel ? "#ff9b8a" : "#7ec3ff", 1.6), sel);
     }
@@ -1496,14 +1496,14 @@
       });
       this.chips();
     }
-    open(files, top, pcf, target, stage, sdc) {
+    open(files, top2, pcf, target, stage, sdc) {
       this.files = files;
       this.pcf = pcf;
       this.sdc = sdc;
       if (target) this.setTarget(target, false);
       if (stage) this.stage = stage;
       $("synOverlay").classList.remove("hidden");
-      this.run(top);
+      this.run(top2);
     }
     /** the stage shown */
     get current() {
@@ -1523,7 +1523,7 @@
       this.stopAnim();
       $("synOverlay").classList.add("hidden");
     }
-    async run(top) {
+    async run(top2) {
       const gen = ++this.gen;
       this.stopAnim();
       this.res = null;
@@ -1540,7 +1540,7 @@
       const t0 = performance.now();
       let res;
       try {
-        res = await this.core.call({ cmd: "synth", files: this.files, top: top || null });
+        res = await this.core.call({ cmd: "synth", files: this.files, top: top2 || null });
       } catch (e) {
         if (gen !== this.gen) return;
         this.note(tr("\u5408\u6210\u5931\u6557\uFF1A\n", "Synthesis failed:\n") + String(e.message ?? e), true);
@@ -2358,9 +2358,9 @@
       }
       if (!isNet(k) || this.tooBig(k)) return;
       const v = this.netView(k);
-      const all = this.edges && edgeCount(v.nl) <= 6e3;
+      const all2 = this.edges && edgeCount(v.nl) <= 6e3;
       for (const b of v.lay.scene.boxes) b.hl = b.id === this.sel;
-      this.view.set({ ...v.lay.scene, lines: netLines(v.nl, v.lev, v.lay, all, this.sel) }, false);
+      this.view.set({ ...v.lay.scene, lines: netLines(v.nl, v.lev, v.lay, all2, this.sel) }, false);
     }
     netReport(key, v) {
       const r = this.res;
@@ -3258,6 +3258,322 @@ target = { type = "directory", path = "target" }
     }
   };
 
+  // src/ide/floatwin.ts
+  var top = 20;
+  var all = [];
+  window.addEventListener("resize", () => {
+    for (const w of all) w.clamp();
+  });
+  function load(key) {
+    try {
+      return JSON.parse(localStorage.getItem("rueda.fw." + key) ?? "{}");
+    } catch {
+      return {};
+    }
+  }
+  function save(key, s) {
+    try {
+      localStorage.setItem("rueda.fw." + key, JSON.stringify(s));
+    } catch {
+    }
+  }
+  function floatWin(el2, handle, o) {
+    const s = load(o.key);
+    if (s.min === void 0 && o.folded) s.min = true;
+    el2.classList.add("fw");
+    handle.classList.add("fw-h");
+    const btns = document.createElement("span");
+    btns.className = "fw-btns";
+    btns.innerHTML = `<button class="icon fw-min" data-fw="min"></button><button class="icon" data-fw="float"></button>`;
+    handle.appendChild(btns);
+    const minB = btns.querySelector("[data-fw=min]"), floatB = btns.querySelector("[data-fw=float]");
+    const box = () => el2.offsetParent ?? el2.parentElement;
+    const place = () => {
+      if (!el2.classList.contains("fw-float")) return;
+      if (s.x !== void 0 && s.y !== void 0) {
+        el2.style.left = s.x + "px";
+        el2.style.top = s.y + "px";
+        el2.style.right = el2.style.bottom = "auto";
+      }
+      if (s.w) el2.style.width = s.w + "px";
+      if (s.h && !s.min) el2.style.height = s.h + "px";
+    };
+    const label = () => {
+      const f = el2.classList.contains("fw-float"), m = el2.classList.contains("fw-folded");
+      floatB.textContent = f ? "\u21F2" : "\u29C9";
+      floatB.title = f ? tr("\u653E\u56DE\u539F\u4F4D", "Dock it back") : tr("\u8B8A\u6210\u6D6E\u52D5\u8996\u7A97\uFF08\u62D6\u66F3\u6A19\u984C\u5217\u79FB\u52D5\u3001\u62D6\u66F3\u53F3\u4E0B\u89D2\u7E2E\u653E\uFF09", "Float it (drag the title bar to move it, the corner to resize it)");
+      minB.textContent = m ? "\u25A2" : "\u2581";
+      minB.title = m ? tr("\u5C55\u958B", "Unfold") : tr("\u6536\u6210\u6A19\u984C\u5217", "Fold to the title bar");
+      minB.classList.toggle("hidden", !f);
+    };
+    const w = {
+      get floating() {
+        return el2.classList.contains("fw-float");
+      },
+      set(f) {
+        el2.classList.toggle("fw-float", f);
+        el2.classList.toggle("fw-folded", f && !!s.min);
+        for (const k of ["left", "top", "right", "bottom", "width", "height"]) el2.style[k] = "";
+        place();
+        label();
+        o.onChange?.(f);
+        if (f) requestAnimationFrame(() => w.clamp());
+      },
+      clamp() {
+        if (!w.floating || !el2.offsetParent) return;
+        const p = box().getBoundingClientRect(), r = el2.getBoundingClientRect();
+        if (r.width > p.width) el2.style.width = Math.max(200, p.width - 8) + "px";
+        if (!el2.classList.contains("fw-folded") && r.height > p.height) el2.style.height = Math.max(80, p.height - 8) + "px";
+        const r2 = el2.getBoundingClientRect();
+        const x = Math.max(0, Math.min(r2.left - p.left, p.width - r2.width)), y = Math.max(0, Math.min(r2.top - p.top, p.height - 32));
+        if (Math.abs(x - (r2.left - p.left)) > 0.5 || Math.abs(y - (r2.top - p.top)) > 0.5) {
+          el2.style.left = x + "px";
+          el2.style.top = y + "px";
+          el2.style.right = el2.style.bottom = "auto";
+        }
+      },
+      unfold() {
+      }
+    };
+    floatB.onclick = () => {
+      s.float = !w.floating;
+      save(o.key, s);
+      w.set(s.float);
+    };
+    const fold = (m) => {
+      s.min = m;
+      save(o.key, s);
+      el2.classList.toggle("fw-folded", m);
+      el2.style.height = m ? "" : s.h ? s.h + "px" : "";
+      label();
+    };
+    minB.onclick = () => fold(!el2.classList.contains("fw-folded"));
+    w.unfold = () => {
+      if (el2.classList.contains("fw-folded")) fold(false);
+    };
+    handle.addEventListener("pointerdown", (e) => {
+      if (!w.floating || e.target.closest("button, select, input, a")) return;
+      e.preventDefault();
+      const p = box().getBoundingClientRect(), r = el2.getBoundingClientRect();
+      const dx = e.clientX - r.left, dy = e.clientY - r.top;
+      const move = (m) => {
+        s.x = Math.round(Math.max(0, Math.min(p.width - r.width, m.clientX - p.left - dx)));
+        s.y = Math.round(Math.max(0, Math.min(p.height - 32, m.clientY - p.top - dy)));
+        el2.style.left = s.x + "px";
+        el2.style.top = s.y + "px";
+        el2.style.right = el2.style.bottom = "auto";
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        save(o.key, s);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+    el2.addEventListener("pointerdown", () => {
+      if (w.floating) el2.style.zIndex = String(++top);
+    }, true);
+    new ResizeObserver(() => {
+      if (!w.floating || el2.classList.contains("fw-folded") || !el2.style.width) return;
+      const r = el2.getBoundingClientRect();
+      if (r.width && r.height && (Math.round(r.width) !== s.w || Math.round(r.height) !== s.h)) {
+        s.w = Math.round(r.width);
+        s.h = Math.round(r.height);
+        save(o.key, s);
+      }
+    }).observe(el2);
+    all.push(w);
+    w.set(s.float ?? o.auto());
+    return w;
+  }
+
+  // src/ide/netview.ts
+  var PITCH = 16;
+  var STUB = 14;
+  var esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  var role = (p) => p.kind === "pmod" ? "conn" : p.pins.length > 2 ? "ic" : "two";
+  function layout(b) {
+    const boxes = new Array(b.parts.length);
+    const netsOf = (pi) => b.nets.map((n, i) => n.pins.some((p) => p[0] === pi) ? i : -1).filter((i) => i >= 0 && b.nets[i].rail === null);
+    const shape = (pi, x2, y) => {
+      const p = b.parts[pi], r = role(p), pins = /* @__PURE__ */ new Map();
+      const nums = p.pins.map((q) => q[0]).sort((a, c) => a - c);
+      if (r === "conn") {
+        nums.forEach((n, k) => pins.set(n, { x: x2 + 56, y: y + 18 + k * PITCH, dir: 1 }));
+        return { x: x2, y, w: 56, h: 18 + nums.length * PITCH, pins, role: r };
+      }
+      if (r === "ic") {
+        const nat = (a, c) => a.localeCompare(c, void 0, { numeric: true });
+        const right = p.pins.filter((q) => q[2] === "out" || q[2] === "od").sort((a, c) => nat(a[1], c[1]));
+        const left2 = p.pins.filter((q) => !right.includes(q)).sort((a, c) => +(a[2] === "power") - +(c[2] === "power") || a[0] - c[0]);
+        left2.forEach((q, k) => pins.set(q[0], { x: x2, y: y + 18 + k * PITCH, dir: -1 }));
+        right.forEach((q, k) => pins.set(q[0], { x: x2 + 120, y: y + 18 + k * PITCH, dir: 1 }));
+        return { x: x2, y, w: 120, h: 18 + Math.max(left2.length, right.length) * PITCH, pins, role: r };
+      }
+      pins.set(nums[0], { x: x2, y: y + 12, dir: -1 });
+      if (nums[1] !== void 0) pins.set(nums[1], { x: x2 + 64, y: y + 12, dir: 1 });
+      return { x: x2, y, w: 64, h: 24, pins, role: r };
+    };
+    const cols = [40, 250];
+    for (const [ci, want] of ["conn", "ic"].entries()) {
+      let y = 30;
+      b.parts.forEach((p, i) => {
+        if (role(p) === want) {
+          boxes[i] = shape(i, cols[ci], y);
+          y += boxes[i].h + 34;
+        }
+      });
+    }
+    let left = b.parts.map((p, i) => role(p) === "two" ? i : -1).filter((i) => i >= 0);
+    let x = 520;
+    while (left.length) {
+      const target = (pi) => {
+        const ys = [];
+        for (const ni of netsOf(pi)) for (const [q, num] of b.nets[ni].pins) {
+          const pt = boxes[q]?.pins.get(num);
+          if (q !== pi && pt) ys.push(pt.y);
+        }
+        return ys.length ? ys.reduce((a, c) => a + c, 0) / ys.length : null;
+      };
+      const here = left.map((pi) => ({ pi, t: target(pi) })).filter((e) => e.t !== null);
+      const now = here.length ? here : left.map((pi, k) => ({ pi, t: 30 + k * 30 }));
+      now.sort((a, c) => a.t - c.t);
+      let bottom = 10;
+      for (const e of now) {
+        const y = Math.max(e.t - 12, bottom + 20);
+        boxes[e.pi] = shape(e.pi, x, y);
+        bottom = y + 24;
+      }
+      const done = new Set(now.map((e) => e.pi));
+      left = left.filter((pi) => !done.has(pi));
+      x += 170;
+    }
+    return boxes;
+  }
+  function tree(pts) {
+    const n = pts.length, inT = new Array(n).fill(false), best = new Array(n).fill(Infinity), from = new Array(n).fill(-1), out = [];
+    if (!n) return out;
+    best[0] = 0;
+    for (let k = 0; k < n; k++) {
+      let u = -1;
+      for (let i = 0; i < n; i++) if (!inT[i] && (u < 0 || best[i] < best[u])) u = i;
+      inT[u] = true;
+      if (from[u] >= 0) out.push([from[u], u]);
+      for (let v = 0; v < n; v++) {
+        const d = Math.abs(pts[u].x - pts[v].x) + Math.abs(pts[u].y - pts[v].y);
+        if (!inT[v] && d < best[v]) {
+          best[v] = d;
+          from[v] = u;
+        }
+      }
+    }
+    return out;
+  }
+  var NetView = class {
+    constructor(host) {
+      __publicField(this, "host", host);
+      __publicField(this, "b", null);
+      __publicField(this, "svg");
+      __publicField(this, "info");
+      __publicField(this, "levels", null);
+      __publicField(this, "hover", -1);
+    }
+    set(b) {
+      this.b = b;
+      this.levels = null;
+      const boxes = layout(b);
+      const W = Math.max(...boxes.map((x) => x.x + x.w)) + 90, H = Math.max(...boxes.map((x) => x.y + x.h)) + 30;
+      const pin = (pi, num) => boxes[pi]?.pins.get(num);
+      const bad = new Set(b.nets.map((n, i) => b.erc.some((d) => d.msg.startsWith(`net ${n.name}:`)) ? i : -1).filter((i) => i >= 0));
+      let nets = "";
+      b.nets.forEach((n, ni) => {
+        const pts = n.pins.map(([pi, num]) => pin(pi, num)).filter((p) => !!p);
+        const ends = pts.map((p) => ({ x: p.x + p.dir * STUB, y: p.y, dir: p.dir }));
+        let wires = pts.map((p, k) => `<line x1="${p.x}" y1="${p.y}" x2="${ends[k].x}" y2="${p.y}"/>`).join("");
+        if (n.rail === null) {
+          for (const [a, c] of tree(ends)) {
+            const A = ends[a], C = ends[c], k = Math.max(30, Math.abs(C.x - A.x) / 2);
+            wires += `<path d="M${A.x} ${A.y} C${A.x + A.dir * k} ${A.y} ${C.x + C.dir * k} ${C.y} ${C.x} ${C.y}"/>`;
+          }
+        }
+        let g = wires + `<g class="nv-hit">${wires}</g>`;
+        if (n.rail === null) {
+          const e = ends[0];
+          if (e) g += `<text class="nv-lbl" x="${e.x + e.dir * 2}" y="${e.y - 3}" text-anchor="${e.dir > 0 ? "start" : "end"}">${esc2(n.name)}${bad.has(ni) ? " \u26A0" : ""}</text>`;
+        } else {
+          g += ends.map((e) => `<text class="nv-rail" x="${e.x + e.dir * 2}" y="${e.y + 3}" text-anchor="${e.dir > 0 ? "start" : "end"}">${n.rail ? "\u25B2 " : "\u23DA "}${esc2(n.name)}</text>`).join("");
+        }
+        g += pts.map((p) => `<circle cx="${p.x}" cy="${p.y}" r="2.6"/>`).join("");
+        const who = n.pins.map(([pi, num]) => `${b.parts[pi].id}.${b.parts[pi].pins.find((q) => q[0] === num)?.[1] ?? num}`).join(", ");
+        nets += `<g class="nv-net ${n.rail === true ? "nv-vcc" : n.rail === false ? "nv-gnd" : "nv-sig"}${bad.has(ni) ? " nv-bad" : ""}" data-n="${ni}"><title>${esc2(n.name)}: ${esc2(who)}</title>${g}</g>`;
+      });
+      let parts = "";
+      b.parts.forEach((p, pi) => {
+        const x = boxes[pi];
+        if (!x) return;
+        const title = `<text class="nv-id" x="${x.x}" y="${x.y - 4}">${esc2(p.id)} <tspan class="nv-kind">${esc2(p.kind)}${p.value ? " " + esc2(p.value) : ""}</tspan></text>`;
+        let names = "";
+        if (x.role !== "two") {
+          for (const [num, name] of p.pins) {
+            const q = x.pins.get(num);
+            names += `<text class="nv-pin" x="${q.x - q.dir * 5}" y="${q.y + 3}" text-anchor="${q.dir > 0 ? "end" : "start"}">${esc2(name)}</text><text class="nv-num" x="${q.x + q.dir * 3}" y="${q.y - 3}" text-anchor="${q.dir > 0 ? "start" : "end"}">${num}</text>`;
+          }
+        } else {
+          const glyph = p.kind === "led" ? "\u25B6|" : p.kind === "btn" ? "\u23FA" : p.kind === "res" ? "\u23DB" : "";
+          names = `<text class="nv-glyph" x="${x.x + x.w / 2}" y="${x.y + 16}" text-anchor="middle">${glyph}</text>`;
+        }
+        parts += `<g class="nv-part" data-p="${esc2(p.id)}"><rect x="${x.x}" y="${x.y}" width="${x.w}" height="${x.h}" rx="4"/>${title}${names}</g>`;
+      });
+      this.host.innerHTML = `<div class="nv-info">${tr("\u6ED1\u904E\u4E00\u689D\u7DDA\u770B\u5B83\u63A5\u5230\u54EA\u4E9B\u8173\uFF1B\u984F\u8272\uFF1A", "Hover a net to see its pins; colors: ")}<span class="nv-k1">1</span> <span class="nv-k0">0</span> <span class="nv-kz">${tr("\u6D6E\u63A5", "floating")}</span> <span class="nv-kv">3V3</span> <span class="nv-kg">GND</span></div><div class="nv-scroll"><svg class="nv" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${parts}${nets}</svg></div>`;
+      this.svg = this.host.querySelector("svg");
+      this.info = this.host.querySelector(".nv-info");
+      const legend = this.info.innerHTML;
+      for (const g of this.svg.querySelectorAll(".nv-net")) {
+        const ni = +g.dataset.n;
+        g.addEventListener("pointerenter", () => {
+          this.hover = ni;
+          this.svg.classList.add("hl");
+          g.classList.add("on");
+          this.showInfo();
+        });
+        g.addEventListener("pointerleave", () => {
+          this.hover = -1;
+          this.svg.classList.remove("hl");
+          g.classList.remove("on");
+          this.info.innerHTML = legend;
+        });
+      }
+    }
+    showInfo() {
+      if (!this.b || this.hover < 0) return;
+      const n = this.b.nets[this.hover];
+      const lv = this.levels?.[this.hover];
+      const level = n.rail !== null ? n.rail ? "3V3" : "GND" : lv === void 0 ? "" : lv === null ? tr("\u6D6E\u63A5", "floating") : String(lv);
+      const who = n.pins.map(([pi, num]) => `${this.b.parts[pi].id}.${this.b.parts[pi].pins.find((q) => q[0] === num)?.[1] ?? num}`).join("  ");
+      const erc = this.b.erc.filter((d) => d.msg.startsWith(`net ${n.name}:`)).map((d) => ` \u26A0 ${esc2(d.msg)}`).join("");
+      this.info.innerHTML = `<b>${esc2(n.name)}</b>${level ? ` = ${level}` : ""}\u3000${esc2(who)}${erc}`;
+    }
+    /** the nets' levels (1, 0, null floating) and the LEDs' brightness while the board runs */
+    update(levels, leds) {
+      if (!this.b || !this.svg) return;
+      this.levels = levels;
+      if (levels) {
+        for (const g of this.svg.querySelectorAll(".nv-sig")) {
+          const l = levels[+g.dataset.n];
+          g.classList.toggle("lv1", l === 1);
+          g.classList.toggle("lv0", l === 0);
+          g.classList.toggle("lvz", l === null);
+        }
+      }
+      for (const [id, d] of leds) {
+        const r = this.svg.querySelector(`.nv-part[data-p="${CSS.escape(id)}"] rect`);
+        if (r) r.style.fill = d > 4e-3 ? `rgba(255, 70, 50, ${(0.25 + 0.75 * Math.sqrt(d)).toFixed(3)})` : "";
+      }
+      if (this.hover >= 0) this.showInfo();
+    }
+  };
+
   // src/ide/board.ts
   var DEFAULT_SETUP = { uart: false, baud: 115200, pmod1a: "", pmod1b: "" };
   var SLOT = { pmod1a: [4, 2, 47, 45, 3, 48, 46, 44], pmod1b: [43, 38, 34, 31, 42, 36, 32, 28] };
@@ -3273,7 +3589,7 @@ target = { type = "directory", path = "target" }
   var PMOD1B = [43, 38, 34, 31, 42, 36, 32, 28];
   var PMOD2 = [27, 25, 21, 19, 26, 23, 20, 18];
   var KEYS = { "0": 10, "1": 20, "2": 19, "3": 18 };
-  var esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  var esc3 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   var VirtualBoard = class {
     constructor(host, core2) {
       __publicField(this, "host", host);
@@ -3291,6 +3607,9 @@ target = { type = "directory", path = "target" }
       __publicField(this, "gen", 0);
       __publicField(this, "setup", { ...DEFAULT_SETUP });
       __publicField(this, "bb");
+      /** the plugged board's nets (netview.ts), in its own window */
+      __publicField(this, "nets");
+      __publicField(this, "netWin");
       __publicField(this, "duty", /* @__PURE__ */ new Map());
       __publicField(this, "bbIn", /* @__PURE__ */ new Map());
       __publicField(this, "vgaSeen", 0);
@@ -3301,6 +3620,11 @@ target = { type = "directory", path = "target" }
       /** called when the user changes what is plugged in (the IDE saves it with the project) */
       __publicField(this, "onSetup", () => {
       });
+      /** the project's .board (null: none): plugged in when the board powers up */
+      __publicField(this, "pcbSrc", null);
+      __publicField(this, "pcbInfo", null);
+      __publicField(this, "pcbPress", []);
+      __publicField(this, "pcbTemp", []);
       /** a new pin file from the pin table (the IDE saves it as pins.pcf and flashes again) */
       __publicField(this, "onPins", () => {
       });
@@ -3332,8 +3656,8 @@ target = { type = "directory", path = "target" }
         <label class="vb-chk"><input type="checkbox" data-a="breadboard"> ${tr("\u{1F9EA} \u9EB5\u5305\u677F", "\u{1F9EA} Breadboard")}</label>
       </div>
       <div class="vb-main">
-        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg><div class="bb hidden"></div></div>
-        <div class="vb-cards"></div>
+        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg><div class="bb hidden"></div><div class="vb-net hidden"><div class="vb-net-h"><span class="fw-t">\u283F ${tr("\u7DDA\u8DEF\u5716", "Nets")}</span></div><div class="vb-net-body"></div></div></div>
+        <div class="vb-dock hidden"><div class="vb-dock-h"><span class="fw-t">\u283F ${tr("\u5468\u908A", "Peripherals")}</span></div><div class="vb-cards"></div></div>
       </div>
       <div class="vb-foot"></div>
       <div class="vb-pins hidden"></div>`;
@@ -3353,14 +3677,15 @@ target = { type = "directory", path = "target" }
       this.q("[data-a=pins]").onclick = () => this.pinTable();
       for (const k of ["uart", "baud", "pmod1a", "pmod1b", "breadboard", "mode"]) this.q(`[data-a=${k}]`).addEventListener("change", () => this.setupFromUi());
       this.bb = new Breadboard(this.q(".bb"));
-      this.bb.onChange = (layout) => {
-        if (layout) {
+      this.bb.onChange = (layout2) => {
+        if (layout2) {
           this.setup.bb = this.bb.parts.map((p) => ({ ...p }));
           this.onSetup(this.setup);
         }
         this.solveBB();
         if (!this.running) this.tick(0);
       };
+      this.dock();
       host.addEventListener("dragover", (e) => {
         e.preventDefault();
         host.classList.add("drop");
@@ -3403,6 +3728,12 @@ target = { type = "directory", path = "target" }
         if (p !== void 0 && !this.latched.has(p)) this.press(p, false);
       });
     }
+    /** the peripherals' cards: beside the board, or a floating window (floatwin.ts) */
+    dock() {
+      floatWin(this.q(".vb-dock"), this.q(".vb-dock-h"), { key: "board.cards", auto: () => window.innerWidth < 1100 });
+      this.netWin = floatWin(this.q(".vb-net"), this.q(".vb-net-h"), { key: "board.nets", auto: () => true });
+      this.nets = new NetView(this.q(".vb-net-body"));
+    }
     /** plug in modules and the terminal (from the project, or an example's defaults) */
     setSetup(s) {
       this.setup = { ...DEFAULT_SETUP, ...s };
@@ -3444,11 +3775,92 @@ target = { type = "directory", path = "target" }
         uart: s.uart ? { tx: 9, rx: 6, cpb: s.baud < 0 ? -s.baud : 12e6 / s.baud } : null,
         seg: segs,
         // PmodVGA: 1A pins 1-4 R0-R3, 7-10 B0-B3; 1B pins 1-4 G0-G3, 7 HS, 8 VS (colors msb first)
-        vga: s.pmod1a === "vga" ? { hs: b[4], vs: b[5], r: [a[3], a[2], a[1], a[0]], g: [b[3], b[2], b[1], b[0]], b: [a[7], a[6], a[5], a[4]] } : null
+        vga: s.pmod1a === "vga" ? { hs: b[4], vs: b[5], r: [a[3], a[2], a[1], a[0]], g: [b[3], b[2], b[1], b[0]], b: [a[7], a[6], a[5], a[4]] } : null,
+        pcb: this.pcbSrc
       };
     }
+    setPcb(src) {
+      this.pcbSrc = src;
+    }
+    /** the plugged board's card: its LEDs, buttons, sensors and shift registers, and its ERC */
+    pcbCard() {
+      const p = this.pcbInfo;
+      if (!p) return "";
+      const of = (k) => p.parts.filter((x) => x.kind === k);
+      let h = `<div class="vb-card vb-pcb"><div class="vb-card-h">\u{1F50C} ${esc3(p.name || ".board")}\u3000<span class="vb-dim">${tr("\u5C08\u6848\u7684 .board \u63D2\u5728", "the project's .board on")} PMOD\uFF08${tr("\u8173", "pins")} ${p.pins.join(" ")}\uFF09</span><button class="tb-btn ghost" data-a="netview" title="${tr("\u96F6\u4EF6\u548C\u7DDA\u8DEF\uFF0C\u7DDA\u4F9D\u96FB\u4F4D\u4E0A\u8272", "The parts and nets, each net colored by its level")}">\u{1F5FA} ${tr("\u7DDA\u8DEF\u5716", "Nets")}</button></div>`;
+      const leds = of("led");
+      if (leds.length) h += `<div class="vb-led8">${leds.map((l) => `<span class="vb-l8" data-pl="${esc3(l.id)}" title="${esc3(l.id)}">${esc3(l.id)}</span>`).join("")}</div>`;
+      for (const t of of("lm75")) h += `<label class="vb-pcb-row">${esc3(t.id)} LM75 <input type="range" min="-20" max="60" step="0.5" value="25" data-pt="${esc3(t.id)}"> <b data-ptv="${esc3(t.id)}">25.0</b> \xB0C</label>`;
+      for (const r of of("74hc595")) h += `<div class="vb-pcb-row">${esc3(r.id)} 74HC595\u3000Q7\u2026Q0 = <code data-pq="${esc3(r.id)}">00000000</code></div>`;
+      const btns = of("btn");
+      if (btns.length) h += `<div class="vb-pcb-row">${btns.map((b) => `<button class="vb-sw" data-pb="${esc3(b.id)}" title="${tr("\u6309\u4F4F", "hold")}">${esc3(b.id)}</button>`).join("")}</div>`;
+      if (p.erc.length) h += `<div class="vb-pcb-erc">${p.erc.map((d) => `<div class="${d.error ? "vb-err" : "vb-dim"}">${d.error ? "\u2717" : "\u26A0"} ${esc3(d.msg)}</div>`).join("")}</div>`;
+      else h += `<div class="vb-dim">ERC \u2713</div>`;
+      return h + "</div>";
+    }
+    /** hook up the card's controls */
+    pcbWire(box) {
+      const nv = box.querySelector("[data-a=netview]");
+      if (nv) nv.onclick = () => {
+        const w = this.q(".vb-net");
+        w.classList.toggle("hidden");
+        if (!w.classList.contains("hidden")) {
+          this.netWin.unfold();
+          this.netWin.clamp();
+        }
+      };
+      for (const el2 of box.querySelectorAll("[data-pt]")) {
+        el2.oninput = () => {
+          const v = +el2.value;
+          this.pcbTemp.push([el2.dataset.pt, v]);
+          const out = box.querySelector(`[data-ptv="${el2.dataset.pt}"]`);
+          if (out) out.textContent = v.toFixed(1);
+          if (!this.running) this.tick(0);
+        };
+      }
+      for (const b of box.querySelectorAll("[data-pb]")) {
+        const set = (down) => {
+          if (b.classList.contains("on") === down) return;
+          b.classList.toggle("on", down);
+          this.pcbPress.push([b.dataset.pb, down]);
+          if (!this.running) this.tick(0);
+        };
+        b.onpointerdown = (e) => {
+          e.preventDefault();
+          set(true);
+        };
+        b.onpointerup = () => set(false);
+        b.onpointerleave = () => set(false);
+      }
+    }
+    showPcb(r) {
+      if (!r.pcb) return;
+      this.nets.update(r.pcb_levels, new Map(r.pcb.filter((x) => x[1] === "led").map((x) => [x[0], x[2]])));
+      const box = this.q(".vb-cards");
+      for (const [id, kind, v] of r.pcb) {
+        if (kind === "led") {
+          const el2 = box.querySelector(`[data-pl="${id}"]`);
+          const d = v;
+          if (el2) el2.style.setProperty("--lit", (d < 4e-3 ? 0 : 0.2 + 0.8 * Math.sqrt(d)).toFixed(3));
+        } else if (kind === "latch") {
+          const el2 = box.querySelector(`[data-pq="${id}"]`);
+          if (el2) el2.textContent = v.toString(2).padStart(8, "0") + `  (${v})`;
+        } else if (kind === "temp") {
+          const el2 = box.querySelector(`[data-pt="${id}"]`);
+          if (el2 && document.activeElement !== el2 && +el2.value !== v) {
+            el2.value = String(v);
+            const o = box.querySelector(`[data-ptv="${id}"]`);
+            if (o) o.textContent = v.toFixed(1);
+          }
+        }
+      }
+    }
     async attach() {
-      await (await this.core()).call({ cmd: "board_periph", ...this.periph() });
+      const r = await (await this.core()).call({ cmd: "board_periph", ...this.periph() });
+      this.pcbInfo = r.pcb;
+      if (r.pcb) this.nets.set(r.pcb);
+      else this.q(".vb-net").classList.add("hidden");
+      this.cards();
       this.vgaSeen = 0;
       for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
     }
@@ -3467,8 +3879,10 @@ target = { type = "directory", path = "target" }
         if (m === "vga") h += `<div class="vb-card"><div class="vb-card-h">${tr("VGA \u87A2\u5E55", "VGA monitor")}\u3000<span class="vb-dim vb-vga-i"></span></div><canvas class="vb-vga" width="320" height="240"></canvas></div>`;
         if (m === "buzzer") h += `<div class="vb-card"><div class="vb-card-h">${name}\uFF1A${tr("\u8702\u9CF4\u5668\uFF08\u8173 1\uFF09", "buzzer (pin 1)")}\u3000<label class="vb-chk"><input type="checkbox" data-a="sound"> ${tr("\u{1F50A} \u8072\u97F3", "\u{1F50A} sound")}</label></div><div class="vb-buzz" data-buzz="${pins[0]}">\u2014</div></div>`;
       }
+      h += this.pcbCard();
       box.innerHTML = h;
-      box.classList.toggle("hidden", !h);
+      this.q(".vb-dock").classList.toggle("hidden", !h);
+      this.pcbWire(box);
       const tin = box.querySelector(".vb-tin");
       if (tin) tin.onkeydown = (e) => {
         if (e.key === "Enter") {
@@ -3549,7 +3963,7 @@ target = { type = "directory", path = "target" }
       return this.q("[data-a=mode]").value;
     }
     /** synthesize `top` and power the board up with it (and `program`, base64, in its program memory) */
-    async flash(files, top, pcf, program) {
+    async flash(files, top2, pcf, program) {
       this.setRunning(false);
       const gen = ++this.gen;
       const core2 = await this.core();
@@ -3557,15 +3971,15 @@ target = { type = "directory", path = "target" }
       if (this.mode === "cpu") {
         if (!program) throw new Error(tr("CPU \u6A21\u5F0F\u8DD1\u7684\u662F C \u7A0B\u5F0F\uFF1A\u5C08\u6848\u88E1\u8981\u6709\u4E00\u500B .c \u6A94\uFF08\u8A2D\u8A08\u8981\u7528 RvSoc\uFF09", "The CPU mode runs a C program: the project needs a .c file (and the RvSoc design)"));
         this.stat(tr("\u8F09\u5165 C \u7A0B\u5F0F\uFF08CPU \u7528\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\uFF09\u2026", "Loading the C program (the CPU as an instruction-set simulator)\u2026"));
-        info = await core2.call({ cmd: "board_load_cpu", program, pcf: pcf ?? null, top });
+        info = await core2.call({ cmd: "board_load_cpu", program, pcf: pcf ?? null, top: top2 });
       } else if (this.mode === "bitstream") {
         this.stat(tr("\u8F09\u5165\u6676\u7247\u8CC7\u6599\u5EAB\u2026", "Loading the chip database\u2026"));
         await core2.chipdb();
         this.stat(tr("\u5408\u6210\u3001\u4F48\u5C40\u7E5E\u7DDA\u3001\u7522\u751F\u4F4D\u5143\u6D41\u4E26\u71D2\u9304\u2026", "Synthesis, place and route, bitstream, flashing\u2026"));
-        info = await core2.call({ cmd: "board_flash", files, top, pcf: pcf ?? null, program: program ?? null });
+        info = await core2.call({ cmd: "board_flash", files, top: top2, pcf: pcf ?? null, program: program ?? null });
       } else {
         this.stat(tr("\u5408\u6210\u4E26\u71D2\u9304\u7DB2\u8868\u2026", "Synthesizing and flashing the netlist\u2026"));
-        info = await core2.call({ cmd: "board_load", files, top, pcf: pcf ?? null, program: program ?? null });
+        info = await core2.call({ cmd: "board_load", files, top: top2, pcf: pcf ?? null, program: program ?? null });
       }
       if (gen !== this.gen) return info;
       this.start(info);
@@ -3613,7 +4027,7 @@ target = { type = "directory", path = "target" }
       const kind = (k) => ({ clock: tr("\u6642\u8108", "clock"), button: tr("\u6309\u9215", "button"), led: "LED", uart_rx: "UART RX", uart_tx: "UART TX", pmod: "PMOD" })[k] ?? k;
       const opts = (port) => `<option value="">\u2014</option>` + i.pins.map((p) => `<option value="${p.pin}"${cur2.get(port) === p.pin ? " selected" : ""}>${p.name}\uFF08${p.pin}\uFF0C${kind(p.kind)}\uFF09</option>`).join("");
       box.innerHTML = `<div class="vb-pins-box"><div class="vb-card-h">${tr("\u8173\u4F4D\u6307\u5B9A", "Pin assignment")}\u3000<span class="vb-dim">${tr("\u5957\u7528\u5F8C\u5BEB\u5165 pins.pcf \u4E26\u91CD\u65B0\u71D2\u9304", "Apply writes pins.pcf and flashes again")}</span></div>
-      <table>${i.ports.map((p) => `<tr><td>${esc2(p.name)}</td><td class="vb-dim">${p.dir === "in" ? tr("\u8F38\u5165", "input") : tr("\u8F38\u51FA", "output")}</td><td><select data-port="${esc2(p.name)}">${opts(p.name)}</select></td></tr>`).join("")}</table>
+      <table>${i.ports.map((p) => `<tr><td>${esc3(p.name)}</td><td class="vb-dim">${p.dir === "in" ? tr("\u8F38\u5165", "input") : tr("\u8F38\u51FA", "output")}</td><td><select data-port="${esc3(p.name)}">${opts(p.name)}</select></td></tr>`).join("")}</table>
       <div class="vb-pins-act"><button class="tb-btn primary" data-a="pins-ok">${tr("\u5957\u7528\u4E26\u71D2\u9304", "Apply and flash")}</button><button class="tb-btn" data-a="pins-no">${tr("\u53D6\u6D88", "Cancel")}</button></div></div>`;
       box.classList.remove("hidden");
       box.querySelector("[data-a=pins-no]").onclick = () => box.classList.add("hidden");
@@ -3707,9 +4121,12 @@ ${lines.join("\n")}
       const uart_send = this.sendQ;
       this.sendQ = "";
       const wantFrame = this.setup.pmod1a === "vga" && performance.now() - this.lastFrame > 150;
+      const pcb_press = this.pcbPress, pcb_temp = this.pcbTemp;
+      this.pcbPress = [];
+      this.pcbTemp = [];
       let r;
       try {
-        r = await (await this.core()).call({ cmd: "board_run", cycles: n, inputs, uart_send, ...wantFrame ? { vga_seen: this.vgaSeen } : {} });
+        r = await (await this.core()).call({ cmd: "board_run", cycles: n, inputs, uart_send, pcb_press, pcb_temp, ...wantFrame ? { vga_seen: this.vgaSeen } : {} });
       } catch (e) {
         this.stat("\u2717 " + String(e.message ?? e));
         this.setRunning(false);
@@ -3764,6 +4181,7 @@ ${lines.join("\n")}
       this.duty = new Map(r.duty);
       this.solveBB();
       this.showPeriph(r);
+      this.showPcb(r);
       for (const [pin, duty] of r.duty) {
         const p = this.info.pins.find((x) => x.pin === pin);
         if (!p) continue;
@@ -3877,7 +4295,7 @@ ${lines.join("\n")}
       const i = this.info;
       const used = i.pins.filter((p) => p.input || p.output).map((p) => `${p.name}\u2194${p.input ?? p.output}`);
       const what = i.mode === "cpu" ? tr(`CPU \u6A21\u5F0F\uFF1AC \u7A0B\u5F0F ${i.program ?? 0} \u4F4D\u5143\u7D44\uFF0CCPU \u7528\u6307\u4EE4\u96C6\u6A21\u64EC\u5668\uFF08\u548C RvSoc \u4E00\u6A23\u7684\u8A18\u61B6\u9AD4\u6620\u5C04\u8207\u6642\u8108\u6578\uFF09\uFF0C\u5468\u908A\u8207\u8173\u4F4D\u7167 pins.pcf`, `CPU mode: a ${i.program ?? 0}-byte C program, the CPU as an instruction-set simulator (RvSoc's memory map and cycle counts), peripherals and pins from pins.pcf`) : i.mode === "netlist" ? `${tr("\u7DB2\u8868", "netlist")}\uFF1A${i.cells.lut} LUT\u3001${i.cells.carry} CARRY\u3001${i.cells.ff} DFF${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}\uFF08${tr("\u672A\u4F48\u5C40\u7E5E\u7DDA", "not placed and routed")}\uFF09` : `${i.mode === "bin" ? tr("\u4E0A\u50B3\u7684\u4F4D\u5143\u6D41", "uploaded bitstream") : tr("\u4F4D\u5143\u6D41", "bitstream")}\uFF1A${i.cells.lc ?? i.cells.lut} LC${i.cells.ram ? `\u3001${i.cells.ram} BRAM` : ""}` + (i.fmax ? `\uFF0CF<sub>max</sub> ${i.fmax.toFixed(1)} MHz${i.fmax < i.clock_hz / 1e6 ? " \u26A0" : ` \u2265 12 MHz \u2713`}` : "");
-      this.q(".vb-foot").innerHTML = `<b>${esc2(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc2(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc2(i.warnings.slice(0, 3).join("\uFF1B"))}${i.warnings.length > 3 ? tr(`\u2026\uFF08\u5171 ${i.warnings.length} \u689D\uFF0C\u898B\u300C\u554F\u984C\u300D\u9762\u677F\uFF09`, `\u2026 (${i.warnings.length} in all, see Problems)`) : ""}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
+      this.q(".vb-foot").innerHTML = `<b>${esc3(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc3(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc3(i.warnings.slice(0, 3).join("\uFF1B"))}${i.warnings.length > 3 ? tr(`\u2026\uFF08\u5171 ${i.warnings.length} \u689D\uFF0C\u898B\u300C\u554F\u984C\u300D\u9762\u677F\uFF09`, `\u2026 (${i.warnings.length} in all, see Problems)`) : ""}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
     }
     /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
     drawing() {
@@ -4014,8 +4432,8 @@ ${lines.join("\n")}
       this.svg = host.querySelector(".pi-svg");
       this.lcd = host.querySelector(".pi-lcd canvas");
       this.bb = new Breadboard(host.querySelector(".pi-bb"), BB_HEADER);
-      this.bb.onChange = (layout) => {
-        if (layout) {
+      this.bb.onChange = (layout2) => {
+        if (layout2) {
           this.onLayout(this.bb.parts);
           this.keyHint();
         }
@@ -4313,12 +4731,12 @@ ${lines.join("\n")}
       return this.lines.map((l) => l.join("")).join("\r\n");
     }
     html(cursor) {
-      const esc5 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      const esc6 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
       return this.lines.map((l, i) => {
-        if (i !== this.row || !cursor) return esc5(l.join(""));
+        if (i !== this.row || !cursor) return esc6(l.join(""));
         const s = l.join("");
         const c = s[this.col] ?? " ";
-        return esc5(s.slice(0, this.col)) + `<span class="em-cur">${esc5(c)}</span>` + esc5(s.slice(this.col + 1));
+        return esc6(s.slice(0, this.col)) + `<span class="em-cur">${esc6(c)}</span>` + esc6(s.slice(this.col + 1));
       }).join("\n");
     }
   };
@@ -4376,7 +4794,7 @@ ${lines.join("\n")}
         <span class="vb-stat em-stat"></span>
       </div>
       <div class="em-note"></div>
-      <div class="em-main"><div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div><div class="em-board hidden"></div></div>`;
+      <div class="em-main"><div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div><div class="em-board hidden"><div class="em-board-h"><span class="fw-t">\u283F ${tr("\u958B\u767C\u677F", "Board")}</span></div><div class="em-board-body"></div></div></div>`;
       const q = (a) => host.querySelector(`[data-a="${a}"]`);
       q("boot").onclick = () => this.boot();
       q("pause").onclick = () => this.pauseResume();
@@ -4513,7 +4931,8 @@ ${lines.join("\n")}
       const bh = this.host.querySelector(".em-board");
       if (s.cfg.board === "pi") {
         if (!this.pi) {
-          this.pi = new PiBoard(bh);
+          this.pi = new PiBoard(bh.querySelector(".em-board-body"));
+          floatWin(bh, bh.querySelector(".em-board-h"), { key: "emu.board", auto: () => window.innerWidth < 1100 });
           this.pi.onInputs = (bits) => this.w?.postMessage({ type: "gpio", bits });
           this.pi.onLayout = (parts) => this.onParts(parts);
         }
@@ -4725,7 +5144,7 @@ ${lines.join("\n")}
   var KEYWORDS = new Set("module interface package function import export inst param const var let assign always_ff always_comb initial final if else if_reset case switch default for in rev step return break input output inout modport struct enum union typedef embed include generate pub proto bind connect type as repeat inside outside unsafe alias true false".split(" "));
   var TYPES = new Set("logic bit clock clock_posedge clock_negedge reset reset_async_high reset_async_low reset_sync_high reset_sync_low u8 u16 u32 u64 i8 i16 i32 i64 f32 f64 signed tri string".split(" "));
   var TOKEN = /(\/\/.*)|(\/\*)|("(?:\\.|[^"\\])*")|(\d+'s?[bodhBODH][0-9a-fA-FxXzZ_]+|\d+'[01xXzZ]|'[01xXzZ]|\d[\d_]*(?:\.\d+)?)|(\$[A-Za-z_]\w*)|(#\[[^\]]*\])|([A-Za-z_]\w*)|('[a-z_]\w*)/g;
-  function esc3(s) {
+  function esc4(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
   var C_KEYWORDS = new Set("if else while for do switch case default break continue return goto sizeof typedef struct union enum static extern const volatile register".split(" "));
@@ -4751,7 +5170,7 @@ ${lines.join("\n")}
     return "text";
   }
   function highlight(src, lang = "veryl") {
-    if (lang === "text") return src.split("\n").map(esc3);
+    if (lang === "text") return src.split("\n").map(esc4);
     if (lang === "c" || lang === "asm" || lang === "fx") return highlightC(src, lang);
     if (lang === "py" || lang === "sh") return highlightScript(src, lang);
     const out = [];
@@ -4762,41 +5181,41 @@ ${lines.join("\n")}
       if (inBlock) {
         const e = line.indexOf("*/");
         if (e < 0) {
-          out.push(`<span class="t-com">${esc3(line)}</span>`);
+          out.push(`<span class="t-com">${esc4(line)}</span>`);
           continue;
         }
-        h += `<span class="t-com">${esc3(line.slice(0, e + 2))}</span>`;
+        h += `<span class="t-com">${esc4(line.slice(0, e + 2))}</span>`;
         i = e + 2;
         inBlock = false;
       }
       TOKEN.lastIndex = i;
       let m;
       while (m = TOKEN.exec(line)) {
-        h += esc3(line.slice(i, m.index));
+        h += esc4(line.slice(i, m.index));
         const t = m[0];
-        if (m[1]) h += `<span class="t-com">${esc3(t)}</span>`;
+        if (m[1]) h += `<span class="t-com">${esc4(t)}</span>`;
         else if (m[2]) {
           const e = line.indexOf("*/", m.index + 2);
           const end = e < 0 ? line.length : e + 2;
-          h += `<span class="t-com">${esc3(line.slice(m.index, end))}</span>`;
+          h += `<span class="t-com">${esc4(line.slice(m.index, end))}</span>`;
           if (e < 0) inBlock = true;
           TOKEN.lastIndex = end;
           i = end;
           if (inBlock) break;
           continue;
-        } else if (m[3]) h += `<span class="t-str">${esc3(t)}</span>`;
-        else if (m[4]) h += `<span class="t-num">${esc3(t)}</span>`;
-        else if (m[5]) h += `<span class="t-sys">${esc3(t)}</span>`;
-        else if (m[6]) h += `<span class="t-attr">${esc3(t)}</span>`;
+        } else if (m[3]) h += `<span class="t-str">${esc4(t)}</span>`;
+        else if (m[4]) h += `<span class="t-num">${esc4(t)}</span>`;
+        else if (m[5]) h += `<span class="t-sys">${esc4(t)}</span>`;
+        else if (m[6]) h += `<span class="t-attr">${esc4(t)}</span>`;
         else if (m[7]) {
           if (KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
           else if (TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
           else if (/^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
           else h += t;
-        } else h += `<span class="t-dom">${esc3(t)}</span>`;
+        } else h += `<span class="t-dom">${esc4(t)}</span>`;
         i = TOKEN.lastIndex;
       }
-      if (i < line.length) h += esc3(line.slice(i));
+      if (i < line.length) h += esc4(line.slice(i));
       out.push(h);
     }
     return out;
@@ -4811,10 +5230,10 @@ ${lines.join("\n")}
       if (inBlock) {
         const e = line.indexOf("*/");
         if (e < 0) {
-          out.push(`<span class="t-com">${esc3(line)}</span>`);
+          out.push(`<span class="t-com">${esc4(line)}</span>`);
           continue;
         }
-        h += `<span class="t-com">${esc3(line.slice(0, e + 2))}</span>`;
+        h += `<span class="t-com">${esc4(line.slice(0, e + 2))}</span>`;
         i = e + 2;
         inBlock = false;
       }
@@ -4822,35 +5241,35 @@ ${lines.join("\n")}
       let m;
       let first = true;
       while (m = re.exec(line)) {
-        h += esc3(line.slice(i, m.index));
+        h += esc4(line.slice(i, m.index));
         const t = m[0];
-        if (m[1]) h += `<span class="t-com">${esc3(t)}</span>`;
+        if (m[1]) h += `<span class="t-com">${esc4(t)}</span>`;
         else if (m[2]) {
           const e = line.indexOf("*/", m.index + 2);
           const end = e < 0 ? line.length : e + 2;
-          h += `<span class="t-com">${esc3(line.slice(m.index, end))}</span>`;
+          h += `<span class="t-com">${esc4(line.slice(m.index, end))}</span>`;
           if (e < 0) inBlock = true;
           re.lastIndex = end;
           i = end;
           if (inBlock) break;
           continue;
-        } else if (m[3]) h += `<span class="t-str">${esc3(t)}</span>`;
-        else if (m[4]) h += `<span class="t-num">${esc3(t)}</span>`;
+        } else if (m[3]) h += `<span class="t-str">${esc4(t)}</span>`;
+        else if (m[4]) h += `<span class="t-num">${esc4(t)}</span>`;
         else if (lang === "fx") {
-          if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
+          if (m[5]) h += `<span class="t-attr">${esc4(t)}</span>`;
           else if (FX_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
           else if (FX_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
           else if (/^[A-Z]/.test(t)) h += `<span class="t-name">${t}</span>`;
           else h += t;
         } else if (lang === "c") {
-          if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
+          if (m[5]) h += `<span class="t-attr">${esc4(t)}</span>`;
           else if (C_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
           else if (C_TYPES.has(t)) h += `<span class="t-type">${t}</span>`;
           else if (/^[A-Z][A-Z0-9_]+$/.test(t)) h += `<span class="t-name">${t}</span>`;
           else h += t;
         } else {
-          if (m[5]) h += `<span class="t-attr">${esc3(t)}</span>`;
-          else if (m[6]) h += `<span class="t-name">${esc3(t)}</span>`;
+          if (m[5]) h += `<span class="t-attr">${esc4(t)}</span>`;
+          else if (m[6]) h += `<span class="t-name">${esc4(t)}</span>`;
           else if (REGS.test(t)) h += `<span class="t-type">${t}</span>`;
           else if (first) h += `<span class="t-kw">${t}</span>`;
           else h += t;
@@ -4858,7 +5277,7 @@ ${lines.join("\n")}
         }
         i = re.lastIndex;
       }
-      if (i < line.length) h += esc3(line.slice(i));
+      if (i < line.length) h += esc4(line.slice(i));
       out.push(h);
     }
     return out;
@@ -4872,12 +5291,12 @@ ${lines.join("\n")}
       re.lastIndex = 0;
       let m;
       while (m = re.exec(line)) {
-        h += esc3(line.slice(i, m.index));
+        h += esc4(line.slice(i, m.index));
         const t = m[0];
-        if (m[1]) h += `<span class="t-com">${esc3(t)}</span>`;
-        else if (m[2]) h += `<span class="t-str">${esc3(t)}</span>`;
-        else if (m[3]) h += `<span class="t-num">${esc3(t)}</span>`;
-        else if (m[4]) h += `<span class="${lang === "py" ? "t-attr" : "t-sys"}">${esc3(t)}</span>`;
+        if (m[1]) h += `<span class="t-com">${esc4(t)}</span>`;
+        else if (m[2]) h += `<span class="t-str">${esc4(t)}</span>`;
+        else if (m[3]) h += `<span class="t-num">${esc4(t)}</span>`;
+        else if (m[4]) h += `<span class="${lang === "py" ? "t-attr" : "t-sys"}">${esc4(t)}</span>`;
         else if (lang === "py") {
           if (PY_KEYWORDS.has(t)) h += `<span class="t-kw">${t}</span>`;
           else if (PY_CONSTS.has(t)) h += `<span class="t-type">${t}</span>`;
@@ -4887,7 +5306,7 @@ ${lines.join("\n")}
         if (m[5]) prev = t;
         i = re.lastIndex;
       }
-      if (i < line.length) h += esc3(line.slice(i));
+      if (i < line.length) h += esc4(line.slice(i));
       return h;
     });
   }
@@ -5063,8 +5482,8 @@ ${lines.join("\n")}
         const a = v.lastIndexOf("\n", s - 1) + 1;
         const b = v.indexOf("\n", t) < 0 ? v.length : v.indexOf("\n", t);
         const ls = v.slice(a, b).split("\n");
-        const all = ls.every((l) => /^\s*\/\//.test(l) || !l.trim());
-        const block = ls.map((l) => all ? l.replace(/^(\s*)\/\/ ?/, "$1") : l.trim() ? l.replace(/^(\s*)/, "$1// ") : l).join("\n");
+        const all2 = ls.every((l) => /^\s*\/\//.test(l) || !l.trim());
+        const block = ls.map((l) => all2 ? l.replace(/^(\s*)\/\/ ?/, "$1") : l.trim() ? l.replace(/^(\s*)/, "$1// ") : l).join("\n");
         this.edit(a, b, block);
         ta.setSelectionRange(a, a + block.length);
       }
@@ -5177,8 +5596,8 @@ ${lines.join("\n")}
   // src/ide/main.ts
   var $2 = (id) => document.getElementById(id);
   var mod = (e) => e.ctrlKey || e.metaKey;
-  var esc4 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  var attr = (s) => esc4(s).replace(/"/g, "&quot;");
+  var esc5 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  var attr = (s) => esc5(s).replace(/"/g, "&quot;");
   var KEY = "veryl2chip-ide:";
   function store() {
     try {
@@ -5187,7 +5606,7 @@ ${lines.join("\n")}
       return null;
     }
   }
-  function load(k, d) {
+  function load2(k, d) {
     try {
       const s = store()?.getItem(KEY + k);
       return s ? JSON.parse(s) : d;
@@ -5195,20 +5614,20 @@ ${lines.join("\n")}
       return d;
     }
   }
-  function save(k, v) {
+  function save2(k, v) {
     try {
       store()?.setItem(KEY + k, JSON.stringify(v));
     } catch {
     }
   }
-  var projects = load("projects", []).filter((p) => p && Array.isArray(p.files));
+  var projects = load2("projects", []).filter((p) => p && Array.isArray(p.files));
   var proj;
   var saveTimer = 0;
   function persist() {
     clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
-      save("projects", projects);
-      save("cur", proj.id);
+      save2("projects", projects);
+      save2("cur", proj.id);
     }, 300);
   }
   function projName(p) {
@@ -5225,9 +5644,9 @@ ${lines.join("\n")}
   }
   function blankProject(name) {
     const m = name.replace(/[^A-Za-z0-9_]/g, "").replace(/^[^A-Za-z]+/, "") || "Top";
-    const top = m[0].toUpperCase() + m.slice(1);
-    const f = `${top.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}.veryl`;
-    return { id: uid(), name, files: [{ name: f, src: newModule(top) }], synth: top, open: [f], active: f };
+    const top2 = m[0].toUpperCase() + m.slice(1);
+    const f = `${top2.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase()}.veryl`;
+    return { id: uid(), name, files: [{ name: f, src: newModule(top2) }], synth: top2, open: [f], active: f };
   }
   var FX_TEMPLATE = (task) => `// A Fluxa program: tasks connected by channels (bounded FIFOs). \u25B6 Run runs its tests.
 task ${task}(x: in chan<i16>, y: out chan<i16>) {
@@ -5379,7 +5798,7 @@ test ${task.toLowerCase()}_doubles {
       const f = file(n);
       const errs = problems.some((p) => p.file === n && p.severity === "error");
       t.className = "tab" + (n === proj.active ? " cur" : "") + (f && original(n) !== void 0 && original(n) !== f.src ? " dirty" : "") + (errs ? " err" : "");
-      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : f?.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc4(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
+      t.innerHTML = `<span class="ic">${n === FLOW_TAB || n === BOARD_TAB || n === EMU_TAB || n === ASM_TAB ? "" : n === WELCOME ? "\u2605" : f?.name.endsWith(".veryl") ? "\u25C6" : f?.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc5(tabName(n))}</span><span class="x" title="${tr("\u95DC\u9589", "Close")}"></span>`;
       t.onclick = () => {
         proj.active = n;
         persist();
@@ -5415,7 +5834,7 @@ test ${task.toLowerCase()}_doubles {
       const n = problems.filter((p) => p.file === f.name && p.severity === "error").length;
       const changed2 = original(f.name) !== void 0 && original(f.name) !== f.src;
       d.className = "item" + (f.name === proj.active ? " cur" : "");
-      d.innerHTML = `<span class="ic">${f.name.endsWith(".veryl") ? "\u25C6" : f.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc4(f.name)}</span><span class="acts"><button class="icon" data-a="ren" title="${tr("\u91CD\u65B0\u547D\u540D", "Rename")}">\u270E</button><button class="icon" data-a="del" title="${tr("\u522A\u9664", "Delete")}">\u{1F5D1}</button></span>` + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed2 ? `<span class="tag dirty-dot" title="${tr("\u8207\u7BC4\u4F8B\u539F\u59CB\u78BC\u4E0D\u540C", "Changed from the example")}">M</span>` : "");
+      d.innerHTML = `<span class="ic">${f.name.endsWith(".veryl") ? "\u25C6" : f.name.endsWith(".c") ? "C" : "\u25A4"}</span><span class="nm">${esc5(f.name)}</span><span class="acts"><button class="icon" data-a="ren" title="${tr("\u91CD\u65B0\u547D\u540D", "Rename")}">\u270E</button><button class="icon" data-a="del" title="${tr("\u522A\u9664", "Delete")}">\u{1F5D1}</button></span>` + (n ? `<span class="tag" style="color:var(--err)">${n}</span>` : changed2 ? `<span class="tag dirty-dot" title="${tr("\u8207\u7BC4\u4F8B\u539F\u59CB\u78BC\u4E0D\u540C", "Changed from the example")}">M</span>` : "");
       d.onclick = (e) => {
         const a = e.target.dataset.a;
         if (a === "ren") renameFile(f.name);
@@ -5444,9 +5863,9 @@ test ${task.toLowerCase()}_doubles {
     box.innerHTML = "";
     for (const d of declarations()) {
       const el2 = document.createElement("div");
-      const top = d.kind === "module" && d.name === synthTop();
+      const top2 = d.kind === "module" && d.name === synthTop();
       el2.className = "item";
-      el2.innerHTML = `<span class="ic">${d.kind === "module" ? d.test ? "\u2714" : "\u25A3" : d.kind === "test" ? "\u2714" : d.kind === "task" ? "\u21F6" : d.kind === "fn" ? "\u0192" : d.kind === "interface" ? "\u21C4" : "{}"}</span><span class="nm">${esc4(d.name)}</span><span class="tag">${top ? tr("\u5408\u6210\u9802\u5C64", "synth top") : d.test ? "test" : d.kind === "module" || d.kind === "task" ? "" : d.kind}</span>`;
+      el2.innerHTML = `<span class="ic">${d.kind === "module" ? d.test ? "\u2714" : "\u25A3" : d.kind === "test" ? "\u2714" : d.kind === "task" ? "\u21F6" : d.kind === "fn" ? "\u0192" : d.kind === "interface" ? "\u21C4" : "{}"}</span><span class="nm">${esc5(d.name)}</span><span class="tag">${top2 ? tr("\u5408\u6210\u9802\u5C64", "synth top") : d.test ? "test" : d.kind === "module" || d.kind === "task" ? "" : d.kind}</span>`;
       el2.title = `${d.file}:${d.line}`;
       el2.onclick = () => openFile(d.file, d.line);
       box.appendChild(el2);
@@ -5670,7 +6089,7 @@ test ${task.toLowerCase()}_doubles {
   }
   function renderExamples() {
     const chips = $2("exFilter");
-    chips.innerHTML = EX_FILTERS().map(([f, label]) => `<button class="${f === exFilter ? "cur" : ""}" data-f="${f}" title="${attr(filterHint(f))}">${esc4(label)} <small>${exCount(f)}</small></button>`).join("");
+    chips.innerHTML = EX_FILTERS().map(([f, label]) => `<button class="${f === exFilter ? "cur" : ""}" data-f="${f}" title="${attr(filterHint(f))}">${esc5(label)} <small>${exCount(f)}</small></button>`).join("");
     chips.onclick = (e) => {
       const f = e.target.closest("[data-f]")?.dataset.f;
       if (f) setExFilter(f);
@@ -5694,7 +6113,7 @@ test ${task.toLowerCase()}_doubles {
       const first = start(ci);
       const bs = badges(ci);
       d.title = (ex.note ? exNote(ex) + "\n" : "") + ex.files.map((f) => f.name).join(", ") + "\n" + bs.map((b) => `${b.icon} ${badgeName(b.act)}`).join("  ") + tr(`\u3000\u5EFA\u8B70\u7B2C\u4E00\u6B65\uFF1A${actName(first)}`, `  first step: ${actName(first)}`);
-      d.innerHTML = `<span class="ic">${opened ? "\u25CF" : "\u25CB"}</span><span class="nm">${esc4(exTitle(ex))}</span><span class="badges">${bs.map((b) => `<span class="${b.act === first ? "st" : ""}" title="${attr(badgeName(b.act))}">${b.icon}</span>`).join("")}</span>`;
+      d.innerHTML = `<span class="ic">${opened ? "\u25CF" : "\u25CB"}</span><span class="nm">${esc5(exTitle(ex))}</span><span class="badges">${bs.map((b) => `<span class="${b.act === first ? "st" : ""}" title="${attr(badgeName(b.act))}">${b.icon}</span>`).join("")}</span>`;
       d.onclick = () => {
         openExample(ex);
         renderExamples();
@@ -5702,7 +6121,7 @@ test ${task.toLowerCase()}_doubles {
       box.appendChild(d);
     }
   }
-  var exFilter = load("exFilter", "all");
+  var exFilter = load2("exFilter", "all");
   var EX_FILTERS = () => [["all", tr("\u5168\u90E8", "All")], ["test", "\u{1F9EA}"], ["board", "\u26A1"], ["emu", "\u{1F5A5}"], ["synth", "\u2699"], ["fluxa", "Fluxa"]];
   function filterHint(f) {
     return f === "all" ? tr("\u6240\u6709\u7BC4\u4F8B", "every example") : f === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66\u3001\u770B\u6CE2\u5F62", "with testbenches: \u25B6 Test, waveforms") : f === "board" ? tr("\u80FD\u653E\u4E0A\u865B\u64EC\u677F\uFF08\u6709\u8173\u4F4D\uFF09", "go on the virtual board (have pins)") : f === "emu" ? tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: boot it in the \u{1F5A5} emulator") : f === "fluxa" ? tr("Fluxa \u7A0B\u5F0F\uFF1A\u4EFB\u52D9\u8207\u901A\u9053\uFF0C\u25B6 \u8DD1\u5B83\u7684 test", "Fluxa programs: tasks and channels, \u25B6 runs their tests") : tr("\u80FD\u5408\u6210\uFF1AFPGA\u3001ASIC \u6676\u7247\u7248\u5716", "can be synthesized: FPGA, ASIC layout");
@@ -5713,7 +6132,7 @@ test ${task.toLowerCase()}_doubles {
   var exCount = (f) => examples().filter((e) => exMatches(e, f)).length;
   function setExFilter(f) {
     exFilter = f;
-    save("exFilter", f);
+    save2("exFilter", f);
     renderExamples();
   }
   var goals = () => [
@@ -5761,7 +6180,7 @@ test ${task.toLowerCase()}_doubles {
   async function startGoal(goal) {
     const g = goals().find((x) => x.goal === goal);
     exFilter = g.filter;
-    save("exFilter", g.filter);
+    save2("exFilter", g.filter);
     const ex = examples().find((e) => e.id === g.ex);
     if (!ex) return;
     openExample(ex);
@@ -5779,12 +6198,12 @@ test ${task.toLowerCase()}_doubles {
     <h3 class="goal-h">${tr("\u4F60\u60F3\u505A\u4EC0\u9EBC\uFF1F", "What do you want to do?")}</h3>
     <div class="goals">${goals().map((g) => {
       const ex = examples().find((e) => e.id === g.ex);
-      return `<div class="goal"><div class="gi">${g.icon}</div><b>${esc4(g.title)}</b><p>${esc4(g.text)}</p><button class="tb-btn primary" data-goal="${g.goal}">${esc4(tr("\u5F9E\u9019\u88E1\u958B\u59CB\uFF1A", "Start with: "))}${esc4(ex ? exTitle(ex) : g.ex)}</button><a data-goalex="${g.goal}">${esc4(tr(`\u770B\u9019\u4E00\u985E\u7684\u7BC4\u4F8B\uFF08${exCount(g.filter)} \u500B\uFF09`, `See the examples of this kind (${exCount(g.filter)})`))}</a></div>`;
+      return `<div class="goal"><div class="gi">${g.icon}</div><b>${esc5(g.title)}</b><p>${esc5(g.text)}</p><button class="tb-btn primary" data-goal="${g.goal}">${esc5(tr("\u5F9E\u9019\u88E1\u958B\u59CB\uFF1A", "Start with: "))}${esc5(ex ? exTitle(ex) : g.ex)}</button><a data-goalex="${g.goal}">${esc5(tr(`\u770B\u9019\u4E00\u985E\u7684\u7BC4\u4F8B\uFF08${exCount(g.filter)} \u500B\uFF09`, `See the examples of this kind (${exCount(g.filter)})`))}</a></div>`;
     }).join("")}</div>
     <div class="cols">
       <div><h3>${tr("\u958B\u59CB", "Start")}</h3><a data-a="newfile">${tr("\uFF0B \u65B0\u589E .veryl \u6A94", "\uFF0B New .veryl file")}</a><a data-a="newproj">${tr("\uFF0B \u65B0\u5C08\u6848", "\uFF0B New project")}</a><a data-a="newfx">${tr("\uFF0B \u65B0 Fluxa \u5C08\u6848\uFF08\u9AD8\u968E\u5408\u6210\u8A9E\u8A00\uFF1A\u4EFB\u52D9\u8207\u901A\u9053\uFF09", "\uFF0B New Fluxa project (HLS language: tasks and channels)")}</a><a data-a="examples">${tr("\u{1F4DA} \u958B\u555F\u7BC4\u4F8B\u2026", "\u{1F4DA} Open an example\u2026")}</a><a data-a="import">${tr("\u21EA \u532F\u5165 .veryl \u6A94\u2026", "\u21EA Import .veryl files\u2026")}</a><a href="${TUTORIAL}" target="_blank" rel="noopener">${tr("\u{1F4D6} \u5F9E\u96F6\u958B\u59CB\u7684\u6559\u5B78\uFF08\u5BEB Veryl \u2192 \u71D2\u9032 iCEBreaker\uFF09", "\u{1F4D6} Tutorial from scratch (write Veryl \u2192 flash an iCEBreaker)")}</a></div>
-      <div><h3>${tr("\u6700\u8FD1\u7684\u5C08\u6848", "Recent projects")}</h3>${recent.map((p) => `<a data-p="${p.id}">${esc4(projName(p))}</a>`).join("")}</div>
-      <div><h3>${tr("\u9019\u500B\u5C08\u6848", "This project")}</h3>${proj.files.map((f) => `<a data-f="${esc4(f.name)}">\u25C6 ${esc4(f.name)}</a>`).join("")}<a data-a="flow">${tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow")}</a></div>
+      <div><h3>${tr("\u6700\u8FD1\u7684\u5C08\u6848", "Recent projects")}</h3>${recent.map((p) => `<a data-p="${p.id}">${esc5(projName(p))}</a>`).join("")}</div>
+      <div><h3>${tr("\u9019\u500B\u5C08\u6848", "This project")}</h3>${proj.files.map((f) => `<a data-f="${esc5(f.name)}">\u25C6 ${esc5(f.name)}</a>`).join("")}<a data-a="flow">${tr("\u2699 \u5408\u6210\u6D41\u7A0B", "\u2699 Synthesis flow")}</a></div>
     </div>`;
     $2("welcome").onclick = (e) => {
       const t = e.target;
@@ -5959,7 +6378,7 @@ int main(void) {
     for (const p of problems) {
       const d = document.createElement("div");
       d.className = "prob " + p.severity;
-      d.innerHTML = `<span class="sev">${p.severity === "error" ? "\u2297" : "\u26A0"}</span><span class="m">${esc4(p.msg)}</span>${p.file ? `<span class="loc">${esc4(p.file)} [${p.line}, ${p.col}]</span>` : ""}`;
+      d.innerHTML = `<span class="sev">${p.severity === "error" ? "\u2297" : "\u26A0"}</span><span class="m">${esc5(p.msg)}</span>${p.file ? `<span class="loc">${esc5(p.file)} [${p.line}, ${p.col}]</span>` : ""}`;
       if (p.file) d.onclick = () => openFile(p.file, p.line, p.col);
       box.appendChild(d);
     }
@@ -5974,12 +6393,12 @@ int main(void) {
   function refreshTops() {
     const st = $2("simTop");
     const keep = st.value;
-    st.innerHTML = `<option value="">${fluxaProject() ? tr("\u5168\u90E8 test", "all tests") : tr("\u5168\u90E8 #[test]", "all #[test]")}</option>` + (fluxaProject() ? mods.filter((m) => m.test) : mods).map((m) => `<option value="${esc4(m.name)}">${esc4(m.name)}${m.test ? "  (test)" : ""}</option>`).join("");
+    st.innerHTML = `<option value="">${fluxaProject() ? tr("\u5168\u90E8 test", "all tests") : tr("\u5168\u90E8 #[test]", "all #[test]")}</option>` + (fluxaProject() ? mods.filter((m) => m.test) : mods).map((m) => `<option value="${esc5(m.name)}">${esc5(m.name)}${m.test ? "  (test)" : ""}</option>`).join("");
     if (mods.some((m) => m.name === keep)) st.value = keep;
     const sy = $2("synthTop");
     const designs = mods.filter((m) => !m.test);
     const want = sy.value && designs.some((m) => m.name === sy.value) ? sy.value : designs.some((m) => m.name === proj.synth) ? proj.synth : designs[designs.length - 1]?.name ?? "";
-    sy.innerHTML = designs.map((m) => `<option value="${esc4(m.name)}">${esc4(m.name)}</option>`).join("");
+    sy.innerHTML = designs.map((m) => `<option value="${esc5(m.name)}">${esc5(m.name)}</option>`).join("");
     sy.value = want;
     renderTests();
     renderOutline();
@@ -6001,7 +6420,7 @@ int main(void) {
       const s = testState.get(t.name);
       const d = document.createElement("div");
       d.className = "item " + (s ?? "");
-      d.innerHTML = `<span class="ic">${s === "pass" ? "\u2713" : s === "fail" ? "\u2717" : s === "run" ? "\u2026" : "\u25CB"}</span><span class="nm">${esc4(t.name)}</span><span class="acts"><button class="icon" title="${tr("\u57F7\u884C", "Run")}">\u25B6</button></span>`;
+      d.innerHTML = `<span class="ic">${s === "pass" ? "\u2713" : s === "fail" ? "\u2717" : s === "run" ? "\u2026" : "\u25CB"}</span><span class="nm">${esc5(t.name)}</span><span class="acts"><button class="icon" title="${tr("\u57F7\u884C", "Run")}">\u25B6</button></span>`;
       d.onclick = () => runTests(t.name);
       d.ondblclick = () => {
         const dcl = declarations().find((x) => x.name === t.name);
@@ -6016,17 +6435,17 @@ int main(void) {
     if (on) $2("sbTest").textContent = what;
   }
   var KIND = (k) => ({ rtl: fluxaProject() ? "Fluxa" : "RTL", opt: tr("\u901A\u7528\u9598", "generic gates"), ice40: "iCE40", asic: tr("\u6A19\u6E96\u5143\u4EF6", "standard cells") })[k] ?? k;
-  async function simulate(top, mode, vcd) {
+  async function simulate(top2, mode, vcd) {
     if (fluxaProject()) {
-      const r = await fluxaRun(top ? [top] : null, mode);
+      const r = await fluxaRun(top2 ? [top2] : null, mode);
       return { log: r.results.map((t) => t.output + (t.passed ? "" : t.message + "\n")).join(""), tops: r.results.map((t) => ({ name: t.name, fails: t.passed ? 0 : 1, finished: true })), vcd: [], gate: r.gate };
     }
     const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
     const mc = machineCfg();
-    if (mc && (!top && !mods.some((m) => m.test) || top === mc.top)) throw new Error(tr(`${mc.top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u9069\u5408 testbench \u6A21\u64EC\uFF1A\u8ACB\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${mc.top} is a machine (machine.json), too large for the testbench simulator: use "\u{1F5A5} Emulator"`));
+    if (mc && (!top2 && !mods.some((m) => m.test) || top2 === mc.top)) throw new Error(tr(`${mc.top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u9069\u5408 testbench \u6A21\u64EC\uFF1A\u8ACB\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${mc.top} is a machine (machine.json), too large for the testbench simulator: use "\u{1F5A5} Emulator"`));
     const gate = mode === "rtl" ? {} : { gate: mode, synth: synthTop() };
     if (mode !== "rtl" && !synthTop()) throw new Error(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08\u9598\u7D1A\u6A21\u64EC\u9700\u8981\u5408\u6210\u9802\u5C64\uFF09", "No synthesizable module (gate-level simulation needs a synthesis top)"));
-    return core.call({ cmd: "simulate", files, top, max_time: 1e6, vcd, ...gate });
+    return core.call({ cmd: "simulate", files, top: top2, max_time: 1e6, vcd, ...gate });
   }
   async function runTests(only) {
     if (!core) return;
@@ -6034,16 +6453,16 @@ int main(void) {
       await runFluxa(only);
       return;
     }
-    const top = only ?? ($2("simTop").value || null);
+    const top2 = only ?? ($2("simTop").value || null);
     const mode = $2("simMode").value;
-    const names = top ? [top] : mods.filter((m) => m.test).map((m) => m.name);
+    const names = top2 ? [top2] : mods.filter((m) => m.test).map((m) => m.name);
     for (const n of names) testState.set(n, "run");
     renderTests();
     setBusy(true, tr(`\u25B6 \u6E2C\u8A66\u4E2D\uFF08${KIND(mode)}\uFF09\u2026`, `\u25B6 Testing (${KIND(mode)})\u2026`));
     const t0 = performance.now();
     problems = problems.filter((p) => p.from !== "run");
     try {
-      const r = await simulate(top, mode, true);
+      const r = await simulate(top2, mode, true);
       vcds = r.vcd;
       fillWaveTops();
       wave?.set(vcds[0]?.text ?? null);
@@ -6052,7 +6471,7 @@ int main(void) {
       const fails = r.tops.filter((t) => t.fails);
       const where = r.gate ? tr(`\u3000\u9598\u7D1A\uFF1A${r.gate.top} \u2192 ${r.gate.cells} \u500B${KIND(mode)}\u5143\u4EF6`, `\u3000gate level: ${r.gate.top} \u2192 ${r.gate.cells} ${KIND(mode)}`) : "";
       const msg = fails.length ? tr(`\u2717 ${fails.reduce((a, t) => a + t.fails, 0)} \u500B\u65B7\u8A00\u5931\u6557\uFF08${fails.map((t) => t.name).join(", ")}\uFF09`, `\u2717 ${fails.reduce((a, t) => a + t.fails, 0)} assertion(s) failed (${fails.map((t) => t.name).join(", ")})`) : tr(`\u2713 ${r.tops.length} \u500B\u6E2C\u8A66\u901A\u904E`, `\u2713 ${r.tops.length} test(s) passed`);
-      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg + where)}</div><table><tr><th>testbench</th><th>${KIND(mode)}</th><th>${tr("\u7D50\u675F", "End")}</th></tr>${r.tops.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.fails ? "fail" : "pass"}">${t.fails ? tr(`\u2717 ${t.fails} \u500B\u5931\u6557`, `\u2717 ${t.fails} failed`) : "\u2713 PASS"}</td><td>${t.finished ? "$finish" : tr("\u6642\u9593\u5230", "time limit")}</td></tr>`).join("")}</table>`;
+      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc5(msg + where)}</div><table><tr><th>testbench</th><th>${KIND(mode)}</th><th>${tr("\u7D50\u675F", "End")}</th></tr>${r.tops.map((t) => `<tr><td>${esc5(t.name)}</td><td class="${t.fails ? "fail" : "pass"}">${t.fails ? tr(`\u2717 ${t.fails} \u500B\u5931\u6557`, `\u2717 ${t.fails} failed`) : "\u2713 PASS"}</td><td>${t.finished ? "$finish" : tr("\u6642\u9593\u5230", "time limit")}</td></tr>`).join("")}</table>`;
       $2("sbTest").textContent = `${fails.length ? "\u2717" : "\u2713"} ${msg.slice(2)}\uFF08${((performance.now() - t0) / 1e3).toFixed(2)} s\uFF09`;
       for (const ln of r.log.split("\n")) if (/ASSERTION FAILED/.test(ln)) problems.push({ msg: ln.trim(), severity: "error", from: "run" });
       panel(fails.length ? "output" : "results");
@@ -6099,7 +6518,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
       $2("p-output").textContent = out;
       const msg = fails.length ? tr(`\u2717 ${fails.length} \u500B\u6E2C\u8A66\u5931\u6557\uFF08${fails.map((t) => t.name).join(", ")}\uFF09`, `\u2717 ${fails.length} test(s) failed (${fails.map((t) => t.name).join(", ")})`) : tr(`\u2713 ${r.results.length} \u500B\u6E2C\u8A66\u901A\u904E`, `\u2713 ${r.results.length} test(s) passed`);
       const where = r.gate ? tr(`\u3000\u9598\u7D1A\uFF1A${r.gate.top} \u2192 ${r.gate.cells} \u500B${KIND(mode)}\u5143\u4EF6`, `\u3000gate level: ${r.gate.top} \u2192 ${r.gate.cells} ${KIND(mode)}`) : "";
-      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc4(msg + where)}</div><table><tr><th>test</th><th>${KIND(mode)}</th></tr>${r.results.map((t) => `<tr><td>${esc4(t.name)}</td><td class="${t.passed ? "pass" : "fail"}">${t.passed ? "\u2713 PASS" : esc4("\u2717 " + t.message.split("\n")[0])}</td></tr>`).join("")}</table>`;
+      $2("p-results").innerHTML = `<div class="banner ${fails.length ? "fail" : "pass"}">${esc5(msg + where)}</div><table><tr><th>test</th><th>${KIND(mode)}</th></tr>${r.results.map((t) => `<tr><td>${esc5(t.name)}</td><td class="${t.passed ? "pass" : "fail"}">${t.passed ? "\u2713 PASS" : esc5("\u2717 " + t.message.split("\n")[0])}</td></tr>`).join("")}</table>`;
       $2("sbTest").textContent = `${fails.length ? "\u2717" : "\u2713"} ${msg.slice(2)}\uFF08${((performance.now() - t0) / 1e3).toFixed(2)} s\uFF09`;
       panel(fails.length ? "output" : "results");
     } catch (e) {
@@ -6130,14 +6549,14 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
     const draw = (done) => {
       const rtl = res.get("rtl");
       let same = true;
-      const rows = tests.map((t) => `<tr><td>${esc4(t)}</td>${modes.map((m) => {
+      const rows = tests.map((t) => `<tr><td>${esc5(t)}</td>${modes.map((m) => {
         const v = res.get(m)?.get(t);
         if (v === void 0) return `<td class="na">${done ? "\u2014" : "\u2026"}</td>`;
         if (m !== "rtl" && rtl && v !== rtl.get(t)) same = false;
         return `<td class="${v === "0" ? "pass" : v === "err" ? "fail" : "fail"}">${v === "0" ? "\u2713" : v === "err" ? tr("\u932F\u8AA4", "error") : `\u2717 ${v}`}</td>`;
       }).join("")}</tr>`).join("");
       const allPass = [...res.values()].every((m) => [...m.values()].every((v) => v === "0"));
-      $2("p-results").innerHTML = (done ? `<div class="banner ${allPass && same ? "pass" : "fail"}">${allPass && same ? tr(`\u2713 \u5168\u9762\u9A57\u8B49\u901A\u904E\uFF1A${tests.length} \u500B testbench \xD7 ${modes.length} \u7A2E\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4`, `\u2713 Full verification passed: ${tests.length} testbench(es) \xD7 ${modes.length} implementations agree`) : same ? tr("\u2717 \u6709\u6E2C\u8A66\u5931\u6557\uFF08\u5404\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4\uFF09", "\u2717 Tests fail (the same in every implementation)") : tr("\u2717 \u5408\u6210\u524D\u5F8C\u7D50\u679C\u4E0D\u4E00\u81F4\uFF01", "\u2717 Results before and after synthesis differ!")}</div>` : `<div class="banner">${tr("\u9A57\u8B49\u4E2D\u2026", "Verifying\u2026")}</div>`) + `<table><tr><th>testbench</th>${modes.map((m) => `<th>${KIND(m)}${cells.has(m) ? `<br><small>${tr(`${cells.get(m)} \u5143\u4EF6`, `${cells.get(m)} cells`)}</small>` : ""}</th>`).join("")}</tr>${rows}</table>` + (synthTop() ? `<p class="side-hint">${tr(`\u9598\u7D1A\uFF1A\u628A ${esc4(synthTop())} \u63DB\u6210\u5408\u6210\u5F8C\u7684\u7DB2\u8868\uFF0C\u8DD1\u540C\u4E00\u7D44 testbench\u3002`, `Gate level: ${esc4(synthTop())} is replaced by its synthesized netlist under the same testbenches.`)}</p>` : "");
+      $2("p-results").innerHTML = (done ? `<div class="banner ${allPass && same ? "pass" : "fail"}">${allPass && same ? tr(`\u2713 \u5168\u9762\u9A57\u8B49\u901A\u904E\uFF1A${tests.length} \u500B testbench \xD7 ${modes.length} \u7A2E\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4`, `\u2713 Full verification passed: ${tests.length} testbench(es) \xD7 ${modes.length} implementations agree`) : same ? tr("\u2717 \u6709\u6E2C\u8A66\u5931\u6557\uFF08\u5404\u5BE6\u4F5C\u7D50\u679C\u4E00\u81F4\uFF09", "\u2717 Tests fail (the same in every implementation)") : tr("\u2717 \u5408\u6210\u524D\u5F8C\u7D50\u679C\u4E0D\u4E00\u81F4\uFF01", "\u2717 Results before and after synthesis differ!")}</div>` : `<div class="banner">${tr("\u9A57\u8B49\u4E2D\u2026", "Verifying\u2026")}</div>`) + `<table><tr><th>testbench</th>${modes.map((m) => `<th>${KIND(m)}${cells.has(m) ? `<br><small>${tr(`${cells.get(m)} \u5143\u4EF6`, `${cells.get(m)} cells`)}</small>` : ""}</th>`).join("")}</tr>${rows}</table>` + (synthTop() ? `<p class="side-hint">${tr(`\u9598\u7D1A\uFF1A\u628A ${esc5(synthTop())} \u63DB\u6210\u5408\u6210\u5F8C\u7684\u7DB2\u8868\uFF0C\u8DD1\u540C\u4E00\u7D44 testbench\u3002`, `Gate level: ${esc5(synthTop())} is replaced by its synthesized netlist under the same testbenches.`)}</p>` : "");
     };
     setBusy(true, tr("\u2714 \u5168\u9762\u9A57\u8B49\u4E2D\u2026", "\u2714 Verifying\u2026"));
     const t0 = performance.now();
@@ -6164,7 +6583,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
   }
   function fillWaveTops() {
     const sel = $2("waveTop");
-    sel.innerHTML = vcds.map((v) => `<option>${esc4(v.top)}</option>`).join("");
+    sel.innerHTML = vcds.map((v) => `<option>${esc5(v.top)}</option>`).join("");
     sel.classList.toggle("hidden", vcds.length < 2 || curPanel !== "wave");
   }
   function sdcOf(p) {
@@ -6184,24 +6603,24 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
   }
   function runSynth(stage) {
     if (!synth) return;
-    const top = synthTop();
-    if (!top) {
+    const top2 = synthTop();
+    if (!top2) {
       alert(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08#[test] \u6A21\u7D44\u4E0D\u80FD\u5408\u6210\uFF09", "No synthesizable module (#[test] modules cannot be synthesized)"));
       return;
     }
-    if (machineCfg()?.top === top) {
-      alert(tr(`${top} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u80FD\u5408\u6210\uFF1A\u8ACB\u9078\u5B83\u88E1\u9762\u7684\u6A21\u7D44\uFF0C\u6216\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${top} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "\u{1F5A5} Emulator"`));
+    if (machineCfg()?.top === top2) {
+      alert(tr(`${top2} \u662F\u6A21\u64EC\u6A5F\uFF08machine.json\uFF09\uFF0C\u592A\u5927\u4E0D\u80FD\u5408\u6210\uFF1A\u8ACB\u9078\u5B83\u88E1\u9762\u7684\u6A21\u7D44\uFF0C\u6216\u6309\u300C\u{1F5A5} \u6A21\u64EC\u6A5F\u300D`, `${top2} is a machine (machine.json), too large to synthesize: pick a module inside it, or use "\u{1F5A5} Emulator"`));
       return;
     }
     const files = hdlFiles();
-    const key = JSON.stringify([files, top, pcfOf(proj), sdcOf(proj)]);
+    const key = JSON.stringify([files, top2, pcfOf(proj), sdcOf(proj)]);
     openFile(FLOW_TAB);
     if (phone()) $2("panel").classList.add("collapsed");
     synth.setPdk(flowPdk());
     if (key !== synthKey || !synth.synthesized) {
       synthKey = key;
       const target = stage && isAsicStage(stage) ? "asic" : stage && isFpgaStage(stage) ? "fpga" : void 0;
-      synth.open(files, top, pcfOf(proj), target ?? flowTarget(), stage, sdcOf(proj));
+      synth.open(files, top2, pcfOf(proj), target ?? flowTarget(), stage, sdcOf(proj));
     } else if (stage) synth.showStage(stage);
   }
   var synthTarget = "fpga";
@@ -6223,7 +6642,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
   }
   function fillStages() {
     const sel = $2("flowStage");
-    sel.innerHTML = `<option value="" hidden>${tr("\u2699 \u5408\u6210", "\u2699 Synthesize")}</option>` + flow(flowTarget() === "asic").map(([k, l]) => `<option value="${k}">${esc4(l)}</option>`).join("") + `<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option><option value="cmp">${tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC")}</option>`;
+    sel.innerHTML = `<option value="" hidden>${tr("\u2699 \u5408\u6210", "\u2699 Synthesize")}</option>` + flow(flowTarget() === "asic").map(([k, l]) => `<option value="${k}">${esc5(l)}</option>`).join("") + `<option disabled>\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</option><option value="cmp">${tr("\u21C4 FPGA vs ASIC \u6BD4\u8F03", "\u21C4 FPGA vs ASIC")}</option>`;
     syncStage();
   }
   function syncStage() {
@@ -6231,7 +6650,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
     const sel = $2("flowStage");
     sel.value = [...sel.options].some((o) => o.value === k) ? k : "";
     const label = sel.value ? sel.selectedOptions[0].textContent : "";
-    $2("synCrumb").innerHTML = `<span class="c" data-c="synthTop">${esc4(synthTop())}</span><span class="sep">\u203A</span>` + (k === "cmp" ? "" : `<span class="c" data-c="flowTarget">${flowTarget() === "asic" ? flowPdk() === "sky130" ? "ASIC \xB7 SKY130" : "ASIC" : "FPGA"}</span><span class="sep">\u203A</span>`) + `<span class="c last" data-c="flowStage">${esc4(label)}</span>`;
+    $2("synCrumb").innerHTML = `<span class="c" data-c="synthTop">${esc5(synthTop())}</span><span class="sep">\u203A</span>` + (k === "cmp" ? "" : `<span class="c" data-c="flowTarget">${flowTarget() === "asic" ? flowPdk() === "sky130" ? "ASIC \xB7 SKY130" : "ASIC" : "FPGA"}</span><span class="sep">\u203A</span>`) + `<span class="c last" data-c="flowStage">${esc5(label)}</span>`;
     $2("synDl").classList.toggle("hidden", ![...$2("synDlMenu").children].some((b) => !b.classList.contains("hidden")));
   }
   function synthStatus() {
@@ -6395,10 +6814,10 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
     if (machineCfg()?.files && boardCmd(proj.active ?? "")) runOnBoard();
     else runTests();
   }
-  var uiMode = load("mode", "basic");
+  var uiMode = load2("mode", "basic");
   function setMode(m) {
     uiMode = m;
-    save("mode", m);
+    save2("mode", m);
     applyMode();
   }
   function applyMode() {
@@ -6463,10 +6882,10 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
     const items = groups.flatMap(([, it]) => it);
     const m = $2("mainMenu");
     let k = 0;
-    m.innerHTML = groups.map(([name, it]) => `<div class="sec">${esc4(name)}</div>` + it.map((x) => {
+    m.innerHTML = groups.map(([name, it]) => `<div class="sec">${esc5(name)}</div>` + it.map((x) => {
       const on = c[x.act].on;
       const star = on && x.act === first && !x.alt ? `<i>${tr("\u5EFA\u8B70", "suggested")}</i>` : "";
-      return `<button class="mi${on ? "" : " off"}" data-k="${k++}"><b>${esc4(x.label)}${star}</b><span>${esc4(on ? x.hint : c[x.act].why ?? "")}</span></button>`;
+      return `<button class="mi${on ? "" : " off"}" data-k="${k++}"><b>${esc5(x.label)}${star}</b><span>${esc5(on ? x.hint : c[x.act].why ?? "")}</span></button>`;
     }).join("")).join("") + `<button class="mi foot" data-k="mode"><b>${uiMode === "basic" ? tr("\u9032\u968E \u25B8 \u6A19\u984C\u5217\u986F\u793A\u6240\u6709\u63A7\u5236", "Advanced \u25B8 every control in the title bar") : tr("\u25C2 \u7C21\u6613\uFF1A\u53EA\u7559\u4E3B\u6309\u9215", "\u25C2 Simple: only the main button")}</b></button>`;
     m.classList.remove("hidden");
     const r = $2("mainAct").getBoundingClientRect();
@@ -6575,7 +6994,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
   function showWhy(a, anchor) {
     const c = projCaps()[a];
     const pop = $2("capPop");
-    pop.innerHTML = `<b>${esc4(actName(a))} ${tr("\u4E0D\u80FD\u76F4\u63A5\u7528", "is not available")}</b><p>${esc4(c.why ?? "")}</p>` + (c.fix?.length ? `<div class="fixes">${c.fix.map((f) => `<button class="tb-btn" data-fix="${f}">${esc4(fixName(f))}</button>`).join("")}</div>` : "");
+    pop.innerHTML = `<b>${esc5(actName(a))} ${tr("\u4E0D\u80FD\u76F4\u63A5\u7528", "is not available")}</b><p>${esc5(c.why ?? "")}</p>` + (c.fix?.length ? `<div class="fixes">${c.fix.map((f) => `<button class="tb-btn" data-fix="${f}">${esc5(fixName(f))}</button>`).join("")}</div>` : "");
     pop.classList.remove("hidden");
     const r = anchor.getBoundingClientRect();
     pop.style.top = `${r.bottom + 6}px`;
@@ -6597,7 +7016,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     g.classList.toggle("hidden", !show);
     if (!show) return;
     const ci = capIn();
-    g.innerHTML = `<span class="lbl">${tr("\u5EFA\u8B70\u6B65\u9A5F", "Suggested steps")}</span>` + steps(ci).map((a, i) => `<button class="step${i ? "" : " first"}" data-step="${a}" title="${attr(actHint(a, ci))}"><b>${"\u2460\u2461\u2462"[i]} ${esc4(actName(a))}</b></button>`).join('<span class="arr">\u2192</span>') + `<button class="close" title="${attr(tr("\u95DC\u9589\uFF08\u547D\u4EE4\u9078\u55AE\u7684\u300C\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F\u300D\u53EF\u4EE5\u518D\u6253\u958B\uFF09", `Close (the command palette's "Show the suggested steps" brings it back)`))}">\xD7</button>`;
+    g.innerHTML = `<span class="lbl">${tr("\u5EFA\u8B70\u6B65\u9A5F", "Suggested steps")}</span>` + steps(ci).map((a, i) => `<button class="step${i ? "" : " first"}" data-step="${a}" title="${attr(actHint(a, ci))}"><b>${"\u2460\u2461\u2462"[i]} ${esc5(actName(a))}</b></button>`).join('<span class="arr">\u2192</span>') + `<button class="close" title="${attr(tr("\u95DC\u9589\uFF08\u547D\u4EE4\u9078\u55AE\u7684\u300C\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F\u300D\u53EF\u4EE5\u518D\u6253\u958B\uFF09", `Close (the command palette's "Show the suggested steps" brings it back)`))}">\xD7</button>`;
   }
   function openEmu() {
     const e = ensureEmu();
@@ -6717,8 +7136,8 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     return board;
   }
   async function flashBoard() {
-    const top = synthTop();
-    if (!top) {
+    const top2 = synthTop();
+    if (!top2) {
       alert(tr("\u6C92\u6709\u53EF\u5408\u6210\u7684\u6A21\u7D44\uFF08#[test] \u6A21\u7D44\u4E0D\u80FD\u71D2\u9304\uFF09", "No synthesizable module (#[test] modules cannot be flashed)"));
       return;
     }
@@ -6743,14 +7162,16 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
         program = r.bin;
       }
       const files = proj.files.filter((f) => f.name.endsWith(".veryl"));
-      const hw = JSON.stringify([files, top, pcfOf(proj) ?? "", board.mode]);
+      const pcb = proj.files.find((f) => f.name.endsWith(".board"))?.src ?? null;
+      board.setPcb(pcb);
+      const hw = JSON.stringify([files, top2, pcfOf(proj) ?? "", board.mode, pcb]);
       if (program && hw === boardHw && board.loaded?.program_mem) {
         await board.program(program);
         $2("sbTest").textContent = tr(`\u26A1 \u65B0\u7A0B\u5F0F\uFF08${cprog.size} \u4F4D\u5143\u7D44\uFF09\u5DF2\u653E\u9032\u865B\u64EC\u677F\u7684 block RAM`, `\u26A1 The new program (${cprog.size} bytes) is in the board's block RAM`);
         setBusy(false);
         return;
       }
-      const info = await board.flash(files, top, pcfOf(proj), program);
+      const info = await board.flash(files, top2, pcfOf(proj), program);
       boardHw = hw;
       $2("sbTest").textContent = program ? tr(`\u26A1 ${info.top} \u548C C \u7A0B\u5F0F\uFF08${cprog.size} \u4F4D\u5143\u7D44\uFF09\u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} and the C program (${cprog.size} bytes) flashed to the virtual board`) : tr(`\u26A1 ${info.top} \u5DF2\u71D2\u9304\u5230\u865B\u64EC\u677F`, `\u26A1 ${info.top} flashed to the virtual board`);
       problems = problems.filter((p) => p.from !== "run");
@@ -6769,6 +7190,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
   function panel(p) {
     curPanel = p;
     collapsePanel(false);
+    panelWin?.unfold();
     for (const b of $2("panelTabs").querySelectorAll("button[data-panel]")) b.classList.toggle("cur", b.dataset.panel === p);
     for (const v of ["problems", "output", "results", "wave"]) $2("p-" + v).classList.toggle("hidden", v !== p);
     $2("waveTop").classList.toggle("hidden", p !== "wave" || vcds.length < 2);
@@ -6793,7 +7215,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
   }
   function resizer(id, prop, axis, min, max, invert = false) {
     const r = $2(id);
-    const saved = load(prop, 0);
+    const saved = load2(prop, 0);
     if (saved) document.body.style.setProperty(prop, saved + "px");
     r.addEventListener("pointerdown", (e) => {
       e.preventDefault();
@@ -6810,7 +7232,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
         const d = (axis === "x" ? ev.clientX : ev.clientY) - start2;
         const v = Math.max(min, Math.min(max(), s0 + (invert ? -d : d)));
         document.body.style.setProperty(prop, v + "px");
-        save(prop, v);
+        save2(prop, v);
       };
       const up = () => {
         r.classList.remove("drag");
@@ -6822,12 +7244,22 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     });
     r.addEventListener("dblclick", () => {
       document.body.style.removeProperty(prop);
-      save(prop, 0);
+      save2(prop, 0);
     });
+  }
+  var panelWin = null;
+  function floatWindows() {
+    panelWin = floatWin($2("panel"), $2("panelTabs"), {
+      key: "panel",
+      auto: () => window.innerHeight < 700,
+      folded: true,
+      onChange: (f) => $2("panelResize").classList.toggle("hidden", f)
+    });
+    floatWin($2("synSideWin"), $2("synSideH"), { key: "flow.side", auto: () => window.innerWidth < 1e3 });
   }
   function collapsePanel(on) {
     const c = $2("panel").classList.toggle("collapsed", on);
-    save("panelCollapsed", c);
+    save2("panelCollapsed", c);
   }
   function stepStage(d) {
     const keys = flow(flowTarget() === "asic").map(([k]) => k);
@@ -6886,11 +7318,11 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     const q = $2("palIn").value;
     const isCmd = q.startsWith(">");
     const words = q.replace(/^>/, "").trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const all = isCmd ? commands() : [
+    const all2 = isCmd ? commands() : [
       ...proj.files.map((f) => ({ label: f.name, key: tr("\u6A94\u6848", "file"), run: () => openFile(f.name) })),
       ...declarations().map((d) => ({ label: `${d.name}`, key: `${d.kind} \xB7 ${d.file}:${d.line}`, run: () => openFile(d.file, d.line) }))
     ];
-    palItems = all.filter((c) => words.every((w) => (c.label + " " + (c.key ?? "")).toLowerCase().includes(w))).slice(0, 60);
+    palItems = all2.filter((c) => words.every((w) => (c.label + " " + (c.key ?? "")).toLowerCase().includes(w))).slice(0, 60);
     palSel = 0;
     drawPal();
   }
@@ -6900,7 +7332,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     palItems.forEach((c, i) => {
       const d = document.createElement("div");
       d.className = i === palSel ? "cur" : "";
-      d.innerHTML = `<span>${esc4(c.label)}</span>${c.key ? `<span class="k">${esc4(c.key)}</span>` : ""}`;
+      d.innerHTML = `<span>${esc5(c.label)}</span>${c.key ? `<span class="k">${esc5(c.key)}</span>` : ""}`;
       d.onmousedown = (e) => {
         e.preventDefault();
         closePal();
@@ -7074,7 +7506,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("tbMore").onclick = () => moreMenu(!$2("titlebar").classList.contains("more"));
     for (const b of $2("panelTabs").querySelectorAll("button[data-panel]")) b.onclick = () => panel(b.dataset.panel);
     $2("panelToggle").onclick = () => collapsePanel();
-    if (load("panelCollapsed", false)) $2("panel").classList.add("collapsed");
+    if (load2("panelCollapsed", false)) $2("panel").classList.add("collapsed");
     $2("sbProblems").onclick = () => panel("problems");
     $2("projSel").onchange = () => switchProject($2("projSel").value);
     $2("projNew").onclick = newProject;
@@ -7092,22 +7524,23 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("waveTop").onchange = () => wave?.set(vcds.find((v) => v.top === $2("waveTop").value)?.text ?? null);
     resizer("sideResize", "--sidew", "x", 150, () => window.innerWidth * 0.5);
     resizer("panelResize", "--panelh", "y", 60, () => window.innerHeight * 0.75, true);
+    floatWindows();
     new MutationObserver(synthStatus).observe($2("synStats"), { childList: true, subtree: true, characterData: true });
   }
   function initLang() {
-    const saved = load("lang", "");
+    const saved = load2("lang", "");
     setLang(LANGS.some(([l]) => l === saved) ? saved : fromLocale(navigator.language));
     translateDom(document.body);
     const sel = $2("langSel");
     sel.innerHTML = LANGS.map(([l, name]) => `<option value="${l}">${name}</option>`).join("");
-    sel.value = LANGS.find(([l]) => l === load("lang", ""))?.[0] ?? fromLocale(navigator.language);
+    sel.value = LANGS.find(([l]) => l === load2("lang", ""))?.[0] ?? fromLocale(navigator.language);
     sel.onchange = () => switchLang(sel.value);
   }
   function switchLang(l) {
     clearTimeout(saveTimer);
-    save("projects", projects);
-    save("cur", proj.id);
-    save("lang", l);
+    save2("projects", projects);
+    save2("cur", proj.id);
+    save2("lang", l);
     location.reload();
   }
   async function boot() {
@@ -7120,7 +7553,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     const labCode = /lab=([\w-]+)/.exec(hash)?.[1];
     const firstVisit = !projects.length;
     if (firstVisit) projects.push(fromExample(examples().find((e) => e.id === (exId ?? "tut_blinky")) ?? examples()[0]));
-    proj = projects.find((p) => p.id === load("cur", "")) ?? projects[0];
+    proj = projects.find((p) => p.id === load2("cur", "")) ?? projects[0];
     if (firstVisit && !exId && !labCode) {
       proj.active = WELCOME;
       if (phone()) $2("panel").classList.add("collapsed");

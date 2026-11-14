@@ -92,6 +92,10 @@ Only `--top`.
 | `--mem BYTES` | RAM size (default 8192) |
 | `--linux` | a static executable for the RV64 board's Linux (`-o` defaults to the filename without `.c`) |
 
+### `reda board [--parts] FILE.board`
+
+A board's parts and nets and its electrical rule check (ERC); errors make the exit code 1. `--parts` lists the part library and the host connectors. The format: [chapter 12](12-board.md).
+
 ### `reda pdk [check] [DIR]`
 
 DIR defaults to looking for `$VERYL_EDA_SKY130`, then `~/sky130hd`.

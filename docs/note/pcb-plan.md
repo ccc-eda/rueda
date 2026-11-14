@@ -105,6 +105,28 @@ plug J1 icebreaker.PMOD1A      # 模擬時插在哪裡
 - `reda board x.board`：列出零件、線、ERC 結果。
 - IDE：專案裡有 `.board` 檔時，虛擬 iCEBreaker 插上它；畫出模組上的 LED 與感測器（溫度可以拉）。
 
+### B1 的狀態（2026-11）
+
+完成：
+
+- `eda::pcb`（`desc`、`parts`、`erc`、`sim`）和 `fpga::board::Board::attach_pcb`；
+- `reda board`；
+- IDE 的模組卡片（LED、溫度滑桿、74HC595 的輸出、按鈕、ERC）；
+- 線路圖（`web/src/ide/netview.ts`）：零件與線，模擬時依電位上色，是之後電路圖（符號、座標）與 PCB 預覽的基礎；
+- 範例「實驗：I²C 溫度計」（`veryl/examples/thermo.veryl`、`thermo.board`）。
+
+測試：
+
+- `eda` 的單元測試：解析、ERC、I²C 讀 LM75、74HC595、按鈕；
+- `veryl/synth` 的 `board_pcb_thermometer`：Thermo 合成成 iCE40 網表，在虛擬板上讀溫度、顯示在 LED；
+- npm test：同一個範例走 IDE 的核心 API。
+
+還沒做：
+
+- CPU 模式（C 程式）帶 `.board`；
+- 電路圖符號與手動擺放（B2，和匯出 KiCad 一起）；實體板子的預覽（B3）；
+- 更多零件（`mcp3008`、`ssd1306`、`at24c`）。
+
 ## 不做 / 先不做
 
 - 類比模擬（SPICE）：板子的電氣模型是數位的；需要時把 ngspice 當成外部工具。

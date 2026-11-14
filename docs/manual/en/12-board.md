@@ -85,6 +85,34 @@ Warnings are shown when:
 
 Pins already occupied by a PMOD module cannot be wired to the breadboard.
 
+## Your own module: `.board` 🔌
+
+When a project has a `.board` file, ⚡ Flash plugs it into the virtual board as **a PMOD module of your own design**:
+its parts and nets are simulated as the file says, and a card next to the board shows it (LEDs, a temperature to drag,
+a shift register's outputs, buttons, and the electrical rule check, ERC).
+Example: "Lab: an I²C thermometer" (`veryl/examples/thermo.board`): an LM75 temperature sensor on I²C and a 74HC595
+with 8 LEDs.
+
+```text
+board "PMOD thermometer"
+part J1 pmod                     # connector: pins 1-4, 7-10 signals, 5 / 11 GND, 6 / 12 3V3
+part U1 lm75 temp=23.5           # address 0x48 + A2A1A0
+part R1 res 4.7k
+net SCL J1.1:od U1.SCL R1.1      # :od = the FPGA drives it open drain (an output 1 lets go)
+net 3V3 J1.6 R1.2 U1.VCC
+net GND J1.5 U1.GND U1.A0 U1.A1 U1.A2
+plug J1 icebreaker.PMOD1A        # which header it goes into
+```
+
+- **Parts**: `res`, `led`, `btn`, `pmod`, `lm75` (I²C temperature sensor), `74hc595` (shift register); `reda board --parts` lists their pins.
+- **Levels**: anything pulling low makes 0 (open drain, an I²C ACK); else a push-pull 1 is 1; else a resistor decides (pull-ups, an LED's series resistor); else the net floats and the FPGA reads 1.
+- **I²C**: the FPGA has no tri-state pins here, so SDA takes two pins: an output (`:od`, 0 = pull low, 1 = let go) and an input reading the same net back.
+- **ERC**: outputs fighting, open drain without a pull-up, floating inputs, unconnected power pins, LEDs without a series resistor, connectors plugged into nothing. On the command line: `reda board thermo.board`.
+- **🗺 Nets** (a button on the card): a floating window drawing every part and the nets between them. Connectors on the left, ICs in the middle (inputs left, outputs right), resistors and LEDs on the right; 3V3 / GND are labels. While the board runs, each net takes its level's color (1 orange, 0 blue, floating dashed) and LEDs glow by their brightness; hovering a net shows its pins and level, and nets with an ERC problem are marked ⚠.
+- The CPU mode (C programs) does not plug the `.board` module in yet.
+
+This is the first step of the PCB plan (`docs/note/pcb-plan.md`): later the same `.board` exports a KiCad project and Gerbers.
+
 ## Sharing labs
 
 A lab contains the files, `pins.pcf`, modules, and the breadboard. Two ways to share:

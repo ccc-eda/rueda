@@ -544,7 +544,7 @@ fn board_program(v: &Value) -> R<Value> {
                     let mut x = x.borrow_mut();
                     let (_, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
                     *b = cpu_board(&bytes, mem, pcf.as_deref().unwrap_or(""))?;
-                    attach(b, periph);
+                    attach(b, periph)?;
                     Ok(())
                 })?;
                 Err("cpu".to_string())
@@ -572,7 +572,7 @@ fn board_program(v: &Value) -> R<Value> {
         let warnings = b.warnings.clone();
         *b = icebreaker::board(d.clone(), pcf.as_deref())?;
         b.warnings = warnings;
-        attach(b, periph);
+        attach(b, periph)?;
         *od = d;
         *opcf = pcf;
         Ok(())
@@ -621,12 +621,15 @@ fn board_periph(v: &Value) -> R<Value> {
         b.uart = None;
         b.segs.clear();
         b.vga = None;
-        attach(b, periph);
-        Ok(json!({ "ok": true }))
+        b.pcb = None;
+        let pcb = attach(b, periph)?;
+        Ok(json!({ "ok": true, "pcb": pcb }))
     })
 }
 
-fn attach(b: &mut eda::fpga::board::Board, p: &Value) {
+/// plug the peripherals in; a `.board` (`pcb`: its text) is plugged into its PMOD header:
+/// returns its parts and its electrical rule check (null without one)
+fn attach(b: &mut eda::fpga::board::Board, p: &Value) -> R<Value> {
     let pin = |v: &Value| v.as_u64().map(|p| p as u32);
     let pins = |v: Option<&Value>| -> Vec<u32> { v.and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.as_u64().map(|p| p as u32)).collect()).unwrap_or_default() };
     if let Some(u) = p.get("uart").filter(|u| !u.is_null()) {
@@ -642,6 +645,18 @@ fn attach(b: &mut eda::fpga::board::Board, p: &Value) {
     if let Some(g) = p.get("vga").filter(|g| !g.is_null()) {
         b.attach_vga(g.get("hs").and_then(pin).unwrap_or(0), g.get("vs").and_then(pin).unwrap_or(0), &pins(g.get("r")), &pins(g.get("g")), &pins(g.get("b")));
     }
+    let Some(src) = p.get("pcb").and_then(|s| s.as_str()) else { return Ok(Value::Null) };
+    let pcb = eda::pcb::Board::parse(src).map_err(|e| format!("board.board: {}", e))?;
+    let erc: Vec<Value> = eda::pcb::erc::check(&pcb).iter().map(|d| json!({ "error": d.error, "msg": d.msg })).collect();
+    // each part with its pins [number, name, type]; each net with its pins [part index, pin number] and its rail
+    let parts: Vec<Value> = pcb.desc.parts.iter().zip(&pcb.kinds).map(|(p, k)| json!({ "id": p.id, "kind": p.kind, "value": p.value,
+        "pins": k.pins.iter().map(|(n, name, t)| json!([n, name, t.name()])).collect::<Vec<_>>() })).collect();
+    let nets: Vec<Value> = pcb.nets.iter().enumerate().map(|(i, n)| json!({ "name": n.name, "rail": eda::pcb::erc::rail(&pcb, i),
+        "pins": n.pins.iter().map(|p| json!([p.part, p.num])).collect::<Vec<_>>() })).collect();
+    let sim = eda::pcb::sim::Sim::new(&pcb)?;
+    let pins: Vec<u32> = sim.hosts.iter().map(|h| h.pin).collect();
+    b.attach_pcb(sim);
+    Ok(json!({ "name": pcb.desc.name, "parts": parts, "nets": nets, "erc": erc, "pins": pins }))
 }
 
 /// the design's port bits as the pin file names them: [{name, dir}]
@@ -699,6 +714,17 @@ fn board_run(v: &Value) -> R<Value> {
                 b.set_pin(pin, level);
             }
         }
+        // the plugged board: buttons [[id, down]], temperatures [[id, °C]]
+        if b.pcb.is_some() {
+            let list = |k: &str| v.get(k).and_then(|a| a.as_array()).cloned().unwrap_or_default();
+            let (press, temp) = (list("pcb_press"), list("pcb_temp"));
+            if !press.is_empty() || !temp.is_empty() {
+                let sim = &mut b.pcb.as_mut().unwrap().sim;
+                for x in press { sim.press(x.get(0).and_then(|i| i.as_str()).unwrap_or(""), x.get(1).and_then(|d| d.as_bool()).unwrap_or(false))?; }
+                for x in temp { sim.set_temp(x.get(0).and_then(|i| i.as_str()).unwrap_or(""), x.get(1).and_then(|t| t.as_f64()).unwrap_or(25.0))?; }
+                b.settle_pcb(b.cycle, true);
+            }
+        }
         let cycles = v.get("cycles").and_then(|c| c.as_u64()).unwrap_or(0);
         let evals0 = b.eng.evals;
         b.run(cycles);
@@ -716,7 +742,17 @@ fn board_run(v: &Value) -> R<Value> {
             (Some(g), _) => Some(json!({ "n": g.frames })),
             _ => None,
         };
-        Ok(json!({ "ok": true, "cycle": b.cycle, "window": window, "duty": duty, "evals": b.eng.evals - evals0, "segs": segs, "edges": edges, "uart": uart, "vga": vga }))
+        let now = b.cycle;
+        // every net's level: 1, 0, null (floating)
+        let pcb_levels = b.pcb.as_ref().map(|p| p.sim.levels().iter().map(|l| json!(l.map(|v| v as u8))).collect::<Vec<_>>());
+        let pcb = b.pcb.as_mut().map(|p| {
+            use eda::pcb::sim::Show;
+            p.sim.take_show(now).into_iter().map(|(id, s)| match s {
+                Show::Led(d) => json!([id, "led", d]), Show::Button(d) => json!([id, "btn", d]),
+                Show::Temp(t) => json!([id, "temp", t]), Show::Latch(l) => json!([id, "latch", l]),
+            }).collect::<Vec<_>>()
+        });
+        Ok(json!({ "ok": true, "cycle": b.cycle, "window": window, "duty": duty, "evals": b.eng.evals - evals0, "segs": segs, "edges": edges, "uart": uart, "vga": vga, "pcb": pcb, "pcb_levels": pcb_levels }))
     })
 }
 
@@ -727,7 +763,7 @@ fn board_reset() -> R<Value> {
         let (d, pcf, b, periph) = x.as_mut().ok_or("no design on the virtual board")?;
         let cpu = LOADED.with(|l| match l.borrow().as_ref() { Some(Loaded::Cpu(p, m)) => Some((p.clone(), *m)), _ => None });
         *b = match cpu { Some((p, m)) => cpu_board(&p, m, pcf.as_deref().unwrap_or(""))?, None => eda::fpga::board::icebreaker::board(d.clone(), pcf.as_deref())? };
-        attach(b, periph);
+        attach(b, periph)?;
         Ok(json!({ "ok": true, "cycle": 0 }))
     })
 }

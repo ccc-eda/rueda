@@ -22,6 +22,16 @@ pub enum PinType {
     Signal,
 }
 
+impl PinType {
+    /// a short name: supply, power, in, out, od, odio, passive, signal
+    pub fn name(self) -> &'static str {
+        match self {
+            PinType::Supply(_) => "supply", PinType::Power(_) => "power", PinType::Input => "in", PinType::Output => "out",
+            PinType::OpenDrain => "od", PinType::OpenDrainIo => "odio", PinType::Passive => "passive", PinType::Signal => "signal",
+        }
+    }
+}
+
 pub struct Kind {
     pub name: &'static str,
     /// (number, name, type)

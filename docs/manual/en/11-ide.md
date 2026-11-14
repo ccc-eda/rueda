@@ -32,6 +32,22 @@ The whole toolchain (simulator, synthesizer, FPGA and ASIC flows, C compiler) is
 
 The interface comes in Traditional Chinese, English, and Simplified Chinese (menu at the right of the title bar).
 
+### Floating windows
+
+When space is short, four blocks can leave their place and float over the page instead of squeezing what is beside them:
+
+| Window | Where | Floats by default when |
+|---|---|---|
+| The panel (Problems, Output, Test results, Waveform) | at the bottom of every page | the window is less than 700 px high |
+| Details (ports, statistics, legend) | right of the synthesis flow page | the window is less than 1000 px wide |
+| The board | right of the emulator page | the window is less than 1100 px wide |
+| Peripherals (USB terminal, PMOD modules, the `.board` module) | right of the virtual board page | the window is less than 1100 px wide |
+
+- ⧉ at the right of the title bar floats it, ⇲ docks it back; ▁ folds it to its title bar, ▢ unfolds it.
+- Drag the title bar to move it, the bottom-right corner to resize it; a click brings it to the front.
+- Each window remembers its choice, place and size; when the browser window shrinks, floating windows stay on the page.
+
+
 ### Main button and menu (v2.27)
 
 The blue button at the far left of the title bar is the **main button**: the recommended next step for this project. It follows the project:

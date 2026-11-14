@@ -18,6 +18,7 @@ import { fxFingerprint } from '../fx_machine';
 import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
+import { FloatWin, floatWin } from './floatwin';
 import { Act, actHint, actName, badges, CapInput, caps, Fix, start, steps } from './caps';
 
 declare const VERYL_WASM_B64: string;
@@ -1618,7 +1619,10 @@ async function flashBoard(): Promise<void> {
       program = r.bin;
     }
     const files = proj.files.filter(f => f.name.endsWith('.veryl'));
-    const hw = JSON.stringify([files, top, pcfOf(proj) ?? '', board!.mode]);
+    // a .board in the project is plugged into its PMOD header (eda::pcb)
+    const pcb = proj.files.find(f => f.name.endsWith('.board'))?.src ?? null;
+    board!.setPcb(pcb);
+    const hw = JSON.stringify([files, top, pcfOf(proj) ?? '', board!.mode, pcb]);
     if (program && hw === boardHw && board!.loaded?.program_mem) {
       await board!.program(program);
       $('sbTest').textContent = tr(`⚡ 新程式（${cprog!.size} 位元組）已放進虛擬板的 block RAM`, `⚡ The new program (${cprog!.size} bytes) is in the board's block RAM`);
@@ -1649,6 +1653,7 @@ let curPanel = 'problems';
 function panel(p: string): void {
   curPanel = p;
   collapsePanel(false);
+  panelWin?.unfold();
   for (const b of $('panelTabs').querySelectorAll<HTMLElement>('button[data-panel]')) b.classList.toggle('cur', b.dataset.panel === p);
   for (const v of ['problems', 'output', 'results', 'wave']) $('p-' + v).classList.toggle('hidden', v !== p);
   $('waveTop').classList.toggle('hidden', p !== 'wave' || vcds.length < 2);
@@ -1704,6 +1709,16 @@ function resizer(id: string, prop: string, axis: 'x' | 'y', min: number, max: ()
 }
 
 /** collapse / open the bottom panel (no argument: toggle); the choice is kept */
+/** the floating windows of the IDE's own layout (floatwin.ts): the bottom panel, the synthesis page's details */
+let panelWin: FloatWin | null = null;
+function floatWindows(): void {
+  panelWin = floatWin($('panel'), $('panelTabs'), {
+    key: 'panel', auto: () => window.innerHeight < 700, folded: true,
+    onChange: (f) => $('panelResize').classList.toggle('hidden', f),
+  });
+  floatWin($('synSideWin'), $('synSideH'), { key: 'flow.side', auto: () => window.innerWidth < 1000 });
+}
+
 function collapsePanel(on?: boolean): void {
   const c = $('panel').classList.toggle('collapsed', on);
   save('panelCollapsed', c);
@@ -1926,6 +1941,7 @@ function wire(): void {
   $<HTMLSelectElement>('waveTop').onchange = () => wave?.set(vcds.find(v => v.top === $<HTMLSelectElement>('waveTop').value)?.text ?? null);
   resizer('sideResize', '--sidew', 'x', 150, () => window.innerWidth * 0.5);
   resizer('panelResize', '--panelh', 'y', 60, () => window.innerHeight * 0.75, true);
+  floatWindows();
   // the flow's numbers in the status bar
   new MutationObserver(synthStatus).observe($('synStats'), { childList: true, subtree: true, characterData: true });
 }

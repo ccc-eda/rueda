@@ -92,6 +92,10 @@ reda <子指令> [選項] FILE.veryl...
 | `--mem BYTES` | RAM 大小（預設 8192） |
 | `--linux` | RV64 開發板 Linux 的靜態執行檔（`-o` 預設是去掉 `.c` 的檔名） |
 
+### `reda board [--parts] FILE.board`
+
+板子的零件、線路與電氣規則檢查（ERC）；有錯誤時結束碼是 1。`--parts` 列出零件庫與可以插的排針。格式見[第 12 章](12-board.md)。
+
 ### `reda pdk [check] [DIR]`
 
 DIR 預設依序找 `$VERYL_EDA_SKY130`、`~/sky130hd`。

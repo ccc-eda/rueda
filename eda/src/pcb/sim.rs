@@ -153,6 +153,9 @@ impl Sim {
 
     pub fn level(&self, net: usize) -> Option<bool> { self.level[net] }
 
+    /// every net's level (None: floating), in the board's net order
+    pub fn levels(&self) -> &[Option<bool>] { &self.level }
+
     fn part(&self, id: &str) -> R<usize> { self.ids.iter().position(|x| x == id).ok_or_else(|| format!("no part {}", id)) }
 
     /// press or release button `id`

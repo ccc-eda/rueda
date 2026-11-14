@@ -8,6 +8,8 @@ import type { Core } from '../client';
 import { tr } from '../i18n';
 import { Part, solve } from './bbmodel';
 import { Breadboard } from './breadboard';
+import { FloatWin, floatWin } from './floatwin';
+import { NetView, NvBoard } from './netview';
 
 interface PinInfo { pin: number; name: string; kind: string; level: boolean; input: string | null; output: string | null }
 interface LoadInfo {
@@ -28,7 +30,13 @@ interface RunResult {
   segs: number[][][]; edges: [number, number][];
   uart: { rx: number[]; errors: number; pending: number } | null;
   vga: { n: number; w?: number; h?: number; rle?: string } | null;
+  /** the plugged board's parts: [id, 'led', duty] / [id, 'btn', pressed] / [id, 'temp', °C] / [id, 'latch', byte] */
+  pcb: [string, string, number | boolean][] | null;
+  /** every net's level: 1, 0, null (floating) */
+  pcb_levels: (number | null)[] | null;
 }
+/** a plugged .board (eda::pcb): its parts, its electrical rule check, the FPGA pins it uses */
+interface PcbInfo extends NvBoard { name: string; pins: number[] }
 
 /** what is plugged into the board: the USB terminal and a module on each PMOD */
 export interface BoardSetup { uart: boolean; baud: number; pmod1a: string; pmod1b: string; breadboard?: boolean; bb?: Part[]; mode?: string }
@@ -88,8 +96,8 @@ export class VirtualBoard {
         <label class="vb-chk"><input type="checkbox" data-a="breadboard"> ${tr('🧪 麵包板', '🧪 Breadboard')}</label>
       </div>
       <div class="vb-main">
-        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg><div class="bb hidden"></div></div>
-        <div class="vb-cards"></div>
+        <div class="vb-stage"><svg class="vb-svg" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg"></svg><div class="bb hidden"></div><div class="vb-net hidden"><div class="vb-net-h"><span class="fw-t">⠿ ${tr('線路圖', 'Nets')}</span></div><div class="vb-net-body"></div></div></div>
+        <div class="vb-dock hidden"><div class="vb-dock-h"><span class="fw-t">⠿ ${tr('周邊', 'Peripherals')}</span></div><div class="vb-cards"></div></div>
       </div>
       <div class="vb-foot"></div>
       <div class="vb-pins hidden"></div>`;
@@ -108,6 +116,7 @@ export class VirtualBoard {
       this.solveBB();
       if (!this.running) this.tick(0);
     };
+    this.dock();
     host.addEventListener('dragover', e => { e.preventDefault(); host.classList.add('drop'); });
     host.addEventListener('dragleave', () => host.classList.remove('drop'));
     host.addEventListener('drop', e => { e.preventDefault(); host.classList.remove('drop'); const f = e.dataTransfer?.files?.[0]; if (f) this.loadBin(f); });
@@ -130,6 +139,16 @@ export class VirtualBoard {
 
   private setup: BoardSetup = { ...DEFAULT_SETUP };
   private bb!: Breadboard;
+
+  /** the peripherals' cards: beside the board, or a floating window (floatwin.ts) */
+  private dock(): void {
+    floatWin(this.q<HTMLElement>('.vb-dock'), this.q<HTMLElement>('.vb-dock-h'), { key: 'board.cards', auto: () => window.innerWidth < 1100 });
+    this.netWin = floatWin(this.q<HTMLElement>('.vb-net'), this.q<HTMLElement>('.vb-net-h'), { key: 'board.nets', auto: () => true });
+    this.nets = new NetView(this.q<HTMLElement>('.vb-net-body'));
+  }
+  /** the plugged board's nets (netview.ts), in its own window */
+  private nets!: NetView;
+  private netWin!: FloatWin;
   private duty = new Map<number, number>();
   private bbIn = new Map<number, number>();
   private vgaSeen = 0;
@@ -185,11 +204,83 @@ export class VirtualBoard {
       seg: segs,
       // PmodVGA: 1A pins 1-4 R0-R3, 7-10 B0-B3; 1B pins 1-4 G0-G3, 7 HS, 8 VS (colors msb first)
       vga: s.pmod1a === 'vga' ? { hs: b[4], vs: b[5], r: [a[3], a[2], a[1], a[0]], g: [b[3], b[2], b[1], b[0]], b: [a[7], a[6], a[5], a[4]] } : null,
+      pcb: this.pcbSrc,
     };
   }
 
+  /** the project's .board (null: none): plugged in when the board powers up */
+  private pcbSrc: string | null = null;
+  private pcbInfo: PcbInfo | null = null;
+  private pcbPress: [string, boolean][] = [];
+  private pcbTemp: [string, number][] = [];
+  setPcb(src: string | null): void { this.pcbSrc = src; }
+
+  /** the plugged board's card: its LEDs, buttons, sensors and shift registers, and its ERC */
+  private pcbCard(): string {
+    const p = this.pcbInfo;
+    if (!p) return '';
+    const of = (k: string) => p.parts.filter(x => x.kind === k);
+    let h = `<div class="vb-card vb-pcb"><div class="vb-card-h">🔌 ${esc(p.name || '.board')}　<span class="vb-dim">${tr('專案的 .board 插在', 'the project\'s .board on')} PMOD（${tr('腳', 'pins')} ${p.pins.join(' ')}）</span><button class="tb-btn ghost" data-a="netview" title="${tr('零件和線路，線依電位上色', 'The parts and nets, each net colored by its level')}">🗺 ${tr('線路圖', 'Nets')}</button></div>`;
+    const leds = of('led');
+    if (leds.length) h += `<div class="vb-led8">${leds.map(l => `<span class="vb-l8" data-pl="${esc(l.id)}" title="${esc(l.id)}">${esc(l.id)}</span>`).join('')}</div>`;
+    for (const t of of('lm75')) h += `<label class="vb-pcb-row">${esc(t.id)} LM75 <input type="range" min="-20" max="60" step="0.5" value="25" data-pt="${esc(t.id)}"> <b data-ptv="${esc(t.id)}">25.0</b> °C</label>`;
+    for (const r of of('74hc595')) h += `<div class="vb-pcb-row">${esc(r.id)} 74HC595　Q7…Q0 = <code data-pq="${esc(r.id)}">00000000</code></div>`;
+    const btns = of('btn');
+    if (btns.length) h += `<div class="vb-pcb-row">${btns.map(b => `<button class="vb-sw" data-pb="${esc(b.id)}" title="${tr('按住', 'hold')}">${esc(b.id)}</button>`).join('')}</div>`;
+    if (p.erc.length) h += `<div class="vb-pcb-erc">${p.erc.map(d => `<div class="${d.error ? 'vb-err' : 'vb-dim'}">${d.error ? '✗' : '⚠'} ${esc(d.msg)}</div>`).join('')}</div>`;
+    else h += `<div class="vb-dim">ERC ✓</div>`;
+    return h + '</div>';
+  }
+
+  /** hook up the card's controls */
+  private pcbWire(box: HTMLElement): void {
+    const nv = box.querySelector<HTMLButtonElement>('[data-a=netview]');
+    if (nv) nv.onclick = () => {
+      const w = this.q<HTMLElement>('.vb-net');
+      w.classList.toggle('hidden');
+      if (!w.classList.contains('hidden')) { this.netWin.unfold(); this.netWin.clamp(); }
+    };
+    for (const el of box.querySelectorAll<HTMLInputElement>('[data-pt]')) {
+      el.oninput = () => {
+        const v = +el.value;
+        this.pcbTemp.push([el.dataset.pt!, v]);
+        const out = box.querySelector<HTMLElement>(`[data-ptv="${el.dataset.pt}"]`);
+        if (out) out.textContent = v.toFixed(1);
+        if (!this.running) this.tick(0);
+      };
+    }
+    for (const b of box.querySelectorAll<HTMLButtonElement>('[data-pb]')) {
+      const set = (down: boolean) => { if (b.classList.contains('on') === down) return; b.classList.toggle('on', down); this.pcbPress.push([b.dataset.pb!, down]); if (!this.running) this.tick(0); };
+      b.onpointerdown = e => { e.preventDefault(); set(true); };
+      b.onpointerup = () => set(false);
+      b.onpointerleave = () => set(false);
+    }
+  }
+
+  private showPcb(r: RunResult): void {
+    if (!r.pcb) return;
+    this.nets.update(r.pcb_levels, new Map(r.pcb.filter((x) => x[1] === 'led').map((x) => [x[0], x[2] as number])));
+    const box = this.q<HTMLElement>('.vb-cards');
+    for (const [id, kind, v] of r.pcb) {
+      if (kind === 'led') {
+        const el = box.querySelector<HTMLElement>(`[data-pl="${id}"]`);
+        const d = v as number;
+        if (el) el.style.setProperty('--lit', (d < 0.004 ? 0 : 0.2 + 0.8 * Math.sqrt(d)).toFixed(3));
+      } else if (kind === 'latch') {
+        const el = box.querySelector<HTMLElement>(`[data-pq="${id}"]`);
+        if (el) el.textContent = (v as number).toString(2).padStart(8, '0') + `  (${v as number})`;
+      } else if (kind === 'temp') {
+        const el = box.querySelector<HTMLInputElement>(`[data-pt="${id}"]`);
+        if (el && document.activeElement !== el && +el.value !== v) { el.value = String(v); const o = box.querySelector<HTMLElement>(`[data-ptv="${id}"]`); if (o) o.textContent = (v as number).toFixed(1); }
+      }
+    }
+  }
+
   private async attach(): Promise<void> {
-    await (await this.core()).call({ cmd: 'board_periph', ...this.periph() });
+    const r = await (await this.core()).call<{ pcb: PcbInfo | null }>({ cmd: 'board_periph', ...this.periph() });
+    this.pcbInfo = r.pcb;
+    if (r.pcb) this.nets.set(r.pcb); else this.q<HTMLElement>('.vb-net').classList.add('hidden');
+    this.cards();
     this.vgaSeen = 0;
     // switches drive their pins as they stand
     for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
@@ -211,8 +302,10 @@ export class VirtualBoard {
       if (m === 'vga') h += `<div class="vb-card"><div class="vb-card-h">${tr('VGA 螢幕', 'VGA monitor')}　<span class="vb-dim vb-vga-i"></span></div><canvas class="vb-vga" width="320" height="240"></canvas></div>`;
       if (m === 'buzzer') h += `<div class="vb-card"><div class="vb-card-h">${name}：${tr('蜂鳴器（腳 1）', 'buzzer (pin 1)')}　<label class="vb-chk"><input type="checkbox" data-a="sound"> ${tr('🔊 聲音', '🔊 sound')}</label></div><div class="vb-buzz" data-buzz="${pins[0]}">—</div></div>`;
     }
+    h += this.pcbCard();
     box.innerHTML = h;
-    box.classList.toggle('hidden', !h);
+    this.q<HTMLElement>('.vb-dock').classList.toggle('hidden', !h);
+    this.pcbWire(box);
     const tin = box.querySelector<HTMLInputElement>('.vb-tin');
     if (tin) tin.onkeydown = e => { if (e.key === 'Enter') { this.sendQ += tin.value; this.echoLocal(tin.value); tin.value = ''; if (!this.running) this.tick(0); } };
     const tc = box.querySelector<HTMLButtonElement>('[data-a=tclear]');
@@ -427,9 +520,12 @@ export class VirtualBoard {
     const uart_send = this.sendQ;
     this.sendQ = '';
     const wantFrame = this.setup.pmod1a === 'vga' && performance.now() - this.lastFrame > 150;
+    const pcb_press = this.pcbPress, pcb_temp = this.pcbTemp;
+    this.pcbPress = [];
+    this.pcbTemp = [];
     let r: RunResult;
     try {
-      r = await (await this.core()).call<RunResult>({ cmd: 'board_run', cycles: n, inputs, uart_send, ...(wantFrame ? { vga_seen: this.vgaSeen } : {}) });
+      r = await (await this.core()).call<RunResult>({ cmd: 'board_run', cycles: n, inputs, uart_send, pcb_press, pcb_temp, ...(wantFrame ? { vga_seen: this.vgaSeen } : {}) });
     } catch (e) {
       this.stat('✗ ' + String((e as Error).message ?? e));
       this.setRunning(false);
@@ -480,6 +576,7 @@ export class VirtualBoard {
     this.duty = new Map(r.duty);
     this.solveBB();
     this.showPeriph(r);
+    this.showPcb(r);
     for (const [pin, duty] of r.duty) {
       const p = this.info!.pins.find(x => x.pin === pin);
       if (!p) continue;

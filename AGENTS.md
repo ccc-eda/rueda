@@ -11,7 +11,7 @@ between the languages and the back end. **`eda/` must not depend on any language
 | Path | Crate (lib) | What |
 |---|---|---|
 | `reda/` | `rueda` (bin `reda`) | the command; `src/main.rs` dispatches subcommands to each crate's `cli` module, choosing the language by file extension (`.veryl` / `.fx`) |
-| `eda/` | `rueda-eda` (`eda`) | netlist, bram, output, netsim, sdc, power; `fpga/` (ice40, ecp5, pnr, board); `asic/`, `pdk/`; `cli.rs` (`reda pdk`) |
+| `eda/` | `rueda-eda` (`eda`) | netlist, bram, output, netsim, sdc, power; `fpga/` (ice40, ecp5, pnr, board); `asic/`, `pdk/`; `pcb/` (`.board` files: parts, ERC, simulation on the virtual board); `cli.rs` (`reda pdk`, `reda board`) |
 | `eda/bits/` | `rueda-bits` (`bits`) | the `Bits` vector shared by eda and the front ends |
 | `veryl/sim/` | `rueda-veryl-sim` (`veryl_sim`) | Veryl event-driven simulator |
 | `veryl/synth/` | `rueda-veryl-synth` (`veryl_synth`) | Veryl → netlist (`elab.rs`), `gatesim.rs`, `cli.rs` (`reda synth/fpga/asic/gatesim`); `test.sh`, `fpga/` yosys/nextpnr comparison flows |

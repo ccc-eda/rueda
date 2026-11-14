@@ -7,6 +7,7 @@ import { tr } from '../i18n';
 import type { MachineCfg } from '../emu_machine';
 import type { Part } from './bbmodel';
 import { PI_DEFAULT_BB, PiBoard } from './pi';
+import { floatWin } from './floatwin';
 
 declare const EMU_WORKER_SRC: string;
 
@@ -152,7 +153,7 @@ export class Emulator {
         <span class="vb-stat em-stat"></span>
       </div>
       <div class="em-note"></div>
-      <div class="em-main"><div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div><div class="em-board hidden"></div></div>`;
+      <div class="em-main"><div class="em-box"><pre class="em-term"></pre><textarea class="em-in" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea></div><div class="em-board hidden"><div class="em-board-h"><span class="fw-t">⠿ ${tr('開發板', 'Board')}</span></div><div class="em-board-body"></div></div></div>`;
     const q = <T extends HTMLElement>(a: string) => host.querySelector(`[data-a="${a}"]`) as T;
     q('boot').onclick = () => this.boot();
     q('pause').onclick = () => this.pauseResume();
@@ -253,7 +254,8 @@ export class Emulator {
     const bh = this.host.querySelector('.em-board') as HTMLElement;
     if (s.cfg.board === 'pi') {
       if (!this.pi) {
-        this.pi = new PiBoard(bh);
+        this.pi = new PiBoard(bh.querySelector('.em-board-body') as HTMLElement);
+        floatWin(bh, bh.querySelector('.em-board-h') as HTMLElement, { key: 'emu.board', auto: () => window.innerWidth < 1100 });
         this.pi.onInputs = (bits) => this.w?.postMessage({ type: 'gpio', bits });
         this.pi.onLayout = (parts) => this.onParts(parts);
       }
