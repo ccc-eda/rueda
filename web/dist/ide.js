@@ -6391,6 +6391,7 @@ test ${task.toLowerCase()}_doubles {
       d.onclick = () => {
         openExample(ex);
         renderExamples();
+        pickView("explorer");
       };
       box.appendChild(d);
     }
@@ -7520,12 +7521,15 @@ ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what 
     $2("titlebar").classList.toggle("more", on);
     $2("tbMore").classList.toggle("on", on);
   }
+  function pickView(v) {
+    for (const b of $2("activity").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.view === v);
+    for (const s of document.querySelectorAll(".sideview")) s.classList.toggle("hidden", s.id !== "view-" + v);
+  }
   function sideView(v) {
     const cur2 = $2("activity").querySelector(`button[data-view="${v}"]`);
     const already = cur2?.classList.contains("cur") && !$2("sidebar").classList.contains("hidden");
     if (phone()) drawer(!(already && document.body.classList.contains("side-open")));
-    for (const b of $2("activity").querySelectorAll("button")) b.classList.toggle("cur", b.dataset.view === v);
-    for (const s of document.querySelectorAll(".sideview")) s.classList.toggle("hidden", s.id !== "view-" + v);
+    pickView(v);
     $2("sidebar").classList.remove("hidden");
     $2("sideResize").classList.remove("hidden");
     if (v === "examples") renderExamples();

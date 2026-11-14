@@ -555,7 +555,8 @@ function renderExamples(): void {
       + '\n' + bs.map(b => `${b.icon} ${badgeName(b.act)}`).join('  ') + tr(`　建議第一步：${actName(first)}`, `  first step: ${actName(first)}`);
     d.innerHTML = `<span class="ic">${opened ? '●' : '○'}</span><span class="nm">${esc(exTitle(ex))}</span>`
       + `<span class="badges">${bs.map(b => `<span class="${b.act === first ? 'st' : ''}" title="${attr(badgeName(b.act))}">${b.icon}</span>`).join('')}</span>`;
-    d.onclick = () => { openExample(ex); renderExamples(); };
+    // into the project: the sidebar shows its files (on a phone the drawer closes as for any pick)
+    d.onclick = () => { openExample(ex); renderExamples(); pickView('explorer'); };
     box.appendChild(d);
   }
 }
@@ -1711,12 +1712,17 @@ function moreMenu(on: boolean): void {
   $('tbMore').classList.toggle('on', on);
 }
 
+/** the sidebar's view, without opening or closing it */
+function pickView(v: string): void {
+  for (const b of $('activity').querySelectorAll<HTMLElement>('button')) b.classList.toggle('cur', b.dataset.view === v);
+  for (const s of document.querySelectorAll<HTMLElement>('.sideview')) s.classList.toggle('hidden', s.id !== 'view-' + v);
+}
+
 function sideView(v: string): void {
   const cur = $('activity').querySelector<HTMLElement>(`button[data-view="${v}"]`);
   const already = cur?.classList.contains('cur') && !$('sidebar').classList.contains('hidden');
   if (phone()) drawer(!(already && document.body.classList.contains('side-open')));
-  for (const b of $('activity').querySelectorAll<HTMLElement>('button')) b.classList.toggle('cur', b.dataset.view === v);
-  for (const s of document.querySelectorAll<HTMLElement>('.sideview')) s.classList.toggle('hidden', s.id !== 'view-' + v);
+  pickView(v);
   $('sidebar').classList.remove('hidden');
   $('sideResize').classList.remove('hidden');
   if (v === 'examples') renderExamples();

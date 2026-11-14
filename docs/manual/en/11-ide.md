@@ -28,7 +28,7 @@ The whole toolchain (simulator, synthesizer, FPGA and ASIC flows, C compiler) is
 | Sidebar · Files | The project's files (`.veryl`, `pins.pcf`, at most one `.c`); ＋ to add, hover a filename for ✎ rename and 🗑 delete |
 | Sidebar · Modules | Each module, and which ones are `#[test]`; click to jump to the definition |
 | Sidebar · Tests | ▶ for each testbench with its pass / fail status, plus "Run all" |
-| Sidebar · Examples | The example library (below); click to open as a new project |
+| Sidebar · Examples | The example library (below); click to open as a new project, and the sidebar switches to its files |
 | Panels | Problems (syntax errors appear as you type; click to jump to the line), Output, Test results, Waveform. Drag the top edge of a panel to resize (drag up from a collapsed panel to expand), double-click the top edge to restore the default height; height and collapsed state are remembered |
 
 The interface comes in Traditional Chinese, English, and Simplified Chinese (menu at the right of the title bar).
