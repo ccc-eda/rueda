@@ -220,7 +220,7 @@ export class VirtualBoard {
     const p = this.pcbInfo;
     if (!p) return '';
     const of = (k: string) => p.parts.filter(x => x.kind === k);
-    let h = `<div class="vb-card vb-pcb"><div class="vb-card-h">🔌 ${esc(p.name || '.board')}　<span class="vb-dim">${tr('專案的 .board 插在', 'the project\'s .board on')} PMOD（${tr('腳', 'pins')} ${p.pins.join(' ')}）</span><button class="tb-btn ghost" data-a="netview" title="${tr('零件和線路，線依電位上色', 'The parts and nets, each net colored by its level')}">🗺 ${tr('線路圖', 'Nets')}</button></div>`;
+    let h = `<div class="vb-card vb-pcb"><div class="vb-card-h">🔌 ${tr('擴充板', 'Expansion board')} ${esc(p.name || '.board')}　<span class="vb-dim">${tr('專案的 .board 插在', 'the project\'s .board on')} PMOD（${tr('腳', 'pins')} ${p.pins.join(' ')}）</span><button class="tb-btn ghost" data-a="netview" title="${tr('零件和線路，線依電位上色', 'The parts and nets, each net colored by its level')}">🗺 ${tr('線路圖', 'Nets')}</button></div>`;
     const leds = of('led');
     if (leds.length) h += `<div class="vb-led8">${leds.map(l => `<span class="vb-l8" data-pl="${esc(l.id)}" title="${esc(l.id)}">${esc(l.id)}</span>`).join('')}</div>`;
     for (const t of of('lm75')) h += `<label class="vb-pcb-row">${esc(t.id)} LM75 <input type="range" min="-20" max="60" step="0.5" value="25" data-pt="${esc(t.id)}"> <b data-ptv="${esc(t.id)}">25.0</b> °C</label>`;
@@ -235,11 +235,7 @@ export class VirtualBoard {
   /** hook up the card's controls */
   private pcbWire(box: HTMLElement): void {
     const nv = box.querySelector<HTMLButtonElement>('[data-a=netview]');
-    if (nv) nv.onclick = () => {
-      const w = this.q<HTMLElement>('.vb-net');
-      w.classList.toggle('hidden');
-      if (!w.classList.contains('hidden')) { this.netWin.unfold(); this.netWin.clamp(); }
-    };
+    if (nv) nv.onclick = () => this.openNets(true);
     for (const el of box.querySelectorAll<HTMLInputElement>('[data-pt]')) {
       el.oninput = () => {
         const v = +el.value;
@@ -266,6 +262,8 @@ export class VirtualBoard {
         const el = box.querySelector<HTMLElement>(`[data-pl="${id}"]`);
         const d = v as number;
         if (el) el.style.setProperty('--lit', (d < 0.004 ? 0 : 0.2 + 0.8 * Math.sqrt(d)).toFixed(3));
+        const xl = this.svg.querySelector<SVGElement>(`[data-xl="${id}"]`);
+        if (xl) xl.style.fillOpacity = (d < 0.004 ? 0 : 0.25 + 0.75 * Math.sqrt(d)).toFixed(3);
       } else if (kind === 'latch') {
         const el = box.querySelector<HTMLElement>(`[data-pq="${id}"]`);
         if (el) el.textContent = (v as number).toString(2).padStart(8, '0') + `  (${v as number})`;
@@ -280,10 +278,37 @@ export class VirtualBoard {
     const r = await (await this.core()).call<{ pcb: PcbInfo | null }>({ cmd: 'board_periph', ...this.periph() });
     this.pcbInfo = r.pcb;
     if (r.pcb) this.nets.set(r.pcb); else this.q<HTMLElement>('.vb-net').classList.add('hidden');
+    this.q('.vb-net-h .fw-t').textContent = '⠿ ' + tr('擴充板', 'Expansion board') + (r.pcb?.name ? ' ' + r.pcb.name : '');
+    this.drawExt();
     this.cards();
     this.vgaSeen = 0;
     // switches drive their pins as they stand
     for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
+  }
+
+  /** the plugged .board drawn on its PMOD header, over the header (which shows through): its LEDs
+   * light as on its card, a click opens its drawing (the nets view and the schematic) */
+  private drawExt(): void {
+    this.svg.querySelector('.vb-ext')?.remove();
+    const p = this.pcbInfo;
+    if (!p) return;
+    const x = p.pins.some((n) => PMOD1B.includes(n)) && !p.pins.some((n) => PMOD1A.includes(n)) ? 575 : 500;
+    const leds = p.parts.filter((q) => q.kind === 'led').slice(0, 12);
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'vb-ext');
+    g.innerHTML = `<title>${esc(tr(`擴充板 ${p.name}（${p.parts.length} 個零件）：點一下看線路圖 / 電路圖`, `Expansion board ${p.name} (${p.parts.length} parts): click for its nets and schematic`))}</title>`
+      + `<rect x="${x - 8}" y="96" width="60" height="176" rx="4" class="vb-ext-pcb"/>`
+      + leds.map((l, i) => `<circle cx="${x + 47}" cy="${122 + i * (leds.length > 1 ? 128 / (leds.length - 1) : 0)}" r="3.5" class="vb-ext-led" data-xl="${esc(l.id)}"/>`).join('')
+      + `<text x="${x + 22}" y="266" class="vb-silk vb-ext-t" text-anchor="middle">${tr('擴充板', 'EXT')}</text>`;
+    g.onclick = () => this.openNets();
+    this.svg.appendChild(g);
+  }
+
+  /** show the plugged board's drawing (its window) */
+  private openNets(toggle = false): void {
+    const w = this.q<HTMLElement>('.vb-net');
+    w.classList.toggle('hidden', toggle ? !w.classList.contains('hidden') : false);
+    if (!w.classList.contains('hidden')) { this.netWin.unfold(); this.netWin.clamp(); }
   }
 
   /** the cards of the plugged-in modules */

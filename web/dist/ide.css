@@ -342,6 +342,11 @@ button.icon:hover { background: #3a3d41; }
 .vb-led-body { fill: #2b313c; stroke: #59606d; }
 .vb-hdr { fill: rgba(255, 210, 80, 0.15); stroke: #8c7a3c; }
 .vb-hdr-pwr { fill: #2a2f3a; stroke: #4a5160; }
+.vb-ext { cursor: pointer; }
+.vb-ext-pcb { fill: rgba(70, 40, 130, 0.55); stroke: #9a7ae0; stroke-width: 1.5; }
+.vb-ext:hover .vb-ext-pcb { fill: rgba(90, 55, 165, 0.7); stroke: #c8b0ff; }
+.vb-ext-led { fill: #ff453a; fill-opacity: 0; stroke: #7a6a90; stroke-width: 1; }
+.vb-ext-t { font-size: 10px; fill: #e8dcff; }
 [data-pin].used .vb-hdr { stroke: #ffd24f; stroke-width: 2; }
 [data-pin].used > .vb-led-body { stroke: #ffd24f; }
 .vb-btn { cursor: pointer; }

@@ -88,6 +88,7 @@
     "\u6A19\u984C\u5217": "\u6807\u9898\u680F",
     "\u6AA2\u8996": "\u67E5\u770B",
     "\u6A21\u7D44": "\u6A21\u5757",
+    "\u64F4\u5145\u677F": "\u6269\u5C55\u677F",
     "\u6A94\u6848\u7E3D\u7BA1": "\u8D44\u6E90\u7BA1\u7406\u5668",
     "\u6A94\u6848": "\u6587\u4EF6",
     "\u6A94\u540D": "\u6587\u4EF6\u540D",
@@ -3951,7 +3952,7 @@ target = { type = "directory", path = "target" }
       const p = this.pcbInfo;
       if (!p) return "";
       const of = (k) => p.parts.filter((x) => x.kind === k);
-      let h = `<div class="vb-card vb-pcb"><div class="vb-card-h">\u{1F50C} ${esc3(p.name || ".board")}\u3000<span class="vb-dim">${tr("\u5C08\u6848\u7684 .board \u63D2\u5728", "the project's .board on")} PMOD\uFF08${tr("\u8173", "pins")} ${p.pins.join(" ")}\uFF09</span><button class="tb-btn ghost" data-a="netview" title="${tr("\u96F6\u4EF6\u548C\u7DDA\u8DEF\uFF0C\u7DDA\u4F9D\u96FB\u4F4D\u4E0A\u8272", "The parts and nets, each net colored by its level")}">\u{1F5FA} ${tr("\u7DDA\u8DEF\u5716", "Nets")}</button></div>`;
+      let h = `<div class="vb-card vb-pcb"><div class="vb-card-h">\u{1F50C} ${tr("\u64F4\u5145\u677F", "Expansion board")} ${esc3(p.name || ".board")}\u3000<span class="vb-dim">${tr("\u5C08\u6848\u7684 .board \u63D2\u5728", "the project's .board on")} PMOD\uFF08${tr("\u8173", "pins")} ${p.pins.join(" ")}\uFF09</span><button class="tb-btn ghost" data-a="netview" title="${tr("\u96F6\u4EF6\u548C\u7DDA\u8DEF\uFF0C\u7DDA\u4F9D\u96FB\u4F4D\u4E0A\u8272", "The parts and nets, each net colored by its level")}">\u{1F5FA} ${tr("\u7DDA\u8DEF\u5716", "Nets")}</button></div>`;
       const leds = of("led");
       if (leds.length) h += `<div class="vb-led8">${leds.map((l) => `<span class="vb-l8" data-pl="${esc3(l.id)}" title="${esc3(l.id)}">${esc3(l.id)}</span>`).join("")}</div>`;
       for (const t of of("lm75")) h += `<label class="vb-pcb-row">${esc3(t.id)} LM75 <input type="range" min="-20" max="60" step="0.5" value="25" data-pt="${esc3(t.id)}"> <b data-ptv="${esc3(t.id)}">25.0</b> \xB0C</label>`;
@@ -3965,14 +3966,7 @@ target = { type = "directory", path = "target" }
     /** hook up the card's controls */
     pcbWire(box) {
       const nv = box.querySelector("[data-a=netview]");
-      if (nv) nv.onclick = () => {
-        const w = this.q(".vb-net");
-        w.classList.toggle("hidden");
-        if (!w.classList.contains("hidden")) {
-          this.netWin.unfold();
-          this.netWin.clamp();
-        }
-      };
+      if (nv) nv.onclick = () => this.openNets(true);
       for (const el2 of box.querySelectorAll("[data-pt]")) {
         el2.oninput = () => {
           const v = +el2.value;
@@ -4006,6 +4000,8 @@ target = { type = "directory", path = "target" }
           const el2 = box.querySelector(`[data-pl="${id}"]`);
           const d = v;
           if (el2) el2.style.setProperty("--lit", (d < 4e-3 ? 0 : 0.2 + 0.8 * Math.sqrt(d)).toFixed(3));
+          const xl = this.svg.querySelector(`[data-xl="${id}"]`);
+          if (xl) xl.style.fillOpacity = (d < 4e-3 ? 0 : 0.25 + 0.75 * Math.sqrt(d)).toFixed(3);
         } else if (kind === "latch") {
           const el2 = box.querySelector(`[data-pq="${id}"]`);
           if (el2) el2.textContent = v.toString(2).padStart(8, "0") + `  (${v})`;
@@ -4024,9 +4020,34 @@ target = { type = "directory", path = "target" }
       this.pcbInfo = r.pcb;
       if (r.pcb) this.nets.set(r.pcb);
       else this.q(".vb-net").classList.add("hidden");
+      this.q(".vb-net-h .fw-t").textContent = "\u283F " + tr("\u64F4\u5145\u677F", "Expansion board") + (r.pcb?.name ? " " + r.pcb.name : "");
+      this.drawExt();
       this.cards();
       this.vgaSeen = 0;
       for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
+    }
+    /** the plugged .board drawn on its PMOD header, over the header (which shows through): its LEDs
+     * light as on its card, a click opens its drawing (the nets view and the schematic) */
+    drawExt() {
+      this.svg.querySelector(".vb-ext")?.remove();
+      const p = this.pcbInfo;
+      if (!p) return;
+      const x = p.pins.some((n) => PMOD1B.includes(n)) && !p.pins.some((n) => PMOD1A.includes(n)) ? 575 : 500;
+      const leds = p.parts.filter((q) => q.kind === "led").slice(0, 12);
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", "vb-ext");
+      g.innerHTML = `<title>${esc3(tr(`\u64F4\u5145\u677F ${p.name}\uFF08${p.parts.length} \u500B\u96F6\u4EF6\uFF09\uFF1A\u9EDE\u4E00\u4E0B\u770B\u7DDA\u8DEF\u5716 / \u96FB\u8DEF\u5716`, `Expansion board ${p.name} (${p.parts.length} parts): click for its nets and schematic`))}</title><rect x="${x - 8}" y="96" width="60" height="176" rx="4" class="vb-ext-pcb"/>` + leds.map((l, i) => `<circle cx="${x + 47}" cy="${122 + i * (leds.length > 1 ? 128 / (leds.length - 1) : 0)}" r="3.5" class="vb-ext-led" data-xl="${esc3(l.id)}"/>`).join("") + `<text x="${x + 22}" y="266" class="vb-silk vb-ext-t" text-anchor="middle">${tr("\u64F4\u5145\u677F", "EXT")}</text>`;
+      g.onclick = () => this.openNets();
+      this.svg.appendChild(g);
+    }
+    /** show the plugged board's drawing (its window) */
+    openNets(toggle = false) {
+      const w = this.q(".vb-net");
+      w.classList.toggle("hidden", toggle ? !w.classList.contains("hidden") : false);
+      if (!w.classList.contains("hidden")) {
+        this.netWin.unfold();
+        this.netWin.clamp();
+      }
     }
     /** the cards of the plugged-in modules */
     cards() {
