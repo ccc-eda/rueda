@@ -19,8 +19,6 @@ body.ide select { background: #3c3c3c; border: 1px solid #4a4a4a; border-radius:
 .tb-lbl { color: var(--dim); font-size: 11px; white-space: nowrap; }
 /* the main button (the suggested step) and ▾ (every action) */
 .tb-split { display: flex; }
-.tb-split #mainBtn { border-radius: 3px 0 0 3px; }
-.tb-split #mainMore { border-radius: 0 3px 3px 0; border-left-color: #0a5fa3; padding: 3px 7px; }
 #mainMenu { position: fixed; z-index: 55; width: 340px; max-width: calc(100vw - 16px); max-height: calc(100vh - 60px); overflow-y: auto; background: #252526; border: 1px solid #454545; border-radius: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); padding: 4px 0; }
 #mainMenu .sec { padding: 8px 12px 2px; font-size: 11px; color: var(--dim); }
 #mainMenu .mi { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; background: none; border: 0; color: var(--fg); padding: 5px 12px 5px 20px; text-align: left; cursor: pointer; font: inherit; }
@@ -52,15 +50,28 @@ body:not(.basic) #titlebar .tb-group select { max-width: 150px; }
 /* the suggested steps above the editor */
 #synClock { width: 84px; background: #3c3c3c; border: 1px solid #4a4a4a; border-radius: 3px; color: var(--fg); padding: 2px 6px; font-size: 12px; margin-right: 6px; }
 #synClock:disabled { opacity: .6; }
-#guide { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 5px 10px; background: #1f2a36; border-bottom: 1px solid var(--line); font-size: 12px; }
-#guide .lbl { color: var(--dim); margin-right: 2px; }
-#guide .step { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: transparent; border: 1px solid #3c4a5a; border-radius: 4px; padding: 3px 9px; color: var(--fg); cursor: pointer; text-align: left; font: inherit; }
-#guide .step:hover { background: #2a3a4c; }
-#guide .step.first { border-color: var(--accent); background: #12385a; }
-#guide .step b { font-weight: 600; white-space: nowrap; }
-#guide .arr { color: var(--dim); }
-#guide .close { margin-left: auto; background: transparent; border: 0; color: var(--dim); font-size: 16px; cursor: pointer; padding: 0 4px; }
-#guide .close:hover { color: #fff; }
+#guide { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 4px 10px; background: #1f2a36; border-bottom: 1px solid var(--line); font-size: 12px; min-width: 0; }
+#guide .ab-l, #guide .ab-r { display: flex; align-items: center; gap: 4px; min-width: 0; }
+#guide .ab-l { flex: 1 1 auto; flex-wrap: wrap; }
+#guide .ab-r { flex: 0 0 auto; }
+#guide .ab { background: transparent; border: 1px solid #3c4a5a; border-radius: 4px; padding: 3px 9px; color: var(--fg); cursor: pointer; font: inherit; font-weight: 600; white-space: nowrap; }
+#guide .ab:hover { background: #2a3a4c; }
+#guide .ab.primary { border-color: var(--accent); background: #0e639c; color: #fff; }
+#guide .ab.primary:hover { background: #1177bb; }
+#guide .ab.off { opacity: 0.45; font-weight: 400; }
+#guide .ab.more { padding: 3px 7px; }
+#guide .ab.view { border-color: #5a4a7a; }
+#guide .ab.view.on { background: #3b2d5c; border-color: #9a7ae0; color: #fff; }
+@media (max-width: 700px) { #guide .ab { padding: 3px 6px; } }
+#edArea.pcb-split #editorHost { right: 45%; }
+.pcb-prev { display: flex; flex-direction: column; min-height: 0; background: #1e1e1e; z-index: 5; }
+.pcb-prev:not(.fw-float) { position: absolute; top: 0; right: 0; bottom: 0; width: 45%; border-left: 1px solid var(--line); }
+.pcb-prev.fw-float { top: 30px; right: 20px; width: min(700px, calc(100% - 40px)); height: min(480px, calc(100% - 60px)); }
+.pcb-prev:not(.fw-float) > .fw-h .fw-t { visibility: visible; }
+.pcb-prev .nv-tab { white-space: nowrap; }
+.pcb-prev-h { display: flex; align-items: center; gap: 10px; padding: 4px 8px; font-size: 12px; min-width: 0; }
+.pcb-prev-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pcb-prev-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; background: #151a21; }
 .tree .item .badges { margin-left: auto; flex: 0 0 auto; display: flex; gap: 1px; font-size: 11px; }
 .tree .item .badges span { padding: 0 2px; border: 1px solid transparent; border-radius: 3px; opacity: .8; }
 .tree .item .badges .st, .side-hint .st { border: 1px solid var(--accent); border-radius: 3px; opacity: 1; }
@@ -430,7 +441,7 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
   #titlebar { height: auto; min-height: 40px; flex-wrap: wrap; gap: 6px; padding: 4px 6px; overflow: visible; }
   #titlebar .brand { display: none; }
   .tb-group { display: contents; }
-  #mainAct { order: 1; } #titlebar > .spacer { order: 3; } #cmdPalette { order: 4; } #tbMore { order: 5; display: inline-block; }
+  #titlebar > .spacer { order: 3; } #cmdPalette { order: 4; } #tbMore { order: 5; display: inline-block; }
   #titlebar .tb-group, body.basic.tab-flow #grpFlow { display: none; }
   #langSel, #modeBtn { order: 10; display: none; }
   #titlebar.more .tb-group, body.basic.tab-flow #titlebar.more #grpFlow { order: 10; display: flex; flex-wrap: wrap; width: 100%; border-left: 0; padding-left: 0; }

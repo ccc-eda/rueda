@@ -5582,6 +5582,10 @@ ${lines.join("\n")}
       this.markers = m;
       this.render();
     }
+    /** the line the cursor is on (1-based) */
+    get line() {
+      return this.ta.value.slice(0, this.ta.selectionStart).split("\n").length;
+    }
     /** put the cursor at line:col (1-based) and select to the end of the line */
     goto(line, col = 1, selectLine = false) {
       const ls = this.ta.value.split("\n");
@@ -5697,6 +5701,87 @@ ${lines.join("\n")}
     return e;
   }
 
+  // src/ide/pcbprev.ts
+  var PcbPreview = class {
+    constructor(area, parse) {
+      __publicField(this, "area", area);
+      __publicField(this, "parse", parse);
+      __publicField(this, "win");
+      __publicField(this, "fw");
+      __publicField(this, "nets");
+      __publicField(this, "msg");
+      __publicField(this, "file", "");
+      __publicField(this, "timer", 0);
+      __publicField(this, "gen", 0);
+      /** the preview is wanted (it opens again with the next .board file) */
+      __publicField(this, "open", false);
+      try {
+        this.open = localStorage.getItem("rueda.pcbprev") === "1";
+      } catch {
+      }
+      this.win = document.createElement("div");
+      this.win.className = "pcb-prev hidden";
+      this.win.innerHTML = `<div class="pcb-prev-h"><span class="fw-t">\u283F \u{1F50C} <span class="pcb-prev-name"></span></span><span class="pcb-prev-msg"></span></div><div class="pcb-prev-body"></div>`;
+      area.appendChild(this.win);
+      this.msg = this.win.querySelector(".pcb-prev-msg");
+      this.nets = new NetView(this.win.querySelector(".pcb-prev-body"));
+      this.fw = floatWin(this.win, this.win.querySelector(".pcb-prev-h"), { key: "pcb.preview", auto: () => window.innerWidth < 1e3, onChange: () => this.layout() });
+    }
+    get isOpen() {
+      return this.open;
+    }
+    /** the active file changed: the preview of a .board, if it is wanted */
+    show(name, src) {
+      const on = !!name?.endsWith(".board");
+      this.file = on ? name : "";
+      this.win.classList.toggle("hidden", !(on && this.open));
+      this.layout();
+      if (on && this.open) this.update(src, 0);
+    }
+    /** the .board's text changed: draw it again a moment after the typing stops */
+    update(src, wait = 300) {
+      if (!this.file || !this.open) return;
+      clearTimeout(this.timer);
+      this.timer = window.setTimeout(async () => {
+        const g = ++this.gen;
+        let r;
+        try {
+          r = await this.parse(src);
+        } catch (e) {
+          r = { error: String(e.message ?? e) };
+        }
+        if (g !== this.gen) return;
+        this.win.querySelector(".pcb-prev-name").textContent = tr("\u64F4\u5145\u677F", "Expansion board") + " " + ("name" in r && r.name ? r.name : this.file);
+        if ("error" in r) {
+          this.msg.innerHTML = `<span class="vb-err">\u2717 ${esc2(r.error)}</span>`;
+          return;
+        }
+        const errs = r.erc.filter((d) => d.error).length, warns = r.erc.length - errs;
+        this.msg.innerHTML = !r.erc.length ? '<span class="vb-dim">ERC \u2713</span>' : `<span class="${errs ? "vb-err" : "vb-dim"}" title="${esc2(r.erc.map((d) => (d.error ? "\u2717 " : "\u26A0 ") + d.msg).join("\n"))}">ERC ${errs ? `\u2717 ${errs}` : ""} ${warns ? `\u26A0 ${warns}` : ""}</span>`;
+        this.nets.set(r);
+      }, wait);
+    }
+    /** 🔌 PCB: show or hide it (`src`: the open .board's text) */
+    toggle(src) {
+      this.open = !this.open;
+      try {
+        localStorage.setItem("rueda.pcbprev", this.open ? "1" : "0");
+      } catch {
+      }
+      this.win.classList.toggle("hidden", !(this.open && this.file));
+      this.layout();
+      if (this.open && this.file) {
+        this.fw.unfold();
+        this.fw.clamp();
+        this.update(src, 0);
+      }
+    }
+    /** docked and shown: the editor gives it the right part of the area */
+    layout() {
+      this.area.classList.toggle("pcb-split", !this.win.classList.contains("hidden") && !this.fw.floating);
+    }
+  };
+
   // src/ide/caps.ts
   function machine(files) {
     const f = files.find((x) => x.name === "machine.json");
@@ -5763,12 +5848,6 @@ ${lines.join("\n")}
     if (c.board.on) return "board";
     if (c.test.on) return "test";
     return "synth";
-  }
-  function steps(i) {
-    const c = caps({ ...i, active: void 0 });
-    const s = start(i);
-    if (s === "emu") return ["emu"];
-    return [s, ...["test", "board", "synth"].filter((a) => a !== s && c[a].on)].slice(0, 3);
   }
   function badges(i) {
     const c = caps({ ...i, active: void 0 });
@@ -5864,6 +5943,7 @@ test ${task.toLowerCase()}_doubles {
     return { id: uid(), name, files: [{ name: f, src: FX_TEMPLATE(task) }], open: [f], active: f };
   }
   var core = null;
+  var pcbPrev;
   var synth = null;
   var wave = null;
   var ed;
@@ -5979,6 +6059,7 @@ test ${task.toLowerCase()}_doubles {
       $2("sbPos").textContent = "";
     }
     if (a === WELCOME) welcome();
+    pcbPrev.show(isFile ? a : void 0, file(a)?.src ?? "");
     renderTabs();
     renderFiles();
     applyCaps();
@@ -7027,13 +7108,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
   function applyMode() {
     document.body.classList.toggle("basic", uiMode === "basic");
     $2("modeBtn").textContent = uiMode === "basic" ? tr("\u9032\u968E \u25B8", "Advanced \u25B8") : tr("\u25C2 \u7C21\u6613", "\u25C2 Simple");
-    $2("modeBtn").title = uiMode === "basic" ? tr("\u986F\u793A\u6240\u6709\u63A7\u5236\uFF1A\u9A57\u8B49\uFF08\u6E2C\u8A66\u7684\u9802\u5C64\u3001\u9598\u7D1A\u6A21\u64EC\u3001\u5168\u9762\u9A57\u8B49\uFF09\u3001\u770B\u96FB\u8DEF\uFF08\u76EE\u6A19\u3001\u968E\u6BB5\u3001\u9802\u5C64\uFF09\u3001\u8DD1\u8D77\u4F86\uFF08\u865B\u64EC\u677F\u3001\u6A21\u64EC\u6A5F\uFF09", "Show every control: verify (simulation top, gate level, verify all), circuit (target, stage, top), run it (virtual board, emulator)") : tr("\u7C21\u6613\uFF1A\u53EA\u7559\u4E3B\u6309\u9215\u8207\u5B83\u7684\u9078\u55AE\uFF08\u25BE\uFF09\uFF0C\u5408\u6210\u6D41\u7A0B\u5206\u9801\u88E1\u624D\u51FA\u73FE\u5408\u6210\u7684\u9078\u55AE", "Simple: only the main button and its menu (\u25BE); the synthesis menus appear on the flow tab");
-  }
-  function mainClick() {
-    if (!core) return;
-    const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
-    if (onBoard) runKey();
-    else act(start(capIn()), $2("mainBtn"));
+    $2("modeBtn").title = uiMode === "basic" ? tr("\u986F\u793A\u6240\u6709\u63A7\u5236\uFF1A\u9A57\u8B49\uFF08\u6E2C\u8A66\u7684\u9802\u5C64\u3001\u9598\u7D1A\u6A21\u64EC\u3001\u5168\u9762\u9A57\u8B49\uFF09\u3001\u770B\u96FB\u8DEF\uFF08\u76EE\u6A19\u3001\u968E\u6BB5\u3001\u9802\u5C64\uFF09\u3001\u8DD1\u8D77\u4F86\uFF08\u865B\u64EC\u677F\u3001\u6A21\u64EC\u6A5F\uFF09", "Show every control: verify (simulation top, gate level, verify all), circuit (target, stage, top), run it (virtual board, emulator)") : tr("\u7C21\u6613\uFF1A\u6A19\u984C\u5217\u4E0D\u653E\u63A7\u5236\uFF08\u52D5\u4F5C\u90FD\u5728\u7DE8\u8F2F\u5668\u4E0A\u65B9\u90A3\u4E00\u6392\uFF09\uFF0C\u5408\u6210\u6D41\u7A0B\u5206\u9801\u88E1\u624D\u51FA\u73FE\u5408\u6210\u7684\u9078\u55AE", "Simple: no controls in the title bar (the actions are in the bar above the editor); the synthesis menus appear on the flow tab");
   }
   function synthOn(v, stage) {
     $2("flowTarget").value = v;
@@ -7077,7 +7152,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
       ]]
     ];
   }
-  function showMenu() {
+  function showMenu(anchor) {
     if (!core) return;
     hideWhy();
     const c = projCaps();
@@ -7090,9 +7165,9 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
       const on = c[x.act].on;
       const star = on && x.act === first && !x.alt ? `<i>${tr("\u5EFA\u8B70", "suggested")}</i>` : "";
       return `<button class="mi${on ? "" : " off"}" data-k="${k++}"><b>${esc5(x.label)}${star}</b><span>${esc5(on ? x.hint : c[x.act].why ?? "")}</span></button>`;
-    }).join("")).join("") + `<button class="mi foot" data-k="mode"><b>${uiMode === "basic" ? tr("\u9032\u968E \u25B8 \u6A19\u984C\u5217\u986F\u793A\u6240\u6709\u63A7\u5236", "Advanced \u25B8 every control in the title bar") : tr("\u25C2 \u7C21\u6613\uFF1A\u53EA\u7559\u4E3B\u6309\u9215", "\u25C2 Simple: only the main button")}</b></button>`;
+    }).join("")).join("") + `<button class="mi foot" data-k="mode"><b>${uiMode === "basic" ? tr("\u9032\u968E \u25B8 \u6A19\u984C\u5217\u986F\u793A\u6240\u6709\u63A7\u5236", "Advanced \u25B8 every control in the title bar") : tr("\u25C2 \u7C21\u6613\uFF1A\u6A19\u984C\u5217\u4E0D\u986F\u793A\u63A7\u5236", "\u25C2 Simple: no controls in the title bar")}</b></button>`;
     m.classList.remove("hidden");
-    const r = $2("mainAct").getBoundingClientRect();
+    const r = anchor.getBoundingClientRect();
     m.style.top = `${r.bottom + 4}px`;
     m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
     m.onclick = (e) => {
@@ -7104,7 +7179,7 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
         return;
       }
       const x = items[+b.dataset.k];
-      if (!c[x.act].on) showWhy(x.act, $2("mainBtn"));
+      if (!c[x.act].on) showWhy(x.act, anchor);
       else x.run();
     };
   }
@@ -7127,7 +7202,6 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
     $2("sbLang").textContent = fluxaProject() ? "Fluxa" : "Veryl";
     if (!core) return;
     const c = projCaps();
-    const first = start(capIn());
     const onBoard = c.test.on && !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
     for (const [a, id] of ACT_BTN) {
       const b = $2(id);
@@ -7139,10 +7213,6 @@ ${t.message.split("\n").map((l) => "       " + l).join("\n")}
 ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what to do)")}` : id === "cmdRun" && onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${proj.active}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${proj.active} on the board (Ctrl/\u2318+Enter)`) : tr(zh, en);
       b.classList.remove("primary");
     }
-    const mb = $2("mainBtn");
-    mb.disabled = $2("mainMore").disabled = false;
-    mb.textContent = onBoard ? tr(`\u25B6 \u57F7\u884C ${proj.active}`, `\u25B6 Run ${proj.active}`) : actName(first);
-    mb.title = onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${proj.active}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${proj.active} on the board (Ctrl/\u2318+Enter)`) : tr(`\u9019\u500B\u5C08\u6848\u5EFA\u8B70\u7684\u4E0B\u4E00\u6B65\uFF1A${actHint(first, capIn())}\u3002\u25BE \u6709\u5176\u4ED6\u505A\u6CD5`, `The suggested next step for this project: ${actHint(first, capIn())}. \u25BE has the others`);
     const fs = $2("flowStage");
     fs.disabled = !c.synth.on;
     fs.title = c.synth.on ? tr("\u5408\u6210\u4E26\u6AA2\u8996\u9019\u500B\u968E\u6BB5\uFF08Ctrl/\u2318+Shift+B\uFF09", "Synthesize and view this stage (Ctrl/\u2318+Shift+B)") : c.synth.why;
@@ -7214,13 +7284,57 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
   function hideWhy() {
     $2("capPop").classList.add("hidden");
   }
+  var BAR_ACTS = ["test", "synth", "board", "emu"];
   function renderGuide() {
     const g = $2("guide");
-    const show = !!core && !proj.guideOff && proj.active !== WELCOME;
+    const show = !!core && proj.active !== WELCOME;
     g.classList.toggle("hidden", !show);
     if (!show) return;
-    const ci = capIn();
-    g.innerHTML = `<span class="lbl">${tr("\u5EFA\u8B70\u6B65\u9A5F", "Suggested steps")}</span>` + steps(ci).map((a, i) => `<button class="step${i ? "" : " first"}" data-step="${a}" title="${attr(actHint(a, ci))}"><b>${"\u2460\u2461\u2462"[i]} ${esc5(actName(a))}</b></button>`).join('<span class="arr">\u2192</span>') + `<button class="close" title="${attr(tr("\u95DC\u9589\uFF08\u547D\u4EE4\u9078\u55AE\u7684\u300C\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F\u300D\u53EF\u4EE5\u518D\u6253\u958B\uFF09", `Close (the command palette's "Show the suggested steps" brings it back)`))}">\xD7</button>`;
+    const ci = capIn(), c = projCaps();
+    const onBoard = c.test.on && !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
+    const first = onBoard ? "test" : start(ci);
+    const btn = (a) => {
+      const label = a === "test" && onBoard ? tr(`\u25B6 \u57F7\u884C ${proj.active}`, `\u25B6 Run ${proj.active}`) : actName(a);
+      const title = !c[a].on ? `${c[a].why}
+${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what to do)")}` : a === "test" && onBoard ? tr(`\u5728\u677F\u5B50\u4E0A\u57F7\u884C ${proj.active}\uFF08Ctrl/\u2318+Enter\uFF09`, `Run ${proj.active} on the board (Ctrl/\u2318+Enter)`) : actHint(a, ci) + (a === first ? tr("\uFF08\u5EFA\u8B70\u7684\u4E0B\u4E00\u6B65\uFF09", " (the suggested next step)") : "");
+      return `<button class="ab${c[a].on ? a === first ? " primary" : "" : " off"}" data-step="${a}" title="${attr(title)}">${esc5(label)}</button>`;
+    };
+    const views = fileViews(proj.active);
+    g.innerHTML = `<div class="ab-l">${BAR_ACTS.map(btn).join("")}<button class="ab more" data-a="more" title="${attr(tr("\u5176\u4ED6\u505A\u6CD5\uFF1A\u5168\u9762\u9A57\u8B49\u3001ASIC\u3001\u6A21\u64EC\u6A5F\u7684\u5F15\u64CE\u2026", "The other ways: verify all, ASIC, the emulator's engines\u2026"))}">\u22EF</button></div><div class="ab-r">${views.map((v) => `<button class="ab view${v.on ? " on" : ""}" data-view="${v.key}" title="${attr(v.title)}">${esc5(v.label)}</button>`).join("")}</div>`;
+  }
+  function fileViews(name) {
+    if (!name || !file(name)) return [];
+    if (name.endsWith(".board")) return [{
+      key: "pcb",
+      label: tr("\u{1F50C} PCB", "\u{1F50C} PCB"),
+      on: pcbPrev?.isOpen,
+      title: tr("\u756B\u51FA\u9019\u584A\u64F4\u5145\u677F\uFF1A\u7DDA\u8DEF\u5716\u3001\u96FB\u8DEF\u5716\uFF0C\u908A\u6539\u908A\u66F4\u65B0\uFF08\u4E0D\u7528\u71D2\u9304\uFF09", "Draw this expansion board: its nets and schematic, redrawn as you edit (no flashing needed)")
+    }];
+    if (name.endsWith(".veryl") || name.endsWith(".fx")) return [{
+      key: "circuit",
+      label: tr("\u{1F4D0} \u96FB\u8DEF\u5716", "\u{1F4D0} Circuit"),
+      title: tr("\u6E38\u6A19\u6240\u5728\u6A21\u7D44\u7684\u908F\u8F2F\u9598\u96FB\u8DEF\uFF08\u5408\u6210\u3001\u6700\u4F73\u5316\u5F8C\uFF0C\u9084\u6C92\u5C0D\u61C9\u5230 FPGA \u6216\u6A19\u6E96\u5143\u4EF6\uFF09", "The gates of the module at the cursor (synthesized and optimized, not yet mapped to the FPGA or standard cells)")
+    }];
+    if (name.endsWith(".c")) return [{ key: "asm", label: tr("\u7D44\u5408\u8A9E\u8A00", "Assembly"), title: tr("\u7DE8\u8B6F\u51FA\u4F86\u7684 RISC-V \u7D44\u5408\u8A9E\u8A00", "The RISC-V assembly it compiles to") }];
+    return [];
+  }
+  function openView(v) {
+    const name = proj.active ?? "";
+    if (v === "pcb") {
+      pcbPrev.toggle(file(name)?.src ?? "");
+      renderGuide();
+    } else if (v === "asm") openFile(ASM_TAB);
+    else {
+      const src = file(name)?.src ?? "";
+      const before = src.split("\n").slice(0, ed.line).join("\n");
+      const word = fluxaProject() ? "task" : "module";
+      const names = (t) => [...t.matchAll(new RegExp(`\\b${word}\\s+(\\w+)`, "g"))].map((m) => m[1]);
+      const design = (n) => mods.some((m) => m.name === n && !m.test);
+      const top2 = [...names(before)].reverse().find(design) ?? names(src).find(design);
+      const sel = $2("synthTop");
+      if (top2 && [...sel.options].some((o) => o.value === top2)) sel.value = top2;
+      runSynth("opt");
+    }
   }
   function openEmu() {
     const e = ensureEmu();
@@ -7497,12 +7611,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       { label: tr("\u986F\u793A\uFF1A\u8F38\u51FA", "View: Output"), run: () => panel("output") },
       { label: tr("\u986F\u793A\uFF1A\u6CE2\u5F62", "View: Waveform"), run: () => panel("wave") },
       { label: tr("\u6B61\u8FCE\u9801", "Welcome page"), run: () => openFile(WELCOME) },
-      { label: uiMode === "basic" ? tr("\u6A19\u984C\u5217\uFF1A\u986F\u793A\u6240\u6709\u63A7\u5236\uFF08\u9032\u968E\uFF09", "Title bar: every control (advanced)") : tr("\u6A19\u984C\u5217\uFF1A\u7C21\u6613\uFF08\u4E3B\u6309\u9215\u8207\u9078\u55AE\uFF09", "Title bar: simple (the main button and its menu)"), run: () => setMode(uiMode === "basic" ? "full" : "basic") },
-      { label: tr("\u986F\u793A\u5EFA\u8B70\u6B65\u9A5F", "Show the suggested steps"), run: () => {
-        proj.guideOff = false;
-        persist();
-        renderGuide();
-      } },
+      { label: uiMode === "basic" ? tr("\u6A19\u984C\u5217\uFF1A\u986F\u793A\u6240\u6709\u63A7\u5236\uFF08\u9032\u968E\uFF09", "Title bar: every control (advanced)") : tr("\u6A19\u984C\u5217\uFF1A\u7C21\u6613\uFF08\u4E0D\u653E\u63A7\u5236\uFF09", "Title bar: simple (no controls)"), run: () => setMode(uiMode === "basic" ? "full" : "basic") },
       ...LANGS.map(([l, name]) => ({ label: `${tr("\u4ECB\u9762\u8A9E\u8A00\uFF1A", "Language: ")}${name}`, run: () => switchLang(l) })),
       ...projects.filter((p) => p !== proj).map((p) => ({ label: `${tr("\u5207\u63DB\u5C08\u6848\uFF1A", "Switch project: ")}${projName(p)}`, run: () => switchProject(p.id) })),
       ...examples().map((e) => ({ label: `${tr("\u958B\u555F\u7BC4\u4F8B\uFF1A", "Open example: ")}${exTitle(e)}`, run: () => openExample(e) }))
@@ -7581,10 +7690,16 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("tgSynth").label = tr("\u5408\u6210\uFF08\u770B\u96FB\u8DEF\uFF09", "Synthesis (the circuit)");
     $2("tgEmu").label = tr("\u6A21\u64EC\u6A5F\uFF08\u8DD1\u8EDF\u9AD4\uFF09", "Emulator (software)");
     ed = new CodeEditor($2("editorHost"));
+    pcbPrev = new PcbPreview($2("edArea"), async (src) => {
+      if (!core) return { error: tr("\u9084\u5728\u8F09\u5165", "still loading") };
+      const r = await core.call({ cmd: "pcb_info", src });
+      return r.pcb ?? { error: r.parse_error ?? "" };
+    });
     ed.onChange = (text) => {
       const f = file(proj.active ?? "");
       if (!f || ed.readOnly) return;
       f.src = text;
+      if (f.name.endsWith(".board")) pcbPrev.update(text);
       problems = problems.filter((p) => p.file !== f.name);
       changed();
     };
@@ -7621,7 +7736,6 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
     $2("cmdPalette").onclick = () => palette(false);
     $2("cmdRun").onclick = () => runKey();
     $2("cmdVerify").onclick = () => act("verify", $2("cmdVerify"));
-    $2("mainBtn").onclick = () => mainClick();
     const clockEl = document.getElementById("synClock");
     if (clockEl) clockEl.onchange = () => {
       const v = parseFloat(clockEl.value);
@@ -7630,23 +7744,23 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       synthKey = JSON.stringify([hdlFiles(), synthTop(), pcfOf(proj), sdcOf(proj)]);
       synth?.setSdc(sdcOf(proj));
     };
-    $2("mainMore").onclick = () => $2("mainMenu").classList.contains("hidden") ? showMenu() : hideMenu();
     $2("modeBtn").onclick = () => setMode(uiMode === "basic" ? "full" : "basic");
     $2("cmdBoard").onclick = () => act("board", $2("cmdBoard"));
     $2("cmdEmu").onclick = () => act("emu", $2("cmdEmu"));
     $2("guide").onclick = (e) => {
-      const t = e.target.closest("[data-step]");
-      if (t) act(t.dataset.step, t);
-      else if (e.target.closest(".close")) {
-        proj.guideOff = true;
-        persist();
-        renderGuide();
-      }
+      const t = e.target.closest("[data-step], [data-a=more], [data-view]");
+      if (!t) return;
+      if (t.dataset.step) {
+        const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? "");
+        if (t.dataset.step === "test" && onBoard) runKey();
+        else act(t.dataset.step, t);
+      } else if (t.dataset.view) openView(t.dataset.view);
+      else $2("mainMenu").classList.contains("hidden") ? showMenu(t) : hideMenu();
     };
     document.addEventListener("mousedown", (e) => {
       const t = e.target;
       if (!t.closest("#capPop, .off, [data-step]")) hideWhy();
-      if (!t.closest("#mainMenu, #mainMore")) hideMenu();
+      if (!t.closest("#mainMenu, #guide [data-a=more]")) hideMenu();
     });
     $2("testsRun").onclick = () => runTests();
     $2("testsVerify").onclick = verifyAll;
@@ -7785,6 +7899,7 @@ set_io -nowarn o_tx     9   # TX: from the FPGA to the computer
       $2("sbCore").textContent = `\u2713 WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr("\uFF08\u80CC\u666F\u57F7\u884C\u7DD2\uFF09", " (worker thread)") : ""}`;
       for (const id of ["cmdRun", "cmdVerify", "cmdBoard", "cmdEmu", "flowTarget", "flowStage"]) $2(id).disabled = false;
       applyCaps();
+      pcbPrev.show(proj.active, file(proj.active ?? "")?.src ?? "");
       synth = new SynthOverlay(core, {
         embedded: true,
         onStage: (k) => {

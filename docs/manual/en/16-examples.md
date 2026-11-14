@@ -6,7 +6,7 @@ This chapter lists every example: what it does, which files it uses, how to run 
   (`https://ccc-eda.github.io/rueda/web/dist/index.html#ex=ID`; locally use `web/dist/index.html#ex=ID`).
   Adding `&board=1` flashes straight to the virtual board, `&run=1` runs the test; other parameters are in chapter 11, "URL parameters".
   The welcome page shown when the IDE first opens has six starting points (learn Veryl, build a circuit for a board, design an expansion board, boot a computer and write programs, see the circuit become a chip, write dataflow in Fluxa), and the filter above the example library can select one of those categories;
-  the 🧪 ⚡ 🖥 next to an example in the sidebar are what it can do, and the framed one is the suggested first step; once open, the title bar's main button (blue) and the "suggested steps" above the editor say the same, and the ▾ next to the main button lists the other ways.
+  the 🧪 ⚡ 🖥 next to an example in the sidebar are what it can do, and the framed one is the suggested first step; once open, the blue button on the action bar above the editor says the same, and ⋯ lists the other ways.
 - **Command line**: run from the project root; installing `reda` is in chapter 2. When an example takes several files, all of them must be listed.
 
 ## Common runs
@@ -154,7 +154,7 @@ chapter 15). Open any of the files below and press "▶ Run" (Ctrl+Enter): the p
 
 ### More board examples (v2.29)
 
-The same board and the same boot snapshot, each with its own programs (`veryl/examples/rv64/apps/`) and pre-wired breadboard. Open one, press the main button "🖥 Machine" to boot,
+The same board and the same boot snapshot, each with its own programs (`veryl/examples/rv64/apps/`) and pre-wired breadboard. Open one, press "🖥 Machine" on the action bar to boot,
 open a program file and press "▶ Run".
 
 | ID | What it does | Files | Command on the board |

@@ -19,7 +19,9 @@ import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
 import { FloatWin, floatWin } from './floatwin';
-import { Act, actHint, actName, badges, CapInput, caps, Fix, start, steps } from './caps';
+import { PcbPreview } from './pcbprev';
+import type { NvBoard } from './netview';
+import { Act, actHint, actName, badges, CapInput, caps, Fix, start } from './caps';
 
 declare const VERYL_WASM_B64: string;
 
@@ -48,7 +50,7 @@ interface Project {
   piBoard?: import('./bbmodel').Part[];
   /** the emulator's engine for a machine riscv-emu can run (machine.json "riscv") */
   emuEngine?: Engine;
-  /** the suggested steps bar was closed */
+  /** no longer used: the suggested steps bar could be closed */
   guideOff?: boolean;
   /** the target clock (MHz) of the synthesis flows, when the project has no .sdc file */
   clockMhz?: number;
@@ -115,6 +117,8 @@ function blankFluxaProject(name: string): Project {
 // ---------------------------------------------------------------- state
 
 let core: Core | null = null;
+/** a .board's drawing beside it (the action bar's 🔌 PCB) */
+let pcbPrev: PcbPreview;
 let synth: SynthOverlay | null = null;
 let wave: WaveView | null = null;
 let ed: CodeEditor;
@@ -234,6 +238,7 @@ function showActive(): void {
     $('sbPos').textContent = '';
   }
   if (a === WELCOME) welcome();
+  pcbPrev.show(isFile ? a : undefined, file(a)?.src ?? '');
   renderTabs();
   renderFiles();
   applyCaps();
@@ -1263,9 +1268,9 @@ function runKey(): void {
   if (machineCfg()?.files && boardCmd(proj.active ?? '')) runOnBoard(); else runTests();
 }
 
-// ---------------------------------------------------------------- the main button and its menu
+// ---------------------------------------------------------------- the title bar and the ⋯ menu
 
-/** the title bar: 'basic' (the main button, its menu; the flow menus on the flow tab) or 'full' (every control, grouped by intent) */
+/** the title bar: 'basic' (no controls; the flow menus on the flow tab) or 'full' (every control, grouped by intent) */
 let uiMode: 'basic' | 'full' = load<'basic' | 'full'>('mode', 'basic');
 function setMode(m: 'basic' | 'full'): void { uiMode = m; save('mode', m); applyMode(); }
 function applyMode(): void {
@@ -1273,14 +1278,7 @@ function applyMode(): void {
   $('modeBtn').textContent = uiMode === 'basic' ? tr('進階 ▸', 'Advanced ▸') : tr('◂ 簡易', '◂ Simple');
   $('modeBtn').title = uiMode === 'basic'
     ? tr('顯示所有控制：驗證（測試的頂層、閘級模擬、全面驗證）、看電路（目標、階段、頂層）、跑起來（虛擬板、模擬機）', 'Show every control: verify (simulation top, gate level, verify all), circuit (target, stage, top), run it (virtual board, emulator)')
-    : tr('簡易：只留主按鈕與它的選單（▾），合成流程分頁裡才出現合成的選單', 'Simple: only the main button and its menu (▾); the synthesis menus appear on the flow tab');
-}
-
-/** the main button: the suggested step (a board program open: run it) */
-function mainClick(): void {
-  if (!core) return;
-  const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
-  if (onBoard) runKey(); else act(start(capIn()), $('mainBtn'));
+    : tr('簡易：標題列不放控制（動作都在編輯器上方那一排），合成流程分頁裡才出現合成的選單', 'Simple: no controls in the title bar (the actions are in the bar above the editor); the synthesis menus appear on the flow tab');
 }
 
 /** synthesize for a back end of the target menu (fpga, asic, sky130), at a stage */
@@ -1333,7 +1331,8 @@ function menuItems(): [string, MenuItem[]][] {
   ];
 }
 
-function showMenu(): void {
+/** ⋯ on the action bar: every way of each action (verify all, the ASIC back ends, the emulator's engines) */
+function showMenu(anchor: HTMLElement): void {
   if (!core) return;
   hideWhy();
   const c = projCaps();
@@ -1347,9 +1346,9 @@ function showMenu(): void {
     const star = on && x.act === first && !x.alt ? `<i>${tr('建議', 'suggested')}</i>` : '';
     return `<button class="mi${on ? '' : ' off'}" data-k="${k++}"><b>${esc(x.label)}${star}</b><span>${esc(on ? x.hint : c[x.act].why ?? '')}</span></button>`;
   }).join('')).join('')
-    + `<button class="mi foot" data-k="mode"><b>${uiMode === 'basic' ? tr('進階 ▸ 標題列顯示所有控制', 'Advanced ▸ every control in the title bar') : tr('◂ 簡易：只留主按鈕', '◂ Simple: only the main button')}</b></button>`;
+    + `<button class="mi foot" data-k="mode"><b>${uiMode === 'basic' ? tr('進階 ▸ 標題列顯示所有控制', 'Advanced ▸ every control in the title bar') : tr('◂ 簡易：標題列不顯示控制', '◂ Simple: no controls in the title bar')}</b></button>`;
   m.classList.remove('hidden');
-  const r = $('mainAct').getBoundingClientRect();
+  const r = anchor.getBoundingClientRect();
   m.style.top = `${r.bottom + 4}px`;
   m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
   m.onclick = e => {
@@ -1358,7 +1357,7 @@ function showMenu(): void {
     hideMenu();
     if (b.dataset.k === 'mode') { setMode(uiMode === 'basic' ? 'full' : 'basic'); return; }
     const x = items[+b.dataset.k!];
-    if (!c[x.act].on) showWhy(x.act, $('mainBtn')); else x.run();
+    if (!c[x.act].on) showWhy(x.act, anchor); else x.run();
   };
 }
 function hideMenu(): void { $('mainMenu').classList.add('hidden'); }
@@ -1380,7 +1379,6 @@ function applyCaps(): void {
   $('sbLang').textContent = fluxaProject() ? 'Fluxa' : 'Veryl';
   if (!core) return;
   const c = projCaps();
-  const first = start(capIn());
   const onBoard = c.test.on && !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
   for (const [a, id] of ACT_BTN) {
     const b = $(id);
@@ -1392,11 +1390,6 @@ function applyCaps(): void {
       : id === 'cmdRun' && onBoard ? tr(`在板子上執行 ${proj.active}（Ctrl/⌘+Enter）`, `Run ${proj.active} on the board (Ctrl/⌘+Enter)`) : tr(zh, en);
     b.classList.remove('primary');
   }
-  const mb = $<HTMLButtonElement>('mainBtn');
-  mb.disabled = $<HTMLButtonElement>('mainMore').disabled = false;
-  mb.textContent = onBoard ? tr(`▶ 執行 ${proj.active}`, `▶ Run ${proj.active}`) : actName(first);
-  mb.title = onBoard ? tr(`在板子上執行 ${proj.active}（Ctrl/⌘+Enter）`, `Run ${proj.active} on the board (Ctrl/⌘+Enter)`)
-    : tr(`這個專案建議的下一步：${actHint(first, capIn())}。▾ 有其他做法`, `The suggested next step for this project: ${actHint(first, capIn())}. ▾ has the others`);
   const fs = $<HTMLSelectElement>('flowStage');
   fs.disabled = !c.synth.on;
   fs.title = c.synth.on ? tr('合成並檢視這個階段（Ctrl/⌘+Shift+B）', 'Synthesize and view this stage (Ctrl/⌘+Shift+B)') : c.synth.why!;
@@ -1461,17 +1454,60 @@ function showWhy(a: Act, anchor: HTMLElement): void {
 }
 function hideWhy(): void { $('capPop').classList.add('hidden'); }
 
-/** the suggested steps above the editor, one line (each step's explanation is its tooltip; closed with ×, back from the command palette) */
+/** the action bar above the editor: on the left the project's actions, always in the same order
+ * (the suggested next one is the primary button; those the project cannot do are off and say why;
+ * ⋯ has the other ways), on the right the open file's views (a .board's PCB, a module's circuit…) */
+const BAR_ACTS: Act[] = ['test', 'synth', 'board', 'emu'];
 function renderGuide(): void {
   const g = $('guide');
   // the welcome page has its own starting points
-  const show = !!core && !proj.guideOff && proj.active !== WELCOME;
+  const show = !!core && proj.active !== WELCOME;
   g.classList.toggle('hidden', !show);
   if (!show) return;
-  const ci = capIn();
-  g.innerHTML = `<span class="lbl">${tr('建議步驟', 'Suggested steps')}</span>`
-    + steps(ci).map((a, i) => `<button class="step${i ? '' : ' first'}" data-step="${a}" title="${attr(actHint(a, ci))}"><b>${'①②③'[i]} ${esc(actName(a))}</b></button>`).join('<span class="arr">→</span>')
-    + `<button class="close" title="${attr(tr('關閉（命令選單的「顯示建議步驟」可以再打開）', 'Close (the command palette\'s "Show the suggested steps" brings it back)'))}">×</button>`;
+  const ci = capIn(), c = projCaps();
+  // a board program open: ▶ runs it
+  const onBoard = c.test.on && !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
+  const first = onBoard ? 'test' : start(ci);
+  const btn = (a: Act) => {
+    const label = a === 'test' && onBoard ? tr(`▶ 執行 ${proj.active}`, `▶ Run ${proj.active}`) : actName(a);
+    const title = !c[a].on ? `${c[a].why}\n${tr('（點一下看怎麼辦）', '(click for what to do)')}`
+      : a === 'test' && onBoard ? tr(`在板子上執行 ${proj.active}（Ctrl/⌘+Enter）`, `Run ${proj.active} on the board (Ctrl/⌘+Enter)`)
+      : actHint(a, ci) + (a === first ? tr('（建議的下一步）', ' (the suggested next step)') : '');
+    return `<button class="ab${c[a].on ? (a === first ? ' primary' : '') : ' off'}" data-step="${a}" title="${attr(title)}">${esc(label)}</button>`;
+  };
+  const views = fileViews(proj.active);
+  g.innerHTML = `<div class="ab-l">${BAR_ACTS.map(btn).join('')}<button class="ab more" data-a="more" title="${attr(tr('其他做法：全面驗證、ASIC、模擬機的引擎…', 'The other ways: verify all, ASIC, the emulator\'s engines…'))}">⋯</button></div>`
+    + `<div class="ab-r">${views.map(v => `<button class="ab view${v.on ? ' on' : ''}" data-view="${v.key}" title="${attr(v.title)}">${esc(v.label)}</button>`).join('')}</div>`;
+}
+
+/** the views of a file, on the right of the action bar */
+type ViewKey = 'pcb' | 'circuit' | 'asm';
+function fileViews(name: string | undefined): { key: ViewKey; label: string; title: string; on?: boolean }[] {
+  if (!name || !file(name)) return [];
+  if (name.endsWith('.board')) return [{ key: 'pcb', label: tr('🔌 PCB', '🔌 PCB'), on: pcbPrev?.isOpen,
+    title: tr('畫出這塊擴充板：線路圖、電路圖，邊改邊更新（不用燒錄）', 'Draw this expansion board: its nets and schematic, redrawn as you edit (no flashing needed)') }];
+  if (name.endsWith('.veryl') || name.endsWith('.fx')) return [{ key: 'circuit', label: tr('📐 電路圖', '📐 Circuit'),
+    title: tr('游標所在模組的邏輯閘電路（合成、最佳化後，還沒對應到 FPGA 或標準元件）', 'The gates of the module at the cursor (synthesized and optimized, not yet mapped to the FPGA or standard cells)') }];
+  if (name.endsWith('.c')) return [{ key: 'asm', label: tr('組合語言', 'Assembly'), title: tr('編譯出來的 RISC-V 組合語言', 'The RISC-V assembly it compiles to') }];
+  return [];
+}
+
+function openView(v: ViewKey): void {
+  const name = proj.active ?? '';
+  if (v === 'pcb') { pcbPrev.toggle(file(name)?.src ?? ''); renderGuide(); }
+  else if (v === 'asm') openFile(ASM_TAB);
+  else {
+    // the module the cursor is in (a testbench: the first design module of the file)
+    const src = file(name)?.src ?? '';
+    const before = src.split('\n').slice(0, ed.line).join('\n');
+    const word = fluxaProject() ? 'task' : 'module';
+    const names = (t: string) => [...t.matchAll(new RegExp(`\\b${word}\\s+(\\w+)`, 'g'))].map(m => m[1]);
+    const design = (n: string) => mods.some(m => m.name === n && !m.test);
+    const top = [...names(before)].reverse().find(design) ?? names(src).find(design);
+    const sel = $<HTMLSelectElement>('synthTop');
+    if (top && [...sel.options].some(o => o.value === top)) sel.value = top;
+    runSynth('opt');
+  }
 }
 
 function openEmu(): void {
@@ -1768,8 +1804,7 @@ function commands(): Cmd[] {
     { label: tr('顯示：輸出', 'View: Output'), run: () => panel('output') },
     { label: tr('顯示：波形', 'View: Waveform'), run: () => panel('wave') },
     { label: tr('歡迎頁', 'Welcome page'), run: () => openFile(WELCOME) },
-    { label: uiMode === 'basic' ? tr('標題列：顯示所有控制（進階）', 'Title bar: every control (advanced)') : tr('標題列：簡易（主按鈕與選單）', 'Title bar: simple (the main button and its menu)'), run: () => setMode(uiMode === 'basic' ? 'full' : 'basic') },
-    { label: tr('顯示建議步驟', 'Show the suggested steps'), run: () => { proj.guideOff = false; persist(); renderGuide(); } },
+    { label: uiMode === 'basic' ? tr('標題列：顯示所有控制（進階）', 'Title bar: every control (advanced)') : tr('標題列：簡易（不放控制）', 'Title bar: simple (no controls)'), run: () => setMode(uiMode === 'basic' ? 'full' : 'basic') },
     ...LANGS.map(([l, name]) => ({ label: `${tr('介面語言：', 'Language: ')}${name}`, run: () => switchLang(l) })),
     ...projects.filter(p => p !== proj).map(p => ({ label: `${tr('切換專案：', 'Switch project: ')}${projName(p)}`, run: () => switchProject(p.id) })),
     ...examples().map(e => ({ label: `${tr('開啟範例：', 'Open example: ')}${exTitle(e)}`, run: () => openExample(e) })),
@@ -1833,10 +1868,16 @@ function wire(): void {
   ($('tgSynth') as HTMLOptGroupElement).label = tr('合成（看電路）', 'Synthesis (the circuit)');
   ($('tgEmu') as HTMLOptGroupElement).label = tr('模擬機（跑軟體）', 'Emulator (software)');
   ed = new CodeEditor($('editorHost'));
+  pcbPrev = new PcbPreview($('edArea'), async src => {
+    if (!core) return { error: tr('還在載入', 'still loading') };
+    const r = await core.call<{ pcb?: NvBoard & { name: string }; parse_error?: string }>({ cmd: 'pcb_info', src });
+    return r.pcb ?? { error: r.parse_error ?? '' };
+  });
   ed.onChange = text => {
     const f = file(proj.active ?? '');
     if (!f || ed.readOnly) return;
     f.src = text;
+    if (f.name.endsWith('.board')) pcbPrev.update(text);
     // the file's problems are stale now: the check finds syntax errors again, the next run the others
     problems = problems.filter(p => p.file !== f.name);
     changed();
@@ -1859,7 +1900,6 @@ function wire(): void {
   $('cmdPalette').onclick = () => palette(false);
   $('cmdRun').onclick = () => runKey();
   $('cmdVerify').onclick = () => act('verify', $('cmdVerify'));
-  $('mainBtn').onclick = () => mainClick();
   const clockEl = document.getElementById('synClock') as HTMLInputElement | null;
   if (clockEl) clockEl.onchange = () => {
     const v = parseFloat(clockEl.value);
@@ -1868,19 +1908,22 @@ function wire(): void {
     synthKey = JSON.stringify([hdlFiles(), synthTop(), pcfOf(proj), sdcOf(proj)]);
     synth?.setSdc(sdcOf(proj));
   };
-  $('mainMore').onclick = () => $('mainMenu').classList.contains('hidden') ? showMenu() : hideMenu();
   $('modeBtn').onclick = () => setMode(uiMode === 'basic' ? 'full' : 'basic');
   $('cmdBoard').onclick = () => act('board', $('cmdBoard'));
   $('cmdEmu').onclick = () => act('emu', $('cmdEmu'));
   $('guide').onclick = e => {
-    const t = (e.target as HTMLElement).closest<HTMLElement>('[data-step]');
-    if (t) act(t.dataset.step as Act, t);
-    else if ((e.target as HTMLElement).closest('.close')) { proj.guideOff = true; persist(); renderGuide(); }
+    const t = (e.target as HTMLElement).closest<HTMLElement>('[data-step], [data-a=more], [data-view]');
+    if (!t) return;
+    if (t.dataset.step) {
+      const onBoard = !!machineCfg()?.files && !!boardCmd(proj.active ?? '');
+      if (t.dataset.step === 'test' && onBoard) runKey(); else act(t.dataset.step as Act, t);
+    } else if (t.dataset.view) openView(t.dataset.view as ViewKey);
+    else $('mainMenu').classList.contains('hidden') ? showMenu(t) : hideMenu();
   };
   document.addEventListener('mousedown', e => {
     const t = e.target as HTMLElement;
     if (!t.closest('#capPop, .off, [data-step]')) hideWhy();
-    if (!t.closest('#mainMenu, #mainMore')) hideMenu();
+    if (!t.closest('#mainMenu, #guide [data-a=more]')) hideMenu();
   });
   $('testsRun').onclick = () => runTests();
   $('testsVerify').onclick = verifyAll;
@@ -2004,6 +2047,8 @@ async function boot(): Promise<void> {
     $('sbCore').textContent = `✓ WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr('（背景執行緒）', ' (worker thread)') : ''}`;
     for (const id of ['cmdRun', 'cmdVerify', 'cmdBoard', 'cmdEmu', 'flowTarget', 'flowStage']) $<HTMLButtonElement>(id).disabled = false;
     applyCaps();
+    // a .board open before the core was there: its preview now
+    pcbPrev.show(proj.active, file(proj.active ?? '')?.src ?? '');
     synth = new SynthOverlay(core, {
       embedded: true,
       onStage: k => {

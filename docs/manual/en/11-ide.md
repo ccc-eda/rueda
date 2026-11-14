@@ -8,9 +8,10 @@ The whole toolchain (simulator, synthesizer, FPGA and ASIC flows, C compiler) is
 ## Layout
 
 ```
-┌ Title bar: [Main button ▾] (advanced: Verify │ See the circuit │ Run it)     ⌘ Commands  Advanced ▸  Language ┐
+┌ Title bar: (advanced: Verify │ See the circuit │ Run it)     ⌘ Commands  Advanced ▸  Language ┐
 ├────────┬──────────────────────────────────────────────────┤
 │ Activity │ Editor tabs: files, ⚙ Synthesis flow, ⚡ Virtual iCEBreaker, Assembly │
+│          │ Action bar: ▶ Test ⚙ Synthesize ⚡ Virtual board 🖥 Machine ⋯   this file's views │
 │ bar    │                                                    │
 │ Sidebar├──────────────────────────────────────────────────┤
 │ Files  │ Panels: Problems │ Output │ Test results │ Waveform                     │
@@ -48,41 +49,45 @@ When space is short, four blocks can leave their place and float over the page i
 - Each window remembers its choice, place and size; when the browser window shrinks, floating windows stay on the page.
 
 
-### Main button and menu (v2.27)
+### Action bar
 
-The blue button at the far left of the title bar is the **main button**: the recommended next step for this project. It follows the project:
+The **action bar** above the editor: on the left the project's actions, always in the same order; on the right the open file's views.
 
-| Project | Main button |
-|---|---|
-| A machine (has `machine.json`, e.g. the RV64 board) | 🖥 Machine (boot) |
-| A board project with a `.py` / `.c` / `.sh` open | ▶ Run `main.py` (run the open program on the board) |
-| Has a pin file (`.pcf`) | ⚡ Virtual board |
-| Anything else (with a testbench) | ▶ Test |
+```
+▶ Test  ⚙ Synthesize  ⚡ Virtual board  🖥 Machine  ⋯              📐 Circuit
+└────────────── the project's actions (left) ──────────────┘    └ this file's views (right) ┘
+```
 
-The **▾** next to it lists all actions, grouped into three by "what you want to do", each with a one-line description:
+- **The project's actions**: the suggested next step is blue. It follows the project:
 
-| Group | Actions |
-|---|---|
-| Verify | ▶ Test, ✔ Full verification |
-| See the circuit | ⚙ Synthesis: FPGA (iCE40), ASIC · vlib, ASIC · SKY130, ⇄ FPGA vs ASIC comparison |
-| Run it | ⚡ Virtual board, 🖥 Machine (RV64 board can choose riscv/rvemu or veryl/emu) |
+  | Project | The blue action |
+  |---|---|
+  | A machine (has `machine.json`, e.g. the RV64 board) | 🖥 Machine (boot) |
+  | A board project with a `.py` / `.c` / `.sh` open | ▶ Run `main.py` (runs the open program on the board) |
+  | Has a pin file (`.pcf`) | ⚡ Virtual board |
+  | Otherwise (has testbenches) | ▶ Test |
 
-The recommended action is labeled "Recommended". Actions this project cannot use are dimmed, and the description says why; clicking one pops up the reason and what you can do, e.g. "add pins.pcf",
-"flash anyway (default pins)", "open main.py", "🖥 boot".
+  Actions this project cannot use are dimmed and their tooltip says why; clicking one shows the reason and what you can do, such as
+  "Add pins.pcf", "Flash anyway (default pins)", "Open main.py", "🖥 Boot".
+- **⋯** lists the other ways of each action, in three groups by what you want to do: Verify (▶ Test, ✔ Verify all), See the circuit
+  (⚙ Synthesize: FPGA (iCE40), ASIC · vlib, ASIC · SKY130, ⇄ FPGA vs ASIC), Run it (⚡ Virtual board, the 🖥 machine's engines). The suggested one is marked.
+- **This file's views** change with the open file:
 
-**Basic and advanced**: the default is Basic, where the title bar has only the main button and ▾; the synthesis menu (target, stage, top) appears only when the synthesis flow tab is open. Press
-"Advanced ▸" at the right of the title bar (or the bottom of the ▾ menu, or the command menu) to switch to Advanced: all controls sit in the title bar, in three groups — "Verify" (▶ Test, test top,
-RTL / gate-level simulation, ✔ Full verification), "See the circuit" (target, stage, top), and "Run it" (⚡ Virtual board, 🖥 Machine) — wrapping to two rows on narrow windows. Buttons this project
-cannot use are still dimmed with a dashed border and explain themselves when clicked. The choice is remembered in the browser.
+  | File | View |
+  |---|---|
+  | `.board` | 🔌 PCB: the expansion board's nets / schematic beside the text (or floating), redrawn as you edit, no flashing needed; parse errors (with their line) and the ERC's findings are in its title bar |
+  | `.veryl`, `.fx` | 📐 Circuit: the gates of the module at the cursor (the synthesis flow's "③ Tech-indep Syn") |
+  | `.c` | Assembly |
 
-The **suggested steps** above the editor list this project's ①②③ (e.g. ① ⚡ Virtual board → ② ▶ Test → ③ ⚙ Synthesis); click one to do it.
-× closes them; "Show suggested steps" in the command menu turns them back on.
+**Basic and advanced**: the default is Basic, with no controls in the title bar; the synthesis menus (target, stage, top) appear only on the synthesis flow tab. Press
+"Advanced ▸" at the right of the title bar (or the bottom of the ⋯ menu, or the command menu) to switch to Advanced: the title bar gains three groups, "Verify" (▶ Test, test top,
+RTL / gate-level simulation, ✔ Verify all), "See the circuit" (target, stage, top) and "Run it" (⚡ Virtual board, 🖥 Machine), wrapping to two rows on narrow windows. The choice is remembered in the browser.
 
 ### On a phone
 
 Below 760 px of screen width (phone in portrait), the layout changes automatically:
 
-- **Title bar**: only the main button and ▾, ⌘ Commands, and **⋯**; ⋯ expands all the controls of the three groups ("Verify", "See the circuit", "Run it") plus the language menu.
+- **Title bar**: only ⌘ Commands and **⋯**; ⋯ expands all the controls of the three groups ("Verify", "See the circuit", "Run it") plus the language menu.
   Tapping the breadcrumb of the synthesis flow tab also expands it.
 - **Sidebar**: hidden normally; tap an icon in the left activity bar to slide it in from the left, over the editor; it retracts when you pick a file or example, or tap the editor.
 - **Editor**: 16 px text (so phones don't auto-zoom while typing); the panel tabs scroll horizontally, panel heights can be dragged.
@@ -105,7 +110,7 @@ The features are exactly the same as on desktop (the same page); URL parameters 
   | ⇶ Write dataflow in Fluxa | FIR filter (Fluxa) | Open and run the tests ([chapter 17](17-fluxa.md)) |
 
   "See examples like this" opens the example library filtered to that category. Below are ＋ New project, 📚 Open example, ⇪ Import `.veryl` files, and recent projects.
-  Choosing a card only decides where you start; the interface is never locked: the main button and ▾ keep following the project.
+  Choosing a card only decides where you start; the interface is never locked: the action bar keeps following the project.
 - Projects opened from an example can be edited without affecting the example; "Restore example source" returns to the original, and edited files are marked on their tabs.
 - Downloading a project `.zip` gives `Veryl.toml` + `src/`, a project the official `veryl` can use; `reda` reads `src/*.veryl` directly.
 - C programs: name the file `xxx.c` when adding it (one per project), and the design must use `RvBoard` (easiest to start from the "C programs" example).

@@ -99,14 +99,6 @@ export function start(i: CapInput): Act {
   return 'synth';
 }
 
-/** the suggested steps, first one first (at most three) */
-export function steps(i: CapInput): Act[] {
-  const c = caps({ ...i, active: undefined });
-  const s = start(i);
-  if (s === 'emu') return ['emu'];
-  return [s, ...(['test', 'board', 'synth'] as Act[]).filter(a => a !== s && c[a].on)].slice(0, 3);
-}
-
 /** an example's badges: what it can do (🧪 tests, ⚡ virtual board, 🖥 emulator) */
 export function badges(i: CapInput): { icon: string; act: Act }[] {
   const c = caps({ ...i, active: undefined });

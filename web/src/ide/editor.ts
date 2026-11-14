@@ -64,6 +64,9 @@ export class CodeEditor {
 
   setMarkers(m: Marker[]): void { this.markers = m; this.render(); }
 
+  /** the line the cursor is on (1-based) */
+  get line(): number { return this.ta.value.slice(0, this.ta.selectionStart).split('\n').length; }
+
   /** put the cursor at line:col (1-based) and select to the end of the line */
   goto(line: number, col = 1, selectLine = false): void {
     const ls = this.ta.value.split('\n');

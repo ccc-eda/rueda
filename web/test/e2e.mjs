@@ -130,20 +130,40 @@ for (const size of SIZES) {
     return why.join('; ') || null;
   });
 
-  // the suggested steps: one line; each step's explanation is its tooltip
-  await check('suggested steps on one line, hints as tooltips', size, async () => {
+  // the action bar: the project's actions in a fixed order (one primary, the others with tooltips), the file's views on the right
+  await check('action bar: actions on the left, file views on the right', size, async () => {
     const { ctx, page } = await open(size, '#ex=seq101');
     const g = await page.evaluate(() => {
       const el = document.getElementById('guide');
-      const steps = [...el.querySelectorAll('.step')];
-      return { visible: !el.classList.contains('hidden'), h: el.offsetHeight, n: steps.length, spans: el.querySelectorAll('.step span').length, titled: steps.every((s) => s.title.length > 5) };
+      const acts = [...el.querySelectorAll('.ab-l [data-step]')];
+      return { visible: !el.classList.contains('hidden'), h: el.offsetHeight, order: acts.map((b) => b.dataset.step).join(), primary: el.querySelectorAll('.ab.primary').length,
+        titled: acts.every((s) => s.title.length > 5), views: [...el.querySelectorAll('.ab-r [data-view]')].map((b) => b.dataset.view).join() };
     });
     await ctx.close();
-    if (!g.visible || !g.n) return 'no suggested steps';
-    if (g.spans) return `${g.spans} hint line(s) still under the steps`;
-    if (!g.titled) return 'a step has no tooltip';
-    if (g.h > 44) return `the bar is ${g.h} px high (wrapped)`;
+    if (!g.visible) return 'no action bar';
+    if (g.order !== 'test,synth,board,emu') return `actions ${g.order}`;
+    if (g.primary !== 1) return `${g.primary} primary buttons`;
+    if (!g.titled) return 'an action has no tooltip';
+    if (g.views !== 'circuit') return `views of a .veryl: ${g.views}`;
+    if (size.width >= 1000 && g.h > 44) return `the bar is ${g.h} px high (wrapped)`;
     return null;
+  });
+
+  // a .board's PCB beside its text, drawn without flashing, redrawn as it is edited
+  await check('.board: 🔌 PCB drawn and redrawn as it is edited', size, async () => {
+    const { ctx, page, errors } = await open(size, '#ex=lab_keys');
+    await page.click('#fileList .nm >> text=keys.board');
+    await page.click('#guide [data-view="pcb"]');
+    await page.waitForSelector('.pcb-prev svg', { timeout: 10000 });
+    const ok = await page.textContent('.pcb-prev-msg');
+    await page.evaluate(() => { const ta = document.querySelector('#editorHost textarea'); ta.value = ta.value.replace('part S4 btn', 'part S4 button'); ta.dispatchEvent(new Event('input', { bubbles: true })); });
+    await page.waitForFunction(() => /line 9/.test(document.querySelector('.pcb-prev-msg').textContent), null, { timeout: 5000 });
+    await page.click('#guide [data-view="pcb"]');
+    const hidden = await page.$eval('.pcb-prev', (w) => w.classList.contains('hidden'));
+    await ctx.close();
+    if (!/ERC ✓/.test(ok)) return `ERC: ${ok}`;
+    if (!hidden) return 'not hidden by a second click';
+    return errors.length ? `page errors: ${errors[0]}` : null;
   });
 
   // the welcome page: a Fluxa starting point that opens a Fluxa example whose tests pass
@@ -152,7 +172,7 @@ for (const size of SIZES) {
     await page.waitForSelector('#welcome:not(.hidden) [data-goal="fluxa"]', { timeout: 5000 });
     await page.click('#welcome [data-goal="fluxa"]');
     await page.waitForFunction(() => [...document.querySelectorAll('#fileList .nm')].some((e) => e.textContent.endsWith('.fx')), null, { timeout: 5000 });
-    await page.click('#mainBtn');
+    await page.click('#guide [data-step="test"]');
     await page.waitForSelector('#p-results .banner', { timeout: 20000 });
     const banner = await page.textContent('#p-results .banner');
     await ctx.close();
@@ -163,7 +183,7 @@ for (const size of SIZES) {
   // the largest Fluxa example: the RV64G processor's 90 tests run in the browser (the cooperative scheduler)
   await check('Fluxa RV64 example: all tests pass in the browser', size, async () => {
     const { ctx, page } = await open(size, '#ex=fx_rv64');
-    await page.click('#mainBtn');
+    await page.click('#guide [data-step="test"]');
     await page.waitForSelector('#p-results .banner', { timeout: 120000 });
     const banner = await page.textContent('#p-results .banner');
     await ctx.close();
@@ -173,8 +193,8 @@ for (const size of SIZES) {
   // a Fluxa example from the list: the deadlock is reported (the first step is the tests)
   await check('Fluxa deadlock example reported', size, async () => {
     const { ctx, page } = await open(size, '#ex=fx_deadlock');
-    const steps = await page.$$eval('#guide [data-step]', (b) => b.map((x) => x.dataset.step));
-    await page.click('#mainBtn');
+    const steps = await page.$$eval('#guide .ab.primary', (b) => b.map((x) => x.dataset.step));
+    await page.click('#guide [data-step="test"]');
     await page.waitForFunction(() => /deadlock/.test(document.getElementById('p-output').textContent), null, { timeout: 20000 });
     await ctx.close();
     return steps[0] !== 'test' ? `first step ${steps[0]}` : null;
@@ -183,7 +203,7 @@ for (const size of SIZES) {
   // Fluxa synthesis: a Fluxa task through the stages to the routed iCE40, then its tests on the gates
   await check('Fluxa synthesis: stages drawn, routed, tests on gates', size, async () => {
     const { ctx, page, errors } = await open(size, '#ex=fx_fir4');
-    const steps = await page.$$eval('#guide [data-step]', (b) => b.map((x) => x.dataset.step));
+    const steps = await page.$$eval('#guide [data-step]:not(.off)', (b) => b.map((x) => x.dataset.step));
     if (!steps.includes('synth')) { await ctx.close(); return `synthesis not suggested: ${steps}`; }
     await page.click('#guide [data-step="synth"]');
     await page.waitForSelector('#flowStage', { state: 'visible' });
@@ -194,9 +214,9 @@ for (const size of SIZES) {
       if (await waitDrawn(page, stage === 'route' ? 120000 : 10000) <= 200) missing.push(stage);
     }
     const crumb = await page.textContent('#synCrumb');
-    // the simulation target is in the full-mode toolbar: set it, then the main button runs the tests
+    // the simulation target is in the full-mode toolbar: set it, then ▶ Test on the action bar runs the tests
     await page.$eval('#simMode', (s) => { s.value = 'ice40'; s.dispatchEvent(new Event('change')); });
-    await page.click('#mainBtn');
+    await page.click('#guide [data-step="test"]');
     await page.waitForSelector('#p-results .banner', { timeout: 60000 });
     const banner = await page.textContent('#p-results .banner');
     await ctx.close();

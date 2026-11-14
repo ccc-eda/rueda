@@ -563,7 +563,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const js = esbuild.buildSync({ entryPoints: [path.join(dist, '../src/ide/caps.ts')], bundle: true, format: 'cjs', platform: 'node', write: false }).outputFiles[0].text;
   const cp = path.join(tmp, 'caps.cjs');
   fs.writeFileSync(cp, js);
-  const { caps, start, steps, badges } = createRequire(import.meta.url)(cp);
+  const { caps, start, badges } = createRequire(import.meta.url)(cp);
   const errs = [];
   const firsts = {};
   for (const ex of ctx.VERYL_EXAMPLES) {
@@ -573,7 +573,6 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
     firsts[s] = (firsts[s] ?? 0) + 1;
     const want = ex.emu ? 'emu' : ex.pcf ? 'board' : 'test';
     if (s !== want) errs.push(`${ex.id}: first step ${s}, expected ${want}`);
-    if (steps(i)[0] !== s) errs.push(`${ex.id}: steps do not start with ${s}`);
     if (!badges(i).some((b) => b.act === s)) errs.push(`${ex.id}: no badge for its first step`);
     for (const [a, v] of Object.entries(c)) if (!v.on && !v.why) errs.push(`${ex.id}: ${a} off without a reason`);
     if (ex.emu) {

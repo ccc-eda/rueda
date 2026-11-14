@@ -647,16 +647,32 @@ fn attach(b: &mut eda::fpga::board::Board, p: &Value) -> R<Value> {
     }
     let Some(src) = p.get("pcb").and_then(|s| s.as_str()) else { return Ok(Value::Null) };
     let pcb = eda::pcb::Board::parse(src).map_err(|e| format!("board.board: {}", e))?;
-    let erc: Vec<Value> = eda::pcb::erc::check(&pcb).iter().map(|d| json!({ "error": d.error, "msg": d.msg })).collect();
-    // each part with its pins [number, name, type]; each net with its pins [part index, pin number] and its rail
+    let mut info = pcb_desc(&pcb);
+    let sim = eda::pcb::sim::Sim::new(&pcb)?;
+    info["pins"] = json!(sim.hosts.iter().map(|h| h.pin).collect::<Vec<u32>>());
+    b.attach_pcb(sim);
+    Ok(info)
+}
+
+/// a board's description for the drawing: each part with its pins [number, name, type]; each net
+/// with its pins [part index, pin number] and its rail; the ERC's findings
+fn pcb_desc(pcb: &eda::pcb::Board) -> Value {
+    let erc: Vec<Value> = eda::pcb::erc::check(pcb).iter().map(|d| json!({ "error": d.error, "msg": d.msg })).collect();
     let parts: Vec<Value> = pcb.desc.parts.iter().zip(&pcb.kinds).map(|(p, k)| json!({ "id": p.id, "kind": p.kind, "value": p.value,
         "pins": k.pins.iter().map(|(n, name, t)| json!([n, name, t.name()])).collect::<Vec<_>>() })).collect();
-    let nets: Vec<Value> = pcb.nets.iter().enumerate().map(|(i, n)| json!({ "name": n.name, "rail": eda::pcb::erc::rail(&pcb, i),
+    let nets: Vec<Value> = pcb.nets.iter().enumerate().map(|(i, n)| json!({ "name": n.name, "rail": eda::pcb::erc::rail(pcb, i),
         "pins": n.pins.iter().map(|p| json!([p.part, p.num])).collect::<Vec<_>>() })).collect();
-    let sim = eda::pcb::sim::Sim::new(&pcb)?;
-    let pins: Vec<u32> = sim.hosts.iter().map(|h| h.pin).collect();
-    b.attach_pcb(sim);
-    Ok(json!({ "name": pcb.desc.name, "parts": parts, "nets": nets, "erc": erc, "pins": pins }))
+    json!({ "name": pcb.desc.name, "parts": parts, "nets": nets, "erc": erc })
+}
+
+/// a .board as text, without a board to plug it into (the editor's preview): its description
+/// (`pcb`), or the parse error (`parse_error`)
+fn pcb_info(v: &Value) -> R<Value> {
+    let src = v.get("src").and_then(|s| s.as_str()).unwrap_or("");
+    Ok(match eda::pcb::Board::parse(src) {
+        Ok(pcb) => json!({ "ok": true, "pcb": pcb_desc(&pcb) }),
+        Err(e) => json!({ "ok": true, "parse_error": e }),
+    })
 }
 
 /// the design's port bits as the pin file names them: [{name, dir}]
@@ -903,6 +919,7 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "board_run" => board_run(v),
         "board_reset" => board_reset(),
         "board_periph" => board_periph(v),
+        "pcb_info" => pcb_info(v),
         // Fluxa: the tests of a program (files merged, like `reda sim a.fx b.fx`), run on the
         // cooperative scheduler (no threads in WebAssembly)
         "fluxa_list" => {
