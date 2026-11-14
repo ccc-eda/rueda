@@ -558,26 +558,31 @@ function renderExamples(): void {
 // ---------------------------------------------------------------- where to start
 
 /** what the example list shows: every example, or those that can do one thing */
-type ExFilter = 'all' | 'test' | 'board' | 'emu' | 'synth' | 'fluxa';
+type ExFilter = 'all' | 'test' | 'board' | 'pcb' | 'emu' | 'synth' | 'fluxa';
 let exFilter: ExFilter = load<ExFilter>('exFilter', 'all');
-const EX_FILTERS = (): [ExFilter, string][] => [['all', tr('全部', 'All')], ['test', '🧪'], ['board', '⚡'], ['emu', '🖥'], ['synth', '⚙'], ['fluxa', 'Fluxa']];
+const EX_FILTERS = (): [ExFilter, string][] => [['all', tr('全部', 'All')], ['test', '🧪'], ['board', '⚡'], ['pcb', '🔌'], ['emu', '🖥'], ['synth', '⚙'], ['fluxa', 'Fluxa']];
 function filterHint(f: ExFilter): string {
   return f === 'all' ? tr('所有範例', 'every example') : f === 'test' ? tr('有 testbench：▶ 測試、看波形', 'with testbenches: ▶ Test, waveforms')
     : f === 'board' ? tr('能放上虛擬板（有腳位）', 'go on the virtual board (have pins)') : f === 'emu' ? tr('一台機器：🖥 模擬機開機', 'a machine: boot it in the 🖥 emulator')
+    : f === 'pcb' ? tr('有擴充板（.board）：插在虛擬板上模擬，看線路圖和電路圖', 'with an expansion board (.board): plugged into the virtual board, its nets and schematic')
     : f === 'fluxa' ? tr('Fluxa 程式：任務與通道，▶ 跑它的 test', 'Fluxa programs: tasks and channels, ▶ runs their tests')
     : tr('能合成：FPGA、ASIC 晶片版圖', 'can be synthesized: FPGA, ASIC layout');
 }
-function exMatches(ex: Example, f: ExFilter): boolean { return f === 'all' || (f === 'fluxa' ? ex.lang === 'fluxa' : caps(exCapIn(ex))[f].on); }
+function exMatches(ex: Example, f: ExFilter): boolean {
+  return f === 'all' || (f === 'fluxa' ? ex.lang === 'fluxa' : f === 'pcb' ? ex.files.some(x => x.name.endsWith('.board')) : caps(exCapIn(ex))[f].on);
+}
 const exCount = (f: ExFilter) => examples().filter(e => exMatches(e, f)).length;
 function setExFilter(f: ExFilter): void { exFilter = f; save('exFilter', f); renderExamples(); }
 
 /** the welcome page's starting points: what the user wants to do, an example to begin with, the matching examples */
-type Goal = 'learn' | 'board' | 'emu' | 'chip' | 'fluxa';
+type Goal = 'learn' | 'board' | 'pcb' | 'emu' | 'chip' | 'fluxa';
 const goals = (): { goal: Goal; icon: string; title: string; text: string; ex: string; filter: ExFilter }[] => [
   { goal: 'learn', icon: '🧪', title: tr('學 Veryl', 'Learn Veryl'), ex: 'tut_blinky', filter: 'test',
     text: tr('從教學第 1 課開始：寫電路和它的 testbench，跑測試、看波形。', 'Begin with lesson 1 of the tutorial: write a circuit and its testbench, run the tests, read the waveform.') },
   { goal: 'board', icon: '⚡', title: tr('做電路，放上開發板', 'Build a circuit, put it on a board'), ex: 'lab_traffic', filter: 'board',
     text: tr('像 Arduino：燒進虛擬 iCEBreaker 開發板，按按鈕、看 LED、接麵包板。', 'Like an Arduino: flash it to a virtual iCEBreaker, press buttons, watch LEDs, wire a breadboard.') },
+  { goal: 'pcb', icon: '🔌', title: tr('設計擴充板（PCB）', 'Design an expansion board (PCB)'), ex: 'lab_thermo', filter: 'pcb',
+    text: tr('像 Arduino 的擴充板：在 .board 寫零件和接線，檢查接線（ERC），插在虛擬板上和設計一起模擬，看線路圖和電路圖。', 'Like an Arduino shield: list the parts and their wiring in a .board, check it (ERC), plug it into the virtual board to simulate it with the design, see its nets and schematic.') },
   { goal: 'emu', icon: '🖥', title: tr('開一台電腦，寫程式', 'Boot a computer, write programs'), ex: 'rv64_linux', filter: 'emu',
     text: tr('像樹莓派：RV64 開發板開 Linux，用 MicroPython、C 控制 GPIO、麵包板和螢幕。', 'Like a Raspberry Pi: the RV64 board boots Linux; MicroPython and C drive its GPIO, breadboard and screen.') },
   { goal: 'chip', icon: '⚙', title: tr('看電路變成晶片', 'See the circuit become a chip'), ex: 'fifo', filter: 'synth',
@@ -599,6 +604,7 @@ async function startGoal(goal: Goal): Promise<void> {
   await check();
   if (goal === 'learn' || goal === 'fluxa') runTests();
   else if (goal === 'board') flashBoard();
+  else if (goal === 'pcb') { await flashBoard(); board?.showDrawing(); }
   else if (goal === 'emu') openEmu();
   else runSynth();
 }

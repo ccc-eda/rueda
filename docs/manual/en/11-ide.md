@@ -93,12 +93,13 @@ The features are exactly the same as on desktop (the same page); URL parameters 
 ## Projects
 
 - Projects are stored in the browser's localStorage (saved automatically on every edit; they are gone if you switch computers or clear site data — download anything important).
-- The welcome page (shown the first time you open the IDE; reopen from "Welcome page" in the command menu) first asks **what do you want to do?** (v2.28), with five cards, each with a starting example:
+- The welcome page (shown the first time you open the IDE; reopen from "Welcome page" in the command menu) first asks **what do you want to do?** (v2.28), with six cards, each with a starting example:
 
   | Card | Starting example | "Start here" does |
   |---|---|---|
   | 🧪 Learn Veryl | Lesson 1, Blinky | Open and run the test (see the results and waveform) |
   | ⚡ Build a circuit and put it on a board (like Arduino) | Lab: traffic-light state machine | Open and flash to the virtual board (breadboard already wired) |
+  | 🔌 Design an expansion board (PCB) | Lab: I²C thermometer | Open, flash to the virtual board, and open the expansion board's nets / schematic ([chapter 12](12-board.md)) |
   | 🖥 Boot a computer and write programs (like a Raspberry Pi) | RV64 board | Open and boot |
   | ⚙ See the circuit become a chip | FIFO 256×8 | Open and synthesize |
   | ⇶ Write dataflow in Fluxa | FIR filter (Fluxa) | Open and run the tests ([chapter 17](17-fluxa.md)) |
@@ -271,7 +272,7 @@ When the project has a `.c` file:
 | C programs | The 8 programs in `veryl/examples/c/` on `RvBoard` |
 | Mixed | Carry chain, multiple block RAMs, a grab-bag of language features |
 
-The filter buttons above the example library (All, 🧪, ⚡, 🖥, ⚙, with counts) show only examples that can do that thing; the choice is remembered in the browser, and the welcome page's cards set it too.
+The filter buttons above the example library (All, 🧪, ⚡, 🔌 (with a `.board` expansion board), 🖥, ⚙, Fluxa, with counts) show only examples that can do that thing; the choice is remembered in the browser, and the welcome page's cards set it too.
 The icons next to an example say what it can do: 🧪 has tests, ⚡ can go on the virtual board, 🖥 is a machine; the framed one is the suggested first step.
 For each example's description, files, and command-line runs, see chapter 16, "[Example catalogue](16-examples.md)".
 

@@ -280,6 +280,8 @@ export class VirtualBoard {
     if (r.pcb) this.nets.set(r.pcb); else this.q<HTMLElement>('.vb-net').classList.add('hidden');
     this.q('.vb-net-h .fw-t').textContent = '⠿ ' + tr('擴充板', 'Expansion board') + (r.pcb?.name ? ' ' + r.pcb.name : '');
     this.drawExt();
+    if (this.wantDrawing && r.pcb) this.openNets();
+    this.wantDrawing = false;
     this.cards();
     this.vgaSeen = 0;
     // switches drive their pins as they stand
@@ -305,6 +307,9 @@ export class VirtualBoard {
   }
 
   /** show the plugged board's drawing (its window) */
+  showDrawing(): void { this.wantDrawing = true; if (this.pcbInfo) this.openNets(); }
+  /** open the drawing once the board is plugged in (attach runs after flash returns) */
+  private wantDrawing = false;
   private openNets(toggle = false): void {
     const w = this.q<HTMLElement>('.vb-net');
     w.classList.toggle('hidden', toggle ? !w.classList.contains('hidden') : false);

@@ -3790,6 +3790,8 @@ target = { type = "directory", path = "target" }
       __publicField(this, "pcbInfo", null);
       __publicField(this, "pcbPress", []);
       __publicField(this, "pcbTemp", []);
+      /** open the drawing once the board is plugged in (attach runs after flash returns) */
+      __publicField(this, "wantDrawing", false);
       /** a new pin file from the pin table (the IDE saves it as pins.pcf and flashes again) */
       __publicField(this, "onPins", () => {
       });
@@ -4022,6 +4024,8 @@ target = { type = "directory", path = "target" }
       else this.q(".vb-net").classList.add("hidden");
       this.q(".vb-net-h .fw-t").textContent = "\u283F " + tr("\u64F4\u5145\u677F", "Expansion board") + (r.pcb?.name ? " " + r.pcb.name : "");
       this.drawExt();
+      if (this.wantDrawing && r.pcb) this.openNets();
+      this.wantDrawing = false;
       this.cards();
       this.vgaSeen = 0;
       for (const [pin, on] of this.switches) this.pending.push([pin, on ? 1 : 0]);
@@ -4041,6 +4045,10 @@ target = { type = "directory", path = "target" }
       this.svg.appendChild(g);
     }
     /** show the plugged board's drawing (its window) */
+    showDrawing() {
+      this.wantDrawing = true;
+      if (this.pcbInfo) this.openNets();
+    }
     openNets(toggle = false) {
       const w = this.q(".vb-net");
       w.classList.toggle("hidden", toggle ? !w.classList.contains("hidden") : false);
@@ -6307,12 +6315,12 @@ test ${task.toLowerCase()}_doubles {
     }
   }
   var exFilter = load2("exFilter", "all");
-  var EX_FILTERS = () => [["all", tr("\u5168\u90E8", "All")], ["test", "\u{1F9EA}"], ["board", "\u26A1"], ["emu", "\u{1F5A5}"], ["synth", "\u2699"], ["fluxa", "Fluxa"]];
+  var EX_FILTERS = () => [["all", tr("\u5168\u90E8", "All")], ["test", "\u{1F9EA}"], ["board", "\u26A1"], ["pcb", "\u{1F50C}"], ["emu", "\u{1F5A5}"], ["synth", "\u2699"], ["fluxa", "Fluxa"]];
   function filterHint(f) {
-    return f === "all" ? tr("\u6240\u6709\u7BC4\u4F8B", "every example") : f === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66\u3001\u770B\u6CE2\u5F62", "with testbenches: \u25B6 Test, waveforms") : f === "board" ? tr("\u80FD\u653E\u4E0A\u865B\u64EC\u677F\uFF08\u6709\u8173\u4F4D\uFF09", "go on the virtual board (have pins)") : f === "emu" ? tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: boot it in the \u{1F5A5} emulator") : f === "fluxa" ? tr("Fluxa \u7A0B\u5F0F\uFF1A\u4EFB\u52D9\u8207\u901A\u9053\uFF0C\u25B6 \u8DD1\u5B83\u7684 test", "Fluxa programs: tasks and channels, \u25B6 runs their tests") : tr("\u80FD\u5408\u6210\uFF1AFPGA\u3001ASIC \u6676\u7247\u7248\u5716", "can be synthesized: FPGA, ASIC layout");
+    return f === "all" ? tr("\u6240\u6709\u7BC4\u4F8B", "every example") : f === "test" ? tr("\u6709 testbench\uFF1A\u25B6 \u6E2C\u8A66\u3001\u770B\u6CE2\u5F62", "with testbenches: \u25B6 Test, waveforms") : f === "board" ? tr("\u80FD\u653E\u4E0A\u865B\u64EC\u677F\uFF08\u6709\u8173\u4F4D\uFF09", "go on the virtual board (have pins)") : f === "emu" ? tr("\u4E00\u53F0\u6A5F\u5668\uFF1A\u{1F5A5} \u6A21\u64EC\u6A5F\u958B\u6A5F", "a machine: boot it in the \u{1F5A5} emulator") : f === "pcb" ? tr("\u6709\u64F4\u5145\u677F\uFF08.board\uFF09\uFF1A\u63D2\u5728\u865B\u64EC\u677F\u4E0A\u6A21\u64EC\uFF0C\u770B\u7DDA\u8DEF\u5716\u548C\u96FB\u8DEF\u5716", "with an expansion board (.board): plugged into the virtual board, its nets and schematic") : f === "fluxa" ? tr("Fluxa \u7A0B\u5F0F\uFF1A\u4EFB\u52D9\u8207\u901A\u9053\uFF0C\u25B6 \u8DD1\u5B83\u7684 test", "Fluxa programs: tasks and channels, \u25B6 runs their tests") : tr("\u80FD\u5408\u6210\uFF1AFPGA\u3001ASIC \u6676\u7247\u7248\u5716", "can be synthesized: FPGA, ASIC layout");
   }
   function exMatches(ex, f) {
-    return f === "all" || (f === "fluxa" ? ex.lang === "fluxa" : caps(exCapIn(ex))[f].on);
+    return f === "all" || (f === "fluxa" ? ex.lang === "fluxa" : f === "pcb" ? ex.files.some((x) => x.name.endsWith(".board")) : caps(exCapIn(ex))[f].on);
   }
   var exCount = (f) => examples().filter((e) => exMatches(e, f)).length;
   function setExFilter(f) {
@@ -6336,6 +6344,14 @@ test ${task.toLowerCase()}_doubles {
       ex: "lab_traffic",
       filter: "board",
       text: tr("\u50CF Arduino\uFF1A\u71D2\u9032\u865B\u64EC iCEBreaker \u958B\u767C\u677F\uFF0C\u6309\u6309\u9215\u3001\u770B LED\u3001\u63A5\u9EB5\u5305\u677F\u3002", "Like an Arduino: flash it to a virtual iCEBreaker, press buttons, watch LEDs, wire a breadboard.")
+    },
+    {
+      goal: "pcb",
+      icon: "\u{1F50C}",
+      title: tr("\u8A2D\u8A08\u64F4\u5145\u677F\uFF08PCB\uFF09", "Design an expansion board (PCB)"),
+      ex: "lab_thermo",
+      filter: "pcb",
+      text: tr("\u50CF Arduino \u7684\u64F4\u5145\u677F\uFF1A\u5728 .board \u5BEB\u96F6\u4EF6\u548C\u63A5\u7DDA\uFF0C\u6AA2\u67E5\u63A5\u7DDA\uFF08ERC\uFF09\uFF0C\u63D2\u5728\u865B\u64EC\u677F\u4E0A\u548C\u8A2D\u8A08\u4E00\u8D77\u6A21\u64EC\uFF0C\u770B\u7DDA\u8DEF\u5716\u548C\u96FB\u8DEF\u5716\u3002", "Like an Arduino shield: list the parts and their wiring in a .board, check it (ERC), plug it into the virtual board to simulate it with the design, see its nets and schematic.")
     },
     {
       goal: "emu",
@@ -6374,7 +6390,10 @@ test ${task.toLowerCase()}_doubles {
     await check();
     if (goal === "learn" || goal === "fluxa") runTests();
     else if (goal === "board") flashBoard();
-    else if (goal === "emu") openEmu();
+    else if (goal === "pcb") {
+      await flashBoard();
+      board?.showDrawing();
+    } else if (goal === "emu") openEmu();
     else runSynth();
   }
   function welcome() {

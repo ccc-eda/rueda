@@ -5,7 +5,7 @@ This chapter lists every example: what it does, which files it uses, how to run 
 - **IDE**: the example IDs in the tables are links that open the example as a new project in the online IDE
   (`https://ccc-eda.github.io/rueda/web/dist/index.html#ex=ID`; locally use `web/dist/index.html#ex=ID`).
   Adding `&board=1` flashes straight to the virtual board, `&run=1` runs the test; other parameters are in chapter 11, "URL parameters".
-  The welcome page shown when the IDE first opens has four starting points (learn Veryl, build a circuit for a board, boot a computer and write programs, see the circuit become a chip), and the filter above the example library can select one of those categories;
+  The welcome page shown when the IDE first opens has six starting points (learn Veryl, build a circuit for a board, design an expansion board, boot a computer and write programs, see the circuit become a chip, write dataflow in Fluxa), and the filter above the example library can select one of those categories;
   the 🧪 ⚡ 🖥 next to an example in the sidebar are what it can do, and the framed one is the suggested first step; once open, the title bar's main button (blue) and the "suggested steps" above the editor say the same, and the ▾ next to the main button lists the other ways.
 - **Command line**: run from the project root; installing `reda` is in chapter 2. When an example takes several files, all of them must be listed.
 
