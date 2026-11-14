@@ -113,6 +113,7 @@ plug J1 icebreaker.PMOD1A      # 模擬時插在哪裡
 - `reda board`；
 - IDE 的模組卡片（LED、溫度滑桿、74HC595 的輸出、按鈕、ERC）；
 - 線路圖（`web/src/ide/netview.ts`）：零件與線，模擬時依電位上色，是之後電路圖（符號、座標）與 PCB 預覽的基礎；
+- 電路圖（`web/src/ide/schematic.ts`，和線路圖切換）：符號、直角導線（每個通道的軌道分配）、網路標籤、電源符號，位置自動排；
 - 範例「實驗：I²C 溫度計」（`veryl/examples/thermo.veryl`、`thermo.board`）。
 
 測試：
@@ -124,7 +125,7 @@ plug J1 icebreaker.PMOD1A      # 模擬時插在哪裡
 還沒做：
 
 - CPU 模式（C 程式）帶 `.board`；
-- 電路圖符號與手動擺放（B2，和匯出 KiCad 一起）；實體板子的預覽（B3）；
+- 電路圖的手動擺放與座標存回 `.board`（B2，和匯出 KiCad 一起）；實體板子的預覽（B3）；
 - 更多零件（`mcp3008`、`ssd1306`、`at24c`）。
 
 ## 不做 / 先不做

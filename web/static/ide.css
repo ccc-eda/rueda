@@ -485,7 +485,10 @@ pre.pview { margin: 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: #cc
 .vb-net.fw-float { top: 60px; left: 30px; width: min(760px, calc(100% - 60px)); height: min(520px, calc(100% - 90px)); }
 .vb-net-h { padding: 4px 8px; }
 .vb-net-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; background: #151a21; }
-.nv-info { flex: 0 0 auto; font-size: 11px; padding: 4px 8px; color: #b9c2cf; border-bottom: 1px solid var(--line); min-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nv-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid var(--line); min-width: 0; }
+.nv-tab { font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid #3a4452; background: transparent; color: #b9c2cf; cursor: pointer; }
+.nv-tab.cur { background: #2b3a52; border-color: #4c6a96; color: #fff; }
+.nv-info { flex: 1 1 auto; font-size: 11px; padding: 0 6px; color: #b9c2cf; min-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nv-info span { padding: 0 5px; border-radius: 3px; }
 .nv-k1 { background: #ff9f43; color: #000; } .nv-k0 { background: #3e7bfa; color: #fff; } .nv-kz { border: 1px dashed #888; }
 .nv-kv { color: #ff6b6b; } .nv-kg { color: #9aa0aa; }
@@ -512,3 +515,11 @@ svg.nv.hl .nv-net.on { opacity: 1; stroke-width: 2.6; }
 .nv-net:hover { cursor: pointer; }
 .nv-rail { font-size: 9px; }
 .nv-hit { stroke: transparent; stroke-width: 9; pointer-events: stroke; }
+
+/* the schematic view (schematic.ts) */
+svg.nv.sch .nv-part rect.nv-body { fill: #1b222c; stroke: #a35a5a; stroke-width: 1.4; }
+.nv-sym { fill: none; stroke: #c9a46a; stroke-width: 1.5; stroke-linejoin: round; }
+polygon.nv-sym.nv-body { fill: #1b222c; }
+.nv-thin { stroke-width: 1; }
+.nv-net .nv-flag { fill: #151a21; }
+svg.nv.sch .nv-id { font-size: 10px; }

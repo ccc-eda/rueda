@@ -3388,45 +3388,166 @@ target = { type = "directory", path = "target" }
     return w;
   }
 
+  // src/ide/schematic.ts
+  var textW = (s) => s.length * 6 + 4;
+  function drawSchematic(b, bad) {
+    let boxes = layout(b);
+    const cols = [...new Set(boxes.filter(Boolean).map((x2) => x2.col))].sort((a, c) => a - c);
+    const ci = new Map(cols.map((c, i) => [c, i]));
+    const chan = (x2, dir) => ci.get(x2.col) - (dir > 0 ? 0 : 1);
+    const n = cols.length;
+    const trunks = [];
+    const flags = [];
+    const side = Array.from({ length: n + 1 }, () => ({ left: 0, right: 0 }));
+    const room = (k, dir, w) => {
+      const s = side[k + 1];
+      if (dir > 0) s.left = Math.max(s.left, w);
+      else s.right = Math.max(s.right, w);
+    };
+    b.nets.forEach((net, ni) => {
+      const groups = /* @__PURE__ */ new Map();
+      for (const [pi, num] of net.pins) {
+        const x2 = boxes[pi], p = x2?.pins.get(num);
+        if (!x2 || !p) continue;
+        const r = { pi, num, y: p.y, k: chan(x2, p.dir) };
+        if (net.rail !== null) {
+          room(r.k, p.dir, 40);
+          continue;
+        }
+        groups.set(r.k, [...groups.get(r.k) ?? [], r]);
+      }
+      for (const [k, refs] of groups) {
+        if (refs.length >= 2) trunks.push({ ni, k, refs, lo: Math.min(...refs.map((r) => r.y)), hi: Math.max(...refs.map((r) => r.y)), track: 0 });
+        else {
+          flags.push({ ni, ref: refs[0] });
+          const p = boxes[refs[0].pi].pins.get(refs[0].num);
+          room(k, p.dir, textW(net.name) + 22);
+        }
+      }
+    });
+    const tracks = new Array(n + 1).fill(0);
+    for (let k = -1; k < n; k++) {
+      const ends = [];
+      for (const t of trunks.filter((t2) => t2.k === k).sort((a, c) => a.lo - c.lo)) {
+        let i = ends.findIndex((e) => e < t.lo - 8);
+        if (i < 0) {
+          i = ends.length;
+          ends.push(0);
+        }
+        ends[i] = t.hi;
+        t.track = i;
+      }
+      tracks[k + 1] = ends.length;
+    }
+    const chW = side.map((s, i) => Math.max(50, s.left + s.right + tracks[i] * 12 + (tracks[i] ? 30 : 10)));
+    const colW = cols.map((c) => Math.max(...boxes.filter((x2) => x2 && x2.col === c).map((x2) => x2.w)));
+    const xs = [];
+    let x = 20 + chW[0];
+    for (let i = 0; i < n; i++) {
+      xs.push(x);
+      x += colW[i] + chW[i + 1];
+    }
+    boxes = layout(b, (c) => xs[ci.get(c) ?? 0]);
+    const W = x + 20, H = Math.max(...boxes.filter(Boolean).map((x2) => x2.y + x2.h)) + 30;
+    const chLeft = (k) => k < 0 ? 20 : xs[k] + colW[k];
+    const trackX = (k, t) => chLeft(k) + side[k + 1].left + 15 + t * 12;
+    const at = (r) => boxes[r.pi].pins.get(r.num);
+    let nets = "";
+    for (const t of trunks) {
+      const tx = trackX(t.k, t.track);
+      let w = t.refs.map((r) => `<line x1="${at(r).x}" y1="${r.y}" x2="${tx}" y2="${r.y}"/>`).join("") + `<line x1="${tx}" y1="${t.lo}" x2="${tx}" y2="${t.hi}"/>`;
+      const dots = t.refs.filter((r) => r.y > t.lo && r.y < t.hi).map((r) => `<circle cx="${tx}" cy="${r.y}" r="2.6"/>`).join("");
+      w += `<g class="nv-hit">${w}</g>`;
+      const name = b.nets[t.ni].name, top2 = t.refs.find((r) => r.y === t.lo), tp = at(top2);
+      const lx = tp.x + tp.dir * 12;
+      nets += netGroup(b, t.ni, bad, w + dots + `<text class="nv-lbl" x="${lx}" y="${t.lo - 3}" text-anchor="${tp.dir > 0 ? "start" : "end"}">${esc2(name)}${bad.has(t.ni) ? " \u26A0" : ""}</text>`);
+    }
+    for (const f of flags) {
+      const p = at(f.ref), d = p.dir, ex = p.x + d * STUB, name = b.nets[f.ni].name, w = textW(name) + 8, y = p.y;
+      const tip = ex + d * 5, end = ex + d * w;
+      const g = `<line x1="${p.x}" y1="${y}" x2="${ex}" y2="${y}"/><polygon class="nv-flag" points="${ex},${y} ${tip},${y - 6} ${end},${y - 6} ${end},${y + 6} ${tip},${y + 6}"/><g class="nv-hit"><line x1="${p.x}" y1="${y}" x2="${end}" y2="${y}"/></g><text class="nv-lbl" x="${tip + d * 2}" y="${y + 3}" text-anchor="${d > 0 ? "start" : "end"}">${esc2(name)}${bad.has(f.ni) ? " \u26A0" : ""}</text>`;
+      nets += netGroup(b, f.ni, bad, g);
+    }
+    b.nets.forEach((net, ni) => {
+      if (net.rail === null) return;
+      let g = "";
+      for (const [pi, num] of net.pins) {
+        const p = boxes[pi]?.pins.get(num);
+        if (!p) continue;
+        const d = p.dir, ex = p.x + d * STUB, y = p.y;
+        g += `<line x1="${p.x}" y1="${y}" x2="${ex}" y2="${y}"/>`;
+        g += net.rail ? `<line x1="${ex}" y1="${y - 6}" x2="${ex}" y2="${y + 6}"/><text class="nv-rail" x="${ex + d * 3}" y="${y + 3}" text-anchor="${d > 0 ? "start" : "end"}">${esc2(net.name)}</text>` : `<line x1="${ex}" y1="${y - 6}" x2="${ex}" y2="${y + 6}"/><line x1="${ex + d * 3}" y1="${y - 4}" x2="${ex + d * 3}" y2="${y + 4}"/><line x1="${ex + d * 6}" y1="${y - 2}" x2="${ex + d * 6}" y2="${y + 2}"/>`;
+      }
+      nets += netGroup(b, ni, bad, g + `<g class="nv-hit">${g}</g>`);
+    });
+    let parts = "";
+    b.parts.forEach((p, pi) => {
+      const x2 = boxes[pi];
+      if (!x2) return;
+      let s = "";
+      if (x2.role !== "two") {
+        s = `<rect class="nv-body" x="${x2.x}" y="${x2.y}" width="${x2.w}" height="${x2.h}" rx="2"/>`;
+        for (const [num, name] of p.pins) {
+          const q = x2.pins.get(num);
+          s += `<text class="nv-pin" x="${q.x - q.dir * 5}" y="${q.y + 3}" text-anchor="${q.dir > 0 ? "end" : "start"}">${esc2(name)}</text><text class="nv-num" x="${q.x + q.dir * 3}" y="${q.y - 3}" text-anchor="${q.dir > 0 ? "start" : "end"}">${num}</text>`;
+        }
+        parts += `<g class="nv-part" data-p="${esc2(p.id)}">${s}${partTitle(p, x2.x, x2.y - 4)}</g>`;
+        return;
+      }
+      const X = x2.x, cy = x2.y + 12;
+      if (p.kind === "res") {
+        s = `<path class="nv-sym" d="M${X} ${cy} H${X + 12} l2.5 -5 l5 10 l5 -10 l5 10 l5 -10 l5 10 l5 -10 l5 10 l2.5 -5 H${X + 64}"/>`;
+      } else if (p.kind === "led") {
+        s = `<path class="nv-sym" d="M${X} ${cy} H${X + 22} M${X + 38} ${cy} H${X + 64} M${X + 38} ${cy - 8} V${cy + 8}"/><polygon class="nv-sym nv-body" points="${X + 22},${cy - 8} ${X + 22},${cy + 8} ${X + 38},${cy}"/><path class="nv-sym nv-thin" d="M${X + 30} ${cy - 10} l6 -6 m-3 0 h3 v3 M${X + 37} ${cy - 9} l6 -6 m-3 0 h3 v3"/>`;
+      } else if (p.kind === "btn") {
+        s = `<path class="nv-sym" d="M${X} ${cy} H${X + 20} M${X + 44} ${cy} H${X + 64} M${X + 18} ${cy - 7} H${X + 46} M${X + 32} ${cy - 7} V${cy - 13}"/><circle class="nv-sym" cx="${X + 22}" cy="${cy}" r="2"/><circle class="nv-sym" cx="${X + 42}" cy="${cy}" r="2"/>`;
+      } else {
+        s = `<rect class="nv-body" x="${X + 12}" y="${cy - 6}" width="40" height="12"/><path class="nv-sym" d="M${X} ${cy} H${X + 12} M${X + 52} ${cy} H${X + 64}"/>`;
+      }
+      parts += `<g class="nv-part" data-p="${esc2(p.id)}">${s}${partTitle(p, X + 4, x2.y - 2)}</g>`;
+    });
+    return { w: W, h: H, body: parts + nets };
+  }
+
   // src/ide/netview.ts
   var PITCH = 16;
   var STUB = 14;
   var esc2 = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   var role = (p) => p.kind === "pmod" ? "conn" : p.pins.length > 2 ? "ic" : "two";
-  function layout(b) {
+  var defaultX = (c) => c === 0 ? 40 : c === 1 ? 250 : 520 + 170 * (c - 2);
+  function layout(b, colX = defaultX) {
     const boxes = new Array(b.parts.length);
     const netsOf = (pi) => b.nets.map((n, i) => n.pins.some((p) => p[0] === pi) ? i : -1).filter((i) => i >= 0 && b.nets[i].rail === null);
-    const shape = (pi, x2, y) => {
-      const p = b.parts[pi], r = role(p), pins = /* @__PURE__ */ new Map();
+    const shape = (pi, col2, y) => {
+      const p = b.parts[pi], r = role(p), pins = /* @__PURE__ */ new Map(), x = colX(col2);
       const nums = p.pins.map((q) => q[0]).sort((a, c) => a - c);
       if (r === "conn") {
-        nums.forEach((n, k) => pins.set(n, { x: x2 + 56, y: y + 18 + k * PITCH, dir: 1 }));
-        return { x: x2, y, w: 56, h: 18 + nums.length * PITCH, pins, role: r };
+        nums.forEach((n, k) => pins.set(n, { x: x + 56, y: y + 18 + k * PITCH, dir: 1 }));
+        return { x, y, w: 56, h: 18 + nums.length * PITCH, pins, role: r, col: col2 };
       }
       if (r === "ic") {
         const nat = (a, c) => a.localeCompare(c, void 0, { numeric: true });
         const right = p.pins.filter((q) => q[2] === "out" || q[2] === "od").sort((a, c) => nat(a[1], c[1]));
         const left2 = p.pins.filter((q) => !right.includes(q)).sort((a, c) => +(a[2] === "power") - +(c[2] === "power") || a[0] - c[0]);
-        left2.forEach((q, k) => pins.set(q[0], { x: x2, y: y + 18 + k * PITCH, dir: -1 }));
-        right.forEach((q, k) => pins.set(q[0], { x: x2 + 120, y: y + 18 + k * PITCH, dir: 1 }));
-        return { x: x2, y, w: 120, h: 18 + Math.max(left2.length, right.length) * PITCH, pins, role: r };
+        left2.forEach((q, k) => pins.set(q[0], { x, y: y + 18 + k * PITCH, dir: -1 }));
+        right.forEach((q, k) => pins.set(q[0], { x: x + 120, y: y + 18 + k * PITCH, dir: 1 }));
+        return { x, y, w: 120, h: 18 + Math.max(left2.length, right.length) * PITCH, pins, role: r, col: col2 };
       }
-      pins.set(nums[0], { x: x2, y: y + 12, dir: -1 });
-      if (nums[1] !== void 0) pins.set(nums[1], { x: x2 + 64, y: y + 12, dir: 1 });
-      return { x: x2, y, w: 64, h: 24, pins, role: r };
+      pins.set(nums[0], { x, y: y + 12, dir: -1 });
+      if (nums[1] !== void 0) pins.set(nums[1], { x: x + 64, y: y + 12, dir: 1 });
+      return { x, y, w: 64, h: 24, pins, role: r, col: col2 };
     };
-    const cols = [40, 250];
     for (const [ci, want] of ["conn", "ic"].entries()) {
       let y = 30;
       b.parts.forEach((p, i) => {
         if (role(p) === want) {
-          boxes[i] = shape(i, cols[ci], y);
+          boxes[i] = shape(i, ci, y);
           y += boxes[i].h + 34;
         }
       });
     }
     let left = b.parts.map((p, i) => role(p) === "two" ? i : -1).filter((i) => i >= 0);
-    let x = 520;
+    let col = 2;
     while (left.length) {
       const target = (pi) => {
         const ys = [];
@@ -3442,12 +3563,12 @@ target = { type = "directory", path = "target" }
       let bottom = 10;
       for (const e of now) {
         const y = Math.max(e.t - 12, bottom + 20);
-        boxes[e.pi] = shape(e.pi, x, y);
+        boxes[e.pi] = shape(e.pi, col, y);
         bottom = y + 24;
       }
       const done = new Set(now.map((e) => e.pi));
       left = left.filter((pi) => !done.has(pi));
-      x += 170;
+      col++;
     }
     return boxes;
   }
@@ -3470,107 +3591,150 @@ target = { type = "directory", path = "target" }
     }
     return out;
   }
+  var netPins = (b, n, sep = ", ") => n.pins.map(([pi, num]) => `${b.parts[pi].id}.${b.parts[pi].pins.find((q) => q[0] === num)?.[1] ?? num}`).join(sep);
+  var netGroup = (b, ni, bad, inner) => {
+    const n = b.nets[ni];
+    return `<g class="nv-net ${n.rail === true ? "nv-vcc" : n.rail === false ? "nv-gnd" : "nv-sig"}${bad.has(ni) ? " nv-bad" : ""}" data-n="${ni}"><title>${esc2(n.name)}: ${esc2(netPins(b, n))}</title>${inner}</g>`;
+  };
+  var partTitle = (p, x, y) => `<text class="nv-id" x="${x}" y="${y}">${esc2(p.id)} <tspan class="nv-kind">${esc2(p.kind)}${p.value ? " " + esc2(p.value) : ""}</tspan></text>`;
+  function drawNets(b, bad) {
+    const boxes = layout(b);
+    const W = Math.max(...boxes.map((x) => x.x + x.w)) + 90, H = Math.max(...boxes.map((x) => x.y + x.h)) + 30;
+    const pin = (pi, num) => boxes[pi]?.pins.get(num);
+    let nets = "";
+    b.nets.forEach((n, ni) => {
+      const pts = n.pins.map(([pi, num]) => pin(pi, num)).filter((p) => !!p);
+      const ends = pts.map((p) => ({ x: p.x + p.dir * STUB, y: p.y, dir: p.dir }));
+      let wires = pts.map((p, k) => `<line x1="${p.x}" y1="${p.y}" x2="${ends[k].x}" y2="${p.y}"/>`).join("");
+      if (n.rail === null) {
+        for (const [a, c] of tree(ends)) {
+          const A = ends[a], C = ends[c], k = Math.max(30, Math.abs(C.x - A.x) / 2);
+          wires += `<path d="M${A.x} ${A.y} C${A.x + A.dir * k} ${A.y} ${C.x + C.dir * k} ${C.y} ${C.x} ${C.y}"/>`;
+        }
+      }
+      let g = wires + `<g class="nv-hit">${wires}</g>`;
+      if (n.rail === null) {
+        const e = ends[0];
+        if (e) g += `<text class="nv-lbl" x="${e.x + e.dir * 2}" y="${e.y - 3}" text-anchor="${e.dir > 0 ? "start" : "end"}">${esc2(n.name)}${bad.has(ni) ? " \u26A0" : ""}</text>`;
+      } else {
+        g += ends.map((e) => `<text class="nv-rail" x="${e.x + e.dir * 2}" y="${e.y + 3}" text-anchor="${e.dir > 0 ? "start" : "end"}">${n.rail ? "\u25B2 " : "\u23DA "}${esc2(n.name)}</text>`).join("");
+      }
+      g += pts.map((p) => `<circle cx="${p.x}" cy="${p.y}" r="2.6"/>`).join("");
+      nets += netGroup(b, ni, bad, g);
+    });
+    let parts = "";
+    b.parts.forEach((p, pi) => {
+      const x = boxes[pi];
+      if (!x) return;
+      let names = "";
+      if (x.role !== "two") {
+        for (const [num, name] of p.pins) {
+          const q = x.pins.get(num);
+          names += `<text class="nv-pin" x="${q.x - q.dir * 5}" y="${q.y + 3}" text-anchor="${q.dir > 0 ? "end" : "start"}">${esc2(name)}</text><text class="nv-num" x="${q.x + q.dir * 3}" y="${q.y - 3}" text-anchor="${q.dir > 0 ? "start" : "end"}">${num}</text>`;
+        }
+      } else {
+        const glyph = p.kind === "led" ? "\u25B6|" : p.kind === "btn" ? "\u23FA" : p.kind === "res" ? "\u23DB" : "";
+        names = `<text class="nv-glyph" x="${x.x + x.w / 2}" y="${x.y + 16}" text-anchor="middle">${glyph}</text>`;
+      }
+      parts += `<g class="nv-part" data-p="${esc2(p.id)}"><rect class="nv-body" x="${x.x}" y="${x.y}" width="${x.w}" height="${x.h}" rx="4"/>${partTitle(p, x.x, x.y - 4)}${names}</g>`;
+    });
+    return { w: W, h: H, body: parts + nets };
+  }
   var NetView = class {
     constructor(host) {
       __publicField(this, "host", host);
       __publicField(this, "b", null);
-      __publicField(this, "svg");
+      __publicField(this, "svg", null);
       __publicField(this, "info");
       __publicField(this, "levels", null);
+      __publicField(this, "leds", /* @__PURE__ */ new Map());
       __publicField(this, "hover", -1);
+      /** the view: nets or schematic (remembered) */
+      __publicField(this, "mode", "nets");
+      try {
+        if (localStorage.getItem("rueda.nv.mode") === "sch") this.mode = "sch";
+      } catch {
+      }
     }
     set(b) {
       this.b = b;
       this.levels = null;
-      const boxes = layout(b);
-      const W = Math.max(...boxes.map((x) => x.x + x.w)) + 90, H = Math.max(...boxes.map((x) => x.y + x.h)) + 30;
-      const pin = (pi, num) => boxes[pi]?.pins.get(num);
-      const bad = new Set(b.nets.map((n, i) => b.erc.some((d) => d.msg.startsWith(`net ${n.name}:`)) ? i : -1).filter((i) => i >= 0));
-      let nets = "";
-      b.nets.forEach((n, ni) => {
-        const pts = n.pins.map(([pi, num]) => pin(pi, num)).filter((p) => !!p);
-        const ends = pts.map((p) => ({ x: p.x + p.dir * STUB, y: p.y, dir: p.dir }));
-        let wires = pts.map((p, k) => `<line x1="${p.x}" y1="${p.y}" x2="${ends[k].x}" y2="${p.y}"/>`).join("");
-        if (n.rail === null) {
-          for (const [a, c] of tree(ends)) {
-            const A = ends[a], C = ends[c], k = Math.max(30, Math.abs(C.x - A.x) / 2);
-            wires += `<path d="M${A.x} ${A.y} C${A.x + A.dir * k} ${A.y} ${C.x + C.dir * k} ${C.y} ${C.x} ${C.y}"/>`;
-          }
-        }
-        let g = wires + `<g class="nv-hit">${wires}</g>`;
-        if (n.rail === null) {
-          const e = ends[0];
-          if (e) g += `<text class="nv-lbl" x="${e.x + e.dir * 2}" y="${e.y - 3}" text-anchor="${e.dir > 0 ? "start" : "end"}">${esc2(n.name)}${bad.has(ni) ? " \u26A0" : ""}</text>`;
-        } else {
-          g += ends.map((e) => `<text class="nv-rail" x="${e.x + e.dir * 2}" y="${e.y + 3}" text-anchor="${e.dir > 0 ? "start" : "end"}">${n.rail ? "\u25B2 " : "\u23DA "}${esc2(n.name)}</text>`).join("");
-        }
-        g += pts.map((p) => `<circle cx="${p.x}" cy="${p.y}" r="2.6"/>`).join("");
-        const who = n.pins.map(([pi, num]) => `${b.parts[pi].id}.${b.parts[pi].pins.find((q) => q[0] === num)?.[1] ?? num}`).join(", ");
-        nets += `<g class="nv-net ${n.rail === true ? "nv-vcc" : n.rail === false ? "nv-gnd" : "nv-sig"}${bad.has(ni) ? " nv-bad" : ""}" data-n="${ni}"><title>${esc2(n.name)}: ${esc2(who)}</title>${g}</g>`;
-      });
-      let parts = "";
-      b.parts.forEach((p, pi) => {
-        const x = boxes[pi];
-        if (!x) return;
-        const title = `<text class="nv-id" x="${x.x}" y="${x.y - 4}">${esc2(p.id)} <tspan class="nv-kind">${esc2(p.kind)}${p.value ? " " + esc2(p.value) : ""}</tspan></text>`;
-        let names = "";
-        if (x.role !== "two") {
-          for (const [num, name] of p.pins) {
-            const q = x.pins.get(num);
-            names += `<text class="nv-pin" x="${q.x - q.dir * 5}" y="${q.y + 3}" text-anchor="${q.dir > 0 ? "end" : "start"}">${esc2(name)}</text><text class="nv-num" x="${q.x + q.dir * 3}" y="${q.y - 3}" text-anchor="${q.dir > 0 ? "start" : "end"}">${num}</text>`;
-          }
-        } else {
-          const glyph = p.kind === "led" ? "\u25B6|" : p.kind === "btn" ? "\u23FA" : p.kind === "res" ? "\u23DB" : "";
-          names = `<text class="nv-glyph" x="${x.x + x.w / 2}" y="${x.y + 16}" text-anchor="middle">${glyph}</text>`;
-        }
-        parts += `<g class="nv-part" data-p="${esc2(p.id)}"><rect x="${x.x}" y="${x.y}" width="${x.w}" height="${x.h}" rx="4"/>${title}${names}</g>`;
-      });
-      this.host.innerHTML = `<div class="nv-info">${tr("\u6ED1\u904E\u4E00\u689D\u7DDA\u770B\u5B83\u63A5\u5230\u54EA\u4E9B\u8173\uFF1B\u984F\u8272\uFF1A", "Hover a net to see its pins; colors: ")}<span class="nv-k1">1</span> <span class="nv-k0">0</span> <span class="nv-kz">${tr("\u6D6E\u63A5", "floating")}</span> <span class="nv-kv">3V3</span> <span class="nv-kg">GND</span></div><div class="nv-scroll"><svg class="nv" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">${parts}${nets}</svg></div>`;
+      this.leds.clear();
+      this.render();
+    }
+    render() {
+      const b = this.b;
+      if (!b) return;
+      const bad = new Set(b.nets.map((n, i) => b.erc.some((d2) => d2.msg.startsWith(`net ${n.name}:`)) ? i : -1).filter((i) => i >= 0));
+      const d = this.mode === "sch" ? drawSchematic(b, bad) : drawNets(b, bad);
+      const tab = (m, label, title) => `<button class="nv-tab${this.mode === m ? " cur" : ""}" data-m="${m}" title="${title}">${label}</button>`;
+      this.host.innerHTML = `<div class="nv-bar">${tab("nets", tr("\u7DDA\u8DEF\u5716", "Nets"), tr("\u96F6\u4EF6\u65B9\u584A\u548C\u9023\u7DDA\uFF08\u7DB2\u8868\uFF09", "Part boxes and their connections (the netlist)"))}${tab("sch", tr("\u96FB\u8DEF\u5716", "Schematic"), tr("\u7B26\u865F\u3001\u76F4\u89D2\u5C0E\u7DDA\u3001\u7DB2\u8DEF\u6A19\u7C64\u3001\u96FB\u6E90\u7B26\u865F", "Symbols, right-angle wires, net labels, power symbols"))}<div class="nv-info"></div></div><div class="nv-scroll"><svg class="nv${this.mode === "sch" ? " sch" : ""}" viewBox="0 0 ${d.w} ${d.h}" width="${d.w}" height="${d.h}" xmlns="http://www.w3.org/2000/svg">${d.body}</svg></div>`;
       this.svg = this.host.querySelector("svg");
       this.info = this.host.querySelector(".nv-info");
-      const legend = this.info.innerHTML;
-      for (const g of this.svg.querySelectorAll(".nv-net")) {
+      for (const t of this.host.querySelectorAll(".nv-tab")) {
+        t.onclick = () => {
+          this.mode = t.dataset.m;
+          try {
+            localStorage.setItem("rueda.nv.mode", this.mode);
+          } catch {
+          }
+          this.hover = -1;
+          this.render();
+        };
+      }
+      this.legend();
+      const svg = this.svg;
+      for (const g of svg.querySelectorAll(".nv-net")) {
         const ni = +g.dataset.n;
         g.addEventListener("pointerenter", () => {
           this.hover = ni;
-          this.svg.classList.add("hl");
-          g.classList.add("on");
+          svg.classList.add("hl");
+          for (const x of svg.querySelectorAll(`.nv-net[data-n="${ni}"]`)) x.classList.add("on");
           this.showInfo();
         });
         g.addEventListener("pointerleave", () => {
           this.hover = -1;
-          this.svg.classList.remove("hl");
-          g.classList.remove("on");
-          this.info.innerHTML = legend;
+          svg.classList.remove("hl");
+          for (const x of svg.querySelectorAll(".nv-net.on")) x.classList.remove("on");
+          this.legend();
         });
       }
+      this.paint();
+    }
+    legend() {
+      this.info.innerHTML = `${tr("\u6ED1\u904E\u4E00\u689D\u7DDA\u770B\u5B83\u63A5\u5230\u54EA\u4E9B\u8173\uFF1B\u984F\u8272\uFF1A", "Hover a net to see its pins; colors: ")}<span class="nv-k1">1</span> <span class="nv-k0">0</span> <span class="nv-kz">${tr("\u6D6E\u63A5", "floating")}</span> <span class="nv-kv">3V3</span> <span class="nv-kg">GND</span>`;
     }
     showInfo() {
       if (!this.b || this.hover < 0) return;
       const n = this.b.nets[this.hover];
       const lv = this.levels?.[this.hover];
       const level = n.rail !== null ? n.rail ? "3V3" : "GND" : lv === void 0 ? "" : lv === null ? tr("\u6D6E\u63A5", "floating") : String(lv);
-      const who = n.pins.map(([pi, num]) => `${this.b.parts[pi].id}.${this.b.parts[pi].pins.find((q) => q[0] === num)?.[1] ?? num}`).join("  ");
       const erc = this.b.erc.filter((d) => d.msg.startsWith(`net ${n.name}:`)).map((d) => ` \u26A0 ${esc2(d.msg)}`).join("");
-      this.info.innerHTML = `<b>${esc2(n.name)}</b>${level ? ` = ${level}` : ""}\u3000${esc2(who)}${erc}`;
+      this.info.innerHTML = `<b>${esc2(n.name)}</b>${level ? ` = ${level}` : ""}\u3000${esc2(netPins(this.b, n, "  "))}${erc}`;
     }
     /** the nets' levels (1, 0, null floating) and the LEDs' brightness while the board runs */
     update(levels, leds) {
-      if (!this.b || !this.svg) return;
-      this.levels = levels;
-      if (levels) {
-        for (const g of this.svg.querySelectorAll(".nv-sig")) {
-          const l = levels[+g.dataset.n];
+      if (!this.b) return;
+      if (levels) this.levels = levels;
+      this.leds = leds;
+      this.paint();
+      if (this.hover >= 0) this.showInfo();
+    }
+    paint() {
+      const svg = this.svg;
+      if (!svg) return;
+      if (this.levels) {
+        for (const g of svg.querySelectorAll(".nv-sig")) {
+          const l = this.levels[+g.dataset.n];
           g.classList.toggle("lv1", l === 1);
           g.classList.toggle("lv0", l === 0);
           g.classList.toggle("lvz", l === null);
         }
       }
-      for (const [id, d] of leds) {
-        const r = this.svg.querySelector(`.nv-part[data-p="${CSS.escape(id)}"] rect`);
+      for (const [id, d] of this.leds) {
+        const r = svg.querySelector(`.nv-part[data-p="${CSS.escape(id)}"] .nv-body`);
         if (r) r.style.fill = d > 4e-3 ? `rgba(255, 70, 50, ${(0.25 + 0.75 * Math.sqrt(d)).toFixed(3)})` : "";
       }
-      if (this.hover >= 0) this.showInfo();
     }
   };
 
