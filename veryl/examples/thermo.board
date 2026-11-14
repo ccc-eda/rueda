@@ -1,0 +1,54 @@
+# 溫度計模組：插在 iCEBreaker 的 PMOD1A 上（Thermo，src/thermo.veryl）
+# LM75 溫度感測器接 I²C，74HC595 移位暫存器帶 8 顆 LED 顯示溫度（二進位）
+board "PMOD thermometer"
+
+part J1 pmod
+part U1 lm75 temp=23.5        # 位址 0x48（A0-A2 接地）
+part U2 74hc595
+part R1 res 4.7k              # SCL 上拉
+part R2 res 4.7k              # SDA 上拉
+part R3 res 10k               # OS 上拉
+part D0 led
+part D1 led
+part D2 led
+part D3 led
+part D4 led
+part D5 led
+part D6 led
+part D7 led
+part R10 res 330
+part R11 res 330
+part R12 res 330
+part R13 res 330
+part R14 res 330
+part R15 res 330
+part R16 res 330
+part R17 res 330
+
+net SCL   J1.1:od U1.SCL R1.1           # FPGA 以開汲極驅動
+net SDA   J1.2:od J1.8 U1.SDA R2.1      # 腳 2 驅動、腳 8 讀回
+net OS    U1.OS R3.1
+net SER   J1.3 U2.SER
+net SRCLK J1.4 U2.SRCLK
+net RCLK  J1.7 U2.RCLK
+net 3V3   J1.6 J1.12 U1.VCC U2.VCC U2.MR_N R1.2 R2.2 R3.2
+net GND   J1.5 J1.11 U1.GND U1.A0 U1.A1 U1.A2 U2.GND U2.OE_N R10.2 R11.2 R12.2 R13.2 R14.2 R15.2 R16.2 R17.2
+
+net Q0 U2.Q0 D0.A
+net Q1 U2.Q1 D1.A
+net Q2 U2.Q2 D2.A
+net Q3 U2.Q3 D3.A
+net Q4 U2.Q4 D4.A
+net Q5 U2.Q5 D5.A
+net Q6 U2.Q6 D6.A
+net Q7 U2.Q7 D7.A
+net K0 D0.K R10.1
+net K1 D1.K R11.1
+net K2 D2.K R12.1
+net K3 D3.K R13.1
+net K4 D4.K R14.1
+net K5 D5.K R15.1
+net K6 D6.K R16.1
+net K7 D7.K R17.1
+
+plug J1 icebreaker.PMOD1A

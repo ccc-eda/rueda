@@ -8,6 +8,7 @@
 //! - `fpga`: iCE40 and ECP5 technology mapping, place & route, bitstreams and
 //!   the virtual iCEBreaker board
 //! - `asic`, `pdk`: the standard-cell flow (vlib or SkyWater SKY130) to a GDS
+//! - `pcb`: boards (a `.board` file's parts and nets), their electrical rules and simulation
 
 pub mod asic;
 pub mod bram;
@@ -19,6 +20,7 @@ pub mod fpga;
 pub mod netlist;
 pub mod netsim;
 pub mod output;
+pub mod pcb;
 pub mod pdk;
 pub mod power;
 pub mod sdc;

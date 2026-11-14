@@ -1372,3 +1372,38 @@ fn iss_rv32ima_matches_spike() {
         assert_eq!(u32::from_le_bytes(s.mem[a..a + 4].try_into().unwrap()), *v, "word {}", i);
     }
 }
+
+/// a board plugged into the PMOD header (eda::pcb): Thermo reads the LM75 over I²C and shows the
+/// temperature on the 74HC595's eight LEDs (examples/thermo.board); a new temperature shows after
+/// the next read
+#[test]
+fn board_pcb_thermometer() {
+    let mut b = board_of(&["examples/src/thermo.veryl"], "Thermo", &[("Q", 2), ("Q_W", 1), ("WAIT", 50), ("WAIT_W", 6)], Some("examples/thermo.pcf"));
+    assert!(b.warnings.is_empty(), "{:?}", b.warnings);
+    let src = std::fs::read_to_string(format!("{}/../examples/thermo.board", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let pcb = eda::pcb::Board::parse(&src).unwrap();
+    assert!(eda::pcb::erc::check(&pcb).is_empty(), "{:?}", eda::pcb::erc::check(&pcb));
+    b.attach_pcb(eda::pcb::sim::Sim::new(&pcb).unwrap());
+    let shown = |b: &mut eda::fpga::board::Board| -> (u8, Vec<f64>) {
+        let now = b.cycle;
+        let s = b.pcb.as_mut().unwrap().sim.take_show(now);
+        let latch = s.iter().find_map(|x| match x.1 { eda::pcb::sim::Show::Latch(l) if x.0 == "U2" => Some(l), _ => None }).unwrap();
+        let leds = (0..8).map(|k| s.iter().find_map(|x| match x.1 { eda::pcb::sim::Show::Led(d) if x.0 == format!("D{}", k) => Some(d), _ => None }).unwrap()).collect();
+        (latch, leds)
+    };
+    b.set_pin(10, false);
+    b.run(3);
+    b.set_pin(10, true);
+    // one read: 29 I²C bit times and 9 shift steps of 4 quarters of 2 cycles, then the wait
+    b.run(400);
+    let (latch, _) = shown(&mut b);
+    assert_eq!(latch, 23);
+    b.run(100);
+    let (_, leds) = shown(&mut b);
+    let lit: Vec<bool> = leds.iter().map(|d| *d > 0.99).collect();
+    assert_eq!(lit, (0..8).map(|k| 23 >> k & 1 == 1).collect::<Vec<_>>(), "{:?}", leds);
+    b.pcb.as_mut().unwrap().sim.set_temp("U1", 41.0).unwrap();
+    b.run(800);
+    assert_eq!(shown(&mut b).0, 41);
+    assert_eq!(b.pcb.as_ref().unwrap().sim.conflicts, 0);
+}

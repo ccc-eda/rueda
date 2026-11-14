@@ -22,3 +22,32 @@ pub fn pdk_check(dir: Option<&String>) -> ! {
     }
     std::process::exit(0)
 }
+
+/// `reda board [--parts] FILE.board`: the board's parts and nets, and its electrical rule check
+pub fn board(args: &[String]) -> ! {
+    if args.iter().any(|a| a == "--parts") {
+        println!("parts:");
+        for k in crate::pcb::parts::KINDS {
+            println!("  {:8} {}", k.name, k.desc.1);
+            println!("           pins: {}", k.pins.iter().map(|p| format!("{} {}", p.0, p.1)).collect::<Vec<_>>().join(", "));
+        }
+        println!("host connectors (plug PART HOST):");
+        for h in crate::pcb::parts::HOSTS {
+            println!("  {:18} FPGA pins {}", h.name, h.pins.iter().map(|p| p.map_or("-".to_string(), |p| p.to_string())).collect::<Vec<_>>().join(" "));
+        }
+        std::process::exit(0);
+    }
+    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let [file] = files.as_slice() else {
+        eprintln!("usage: reda board [--parts] FILE.board (reda help board)");
+        std::process::exit(2)
+    };
+    let src = std::fs::read_to_string(file).unwrap_or_else(|e| { eprintln!("{}: {}", file, e); std::process::exit(2) });
+    let b = crate::pcb::Board::parse(&src).unwrap_or_else(|e| { eprintln!("{}: {}", file, e); std::process::exit(1) });
+    print!("{}", b.report());
+    let d = crate::pcb::erc::check(&b);
+    for x in &d { println!("{}", x); }
+    let errors = d.iter().filter(|x| x.error).count();
+    println!("ERC: {} error(s), {} warning(s)", errors, d.len() - errors);
+    std::process::exit(if errors > 0 { 1 } else { 0 })
+}

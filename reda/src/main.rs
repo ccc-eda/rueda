@@ -134,6 +134,19 @@ usage: reda pdk [check] [DIR]
 Reads sky130_fd_sc_hd__tt_025C_1v80.lib, sky130_fd_sc_hd.tlef and sky130_fd_sc_hd_merged.lef
 from DIR (default: $VERYL_EDA_SKY130, /Users/Shared/ccc/sky130hd, ~/sky130hd; tools/sky130.sh
 downloads them) and prints the layers and the cell bindings the ASIC flow uses."),
+    ("board", "check a board (.board: parts and nets): its parts, nets and electrical rules", "\
+usage: reda board [--parts] FILE.board
+
+A .board file lists a board's parts and the nets between their pins, one statement a line:
+  board \"NAME\"
+  part ID KIND [VALUE] [KEY=VALUE]...    e.g. part U1 lm75 temp=23.5, part R1 res 4.7k
+  net NAME PART.PIN[:od]...              :od = the host drives this connector pin open drain
+  plug PART HOST.CONNECTOR               e.g. plug J1 icebreaker.PMOD1A
+Prints the parts and nets and the electrical rule check (outputs fighting, open drain without a
+pull-up, floating inputs, power pins); errors make the exit code 1. In the IDE a project's .board
+is plugged into the virtual iCEBreaker. Plan: docs/note/pcb-plan.md.
+  --parts           list the part library and the host connectors
+example: reda board veryl/examples/thermo.board"),
     ("rvemu", "run a RISC-V program on the RV64 board emulator (OpenSBI, Linux)", "\
 usage: reda rvemu [-t] [-r] [-m N] [-l ADDR:FILE]... [-d ADDR:LEN:FILE]... [-s SCRIPT] PROG
 
@@ -213,6 +226,7 @@ fn main() {
         },
         "cc" => rvtools::cli::cc(&rest),
         "rvemu" => riscv_emu::cli::main(&rest),
+        "board" => eda::cli::board(&rest),
         "pdk" => {
             let dir: Vec<String> = rest.iter().filter(|a| *a != "check").cloned().collect();
             eda::cli::pdk_check(dir.first())

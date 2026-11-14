@@ -1,0 +1,10 @@
+# Thermo on an iCEBreaker with the sensor module (thermo.board) on PMOD1A:
+# pin 1 SCL, pin 2 SDA (open drain), pin 8 SDA read back, pin 3 SER, pin 4 SRCLK, pin 7 RCLK
+set_io -nowarn i_clk   35
+set_io -nowarn i_rst   10
+set_io -nowarn o_scl   4
+set_io -nowarn o_sda   2
+set_io -nowarn i_sda   48
+set_io -nowarn o_ser   47
+set_io -nowarn o_srclk 45
+set_io -nowarn o_rclk  3

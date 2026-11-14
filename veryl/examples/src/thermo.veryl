@@ -1,0 +1,141 @@
+// 溫度計：每隔一段時間用 I²C 讀 LM75 的溫度，把整數部分（°C）用 74HC595 顯示在 8 顆 LED 上（二進位）。
+// 接在 PMOD1A 上的感測器模組（examples/thermo.board）：
+//   腳 1 = SCL、腳 2 = SDA（開汲極：輸出 1 = 放開，由上拉電阻拉高；0 = 拉低），腳 8 讀回 SDA；
+//   腳 3 = SER、腳 4 = SRCLK、腳 7 = RCLK（74HC595）。
+// 一次讀取：START、位址 0x48 加讀取位元（0x91）、LM75 的 ACK、讀兩個位元組（第一個 ACK、第二個 NACK）、STOP。
+// LM75 開機時指標暫存器是 0（溫度），所以不必先寫指標。
+module Thermo #(
+    param Q     : u32 = 30       , // 四分之一個位元的拍數：12 MHz / (4 × 30) = 100 kHz
+    param Q_W   : u32 = 5        ,
+    param WAIT  : u32 = 1_200_000, // 讀完等 0.1 秒再讀
+    param WAIT_W: u32 = 21       ,
+) (
+    i_clk  : input  clock,
+    i_rst  : input  reset,
+    o_scl  : output logic,
+    o_sda  : output logic,
+    i_sda  : input  logic,
+    o_ser  : output logic,
+    o_srclk: output logic,
+    o_rclk : output logic,
+) {
+    // 0 = I²C 讀取，1 = 移位到 74HC595，2 = 等待
+    var phase: logic<2>     ;
+    // I²C：第幾個位元時段（0 = START、1-8 位址、9 ACK、10-17 高位元組、18 ACK、19-26 低位元組、27 NACK、28 STOP）
+    // 移位：第幾個位元（0-7），8 = 鎖存
+    var slot : logic<5>     ;
+    var q    : logic<2>     ; // 時段裡的第幾個四分之一
+    var div  : logic<Q_W>   ;
+    var wait : logic<WAIT_W>;
+    var data : logic<8>     ; // 讀進來的高位元組
+    var temp : logic<8>     ; // 顯示的溫度
+
+    // 這個時段送出的 SDA：位址位元，或 1（放開：讓對方送），18 是我們的 ACK
+    let addr: logic<8> = 8'h91;
+    var sda_out: logic   ;
+    always_comb {
+        if slot >= 1 && slot <= 8 {
+            sda_out = addr[8 - slot];
+        } else if slot == 18 {
+            sda_out = 0;
+        } else {
+            sda_out = 1;
+        }
+    }
+
+    always_ff {
+        if_reset {
+            phase   = 0;
+            slot    = 0;
+            q       = 0;
+            div     = 0;
+            wait    = 0;
+            data    = 0;
+            temp    = 0;
+            o_scl   = 1;
+            o_sda   = 1;
+            o_ser   = 0;
+            o_srclk = 0;
+            o_rclk  = 0;
+        } else if phase == 2 {
+            if wait == WAIT - 1 {
+                wait  = 0;
+                phase = 0;
+            } else {
+                wait = wait + 1;
+            }
+        } else if div != Q - 1 {
+            div = div + 1;
+        } else {
+            div = 0;
+            if phase == 0 {
+                if slot == 0 {
+                    // START：SCL 高的時候 SDA 拉低
+                    if q == 0 {
+                        o_scl = 1;
+                        o_sda = 1;
+                    } else if q == 1 {
+                        o_sda = 0;
+                    } else if q == 2 {
+                        o_scl = 0;
+                    }
+                } else if slot == 28 {
+                    // STOP：SCL 高的時候 SDA 放開
+                    if q == 0 {
+                        o_sda = 0;
+                    } else if q == 1 {
+                        o_scl = 1;
+                    } else if q == 2 {
+                        o_sda = 1;
+                    }
+                } else {
+                    // 一個位元：SCL 低時放上 SDA，SCL 高的中間讀
+                    if q == 0 {
+                        o_sda = sda_out;
+                    } else if q == 1 {
+                        o_scl = 1;
+                    } else if q == 2 {
+                        if slot >= 10 && slot <= 17 {
+                            data = {data[6:0], i_sda};
+                        }
+                    } else {
+                        o_scl = 0;
+                    }
+                }
+                if q == 3 {
+                    if slot == 28 {
+                        phase = 1;
+                        slot  = 0;
+                        temp  = data;
+                    } else {
+                        slot = slot + 1;
+                    }
+                }
+            } else {
+                // 74HC595：SER 放上一個位元（高位先），SRCLK 打一下；八個之後 RCLK 打一下
+                if slot <= 7 {
+                    if q == 0 {
+                        o_ser = temp[7 - slot];
+                    } else if q == 1 {
+                        o_srclk = 1;
+                    } else if q == 2 {
+                        o_srclk = 0;
+                    }
+                } else if q == 1 {
+                    o_rclk = 1;
+                } else if q == 2 {
+                    o_rclk = 0;
+                }
+                if q == 3 {
+                    if slot == 8 {
+                        phase = 2;
+                        slot  = 0;
+                    } else {
+                        slot = slot + 1;
+                    }
+                }
+            }
+            q = q + 1;
+        }
+    }
+}

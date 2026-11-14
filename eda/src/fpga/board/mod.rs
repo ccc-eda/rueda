@@ -394,8 +394,19 @@ pub struct Board {
     pub uart: Option<periph::Uart>,
     pub segs: Vec<periph::Seg>,
     pub vga: Option<periph::Vga>,
+    /// a board plugged into the PMOD headers (`crate::pcb`)
+    pub pcb: Option<Box<Plugged>>,
     /// the CPU as an instruction-set simulator instead of gates (see `Board::cpu`)
     pub cpu: Option<Box<Cpu>>,
+}
+
+/// a `.board` on the iCEBreaker: per host pin the design's output net and input net on it, and
+/// what the outputs were when the board last settled
+pub struct Plugged {
+    pub sim: crate::pcb::sim::Sim,
+    outs: Vec<Option<u32>>,
+    ins: Vec<Option<u32>>,
+    last: Vec<u8>,
 }
 
 /// RvSoc (examples/src/rvsoc.veryl) with its CPU as an instruction-set simulator: the same
@@ -441,7 +452,7 @@ impl Board {
         if clk.is_none() && (!d.ffs.is_empty() || !d.rams.is_empty()) { warnings.push(format!("nothing is connected to the clock pin {}", clock_pin)); }
         let eng = Engine::new(d)?;
         let n = pin_out.len();
-        Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings, prev: vec![0; n], edges: vec![0; n], uart: None, segs: vec![], vga: None, cpu: None })
+        Ok(Board { eng, pin_in, pin_out, port_of, clk, cycle: 0, window: 0, warnings, prev: vec![0; n], edges: vec![0; n], uart: None, segs: vec![], vga: None, pcb: None, cpu: None })
     }
 
     /// RvSoc's pins (o_led[8], o_tx, i_btn[3], i_sw[8], i_rx, i_rst, i_clk) on the board with
@@ -629,11 +640,45 @@ impl Board {
         self.vga = Some(periph::Vga::new(self.out_net(hs), self.out_net(vs), nets(r), nets(g), nets(b)));
     }
 
+    /// plug a board in: its connectors' pins (`plug`) onto the design's pins. An input pin reads
+    /// the net; an output drives it (push-pull, or open drain where the net says `:od`)
+    pub fn attach_pcb(&mut self, sim: crate::pcb::sim::Sim) {
+        let outs: Vec<Option<u32>> = sim.hosts.iter().map(|h| self.out_net(h.pin)).collect();
+        let ins: Vec<Option<u32>> = sim.hosts.iter().map(|h| self.pin_in.get(&h.pin).copied()).collect();
+        for h in &sim.hosts {
+            if let Some(p) = self.port_of.get(&h.pin) { if self.out_net(h.pin).is_some() && self.pin_in.contains_key(&h.pin) { self.warnings.push(format!("pin {} ({}) is both an input and an output", h.pin, p)); } }
+        }
+        let n = outs.len();
+        self.pcb = Some(Box::new(Plugged { sim, outs, ins, last: vec![2; n] }));
+        self.settle_pcb(self.cycle, true);
+    }
+
+    /// the plugged board at cycle `now` after the design's outputs changed (or `force`: a button, a sensor)
+    pub fn settle_pcb(&mut self, now: u64, force: bool) {
+        let Some(p) = self.pcb.as_mut() else { return };
+        let mut changed = force;
+        for (k, o) in p.outs.iter().enumerate() {
+            let v = o.map(|n| self.eng.v[n as usize]).unwrap_or(2);
+            if v != p.last[k] { p.last[k] = v; changed = true; p.sim.set_host(k, if v == 2 { None } else { Some(v == 1) }); }
+        }
+        if !changed { return; }
+        p.sim.update(now);
+        let mut moved = false;
+        for (k, i) in p.ins.iter().enumerate() {
+            if let Some(n) = i {
+                let l = p.sim.host_level(k);
+                if Some(*n) != self.clk && (self.eng.v[*n as usize] != 0) != l { self.eng.set(*n, l); moved = true; }
+            }
+        }
+        if moved { self.eng.propagate(); }
+    }
+
     /// `n` board clock cycles: the serial line into the FPGA, rising edge,
     /// outputs and peripherals sampled, falling edge
     pub fn run(&mut self, n: u64) {
         if self.cpu.is_some() { self.run_cpu(n); return; }
         let periph = self.uart.is_some() || !self.segs.is_empty() || self.vga.is_some();
+        let pcb = self.pcb.is_some();
         for i in 0..n {
             if let Some(u) = self.uart.as_mut() {
                 if let (Some(rx), Some(l)) = (u.rx, u.rx_level(self.cycle + i)) {
@@ -661,6 +706,7 @@ impl Board {
                 }
                 if let Some(g) = self.vga.as_mut() { g.sample(v); }
             }
+            if pcb { self.settle_pcb(self.cycle + i, false); }
             if let Some(c) = self.clk { self.eng.set(c, false); self.eng.propagate(); }
         }
         self.cycle += n;
