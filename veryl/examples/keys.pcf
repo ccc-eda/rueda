@@ -1,0 +1,12 @@
+# Keys on an iCEBreaker with the keys module (keys.board) on PMOD1A:
+# pins 1-4 the LEDs D1-D4, pins 7-10 the buttons S1-S4 (pulled up, 0 = pressed)
+set_io -nowarn i_clk    35
+set_io -nowarn i_rst    10
+set_io -nowarn o_led[0] 4
+set_io -nowarn o_led[1] 2
+set_io -nowarn o_led[2] 47
+set_io -nowarn o_led[3] 45
+set_io -nowarn i_key[0] 3
+set_io -nowarn i_key[1] 48
+set_io -nowarn i_key[2] 46
+set_io -nowarn i_key[3] 44

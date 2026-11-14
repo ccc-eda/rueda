@@ -89,7 +89,7 @@ PMOD1A 的腳：1–4 = 4、2、47、45，7–10 = 3、48、46、44；PMOD1B：1
 
 專案裡有一個 `.board` 檔時，⚡ 燒錄會把它當成一塊**自己設計的 PMOD 模組**插上虛擬板：上面的零件和接線照檔案模擬，
 虛擬板右邊出現它的卡片（LED、可以拉的溫度、移位暫存器的輸出、按鈕，以及電氣規則檢查 ERC 的結果）。
-範例：「實驗：I²C 溫度計」（`veryl/examples/thermo.board`）——LM75 溫度感測器接 I²C，74HC595 帶 8 顆 LED。
+範例（由簡單到複雜）：「按鈕與 LED 擴充板」（`keys.board`，上拉電阻和限流電阻）、「74HC595 跑馬燈擴充板」（`runner.board`）、「I²C 溫度計」（`veryl/examples/thermo.board`）——LM75 溫度感測器接 I²C，74HC595 帶 8 顆 LED。歡迎頁的「🔌 設計擴充板（PCB）」從溫度計開始，範例庫的 🔌 篩選列出全部。
 
 ```text
 board "PMOD thermometer"

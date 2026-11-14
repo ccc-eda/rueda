@@ -1,0 +1,7 @@
+# Runner on an iCEBreaker with the 74HC595 module (runner.board) on PMOD1A:
+# pin 3 SER, pin 4 SRCLK, pin 7 RCLK
+set_io -nowarn i_clk   35
+set_io -nowarn i_rst   10
+set_io -nowarn o_ser   47
+set_io -nowarn o_srclk 45
+set_io -nowarn o_rclk  3

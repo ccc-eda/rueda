@@ -90,8 +90,8 @@ Pins already occupied by a PMOD module cannot be wired to the breadboard.
 When a project has a `.board` file, ⚡ Flash plugs it into the virtual board as **a PMOD module of your own design**:
 its parts and nets are simulated as the file says, and a card next to the board shows it (LEDs, a temperature to drag,
 a shift register's outputs, buttons, and the electrical rule check, ERC).
-Example: "Lab: an I²C thermometer" (`veryl/examples/thermo.board`): an LM75 temperature sensor on I²C and a 74HC595
-with 8 LEDs.
+Examples, simplest first: "buttons and LEDs" (`keys.board`: pull-ups and series resistors), "74HC595 running lights" (`runner.board`), and "an I²C thermometer" (`veryl/examples/thermo.board`): an LM75 temperature sensor on I²C and a 74HC595
+with 8 LEDs. The welcome page's "🔌 Design an expansion board (PCB)" starts with the thermometer; the 🔌 filter in the example library lists them all.
 
 ```text
 board "PMOD thermometer"

@@ -1,0 +1,74 @@
+// 按鈕與 LED 擴充板（examples/keys.board，插在 PMOD1A）：每按一次按鈕，切換對應的 LED。
+// 按鈕一腳接地、另一腳經 10 kΩ 上拉到 3V3：放開時是 1，按下是 0（低電位有效）。
+//   腳 7-10 = 按鈕 S1-S4（i_key[0]-[3]），腳 1-4 = LED D1-D4（o_led[0]-[3]，經 330 Ω 接地，1 = 亮）。
+// 和「按一下加一」一樣：按鈕先同步兩級，再抓「剛按下」那一拍，否則按住的每一拍都會切換。
+module Keys (
+    i_clk: input  clock   ,
+    i_rst: input  reset   ,
+    i_key: input  logic<4>, // 0 = 按下
+    o_led: output logic<4>,
+) {
+    var k1 : logic<4>; // 同步第一級（已反相：1 = 按下）
+    var k2 : logic<4>; // 同步第二級
+    var k3 : logic<4>; // 上一拍
+    var led: logic<4>;
+
+    // 這一拍按著、上一拍沒有：剛按下
+    let pressed: logic<4> = k2 & ~k3;
+
+    always_ff {
+        if_reset {
+            k1  = 0;
+            k2  = 0;
+            k3  = 0;
+            led = 0;
+        } else {
+            k1  = ~i_key;
+            k2  = k1;
+            k3  = k2;
+            led = led ^ pressed;
+        }
+    }
+
+    assign o_led = led;
+}
+
+#[test(test_keys)]
+module TestKeys {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var key: logic<4>;
+    var led: logic<4>;
+
+    inst dut: Keys (
+        i_clk: clk,
+        i_rst: rst,
+        i_key: key,
+        o_led: led,
+    );
+
+    initial {
+        key = 4'b1111;
+        rst.assert();
+        // S1 按住 10 拍再放開：D1 亮（只切換一次）
+        key = 4'b1110;
+        clk.next(10);
+        key = 4'b1111;
+        clk.next(5);
+        $assert(led == 4'b0001, "S1 turns D1 on");
+        // S3：D3 也亮
+        key = 4'b1011;
+        clk.next(10);
+        key = 4'b1111;
+        clk.next(5);
+        $assert(led == 4'b0101, "S3 turns D3 on");
+        // 再按 S1：D1 熄
+        key = 4'b1110;
+        clk.next(10);
+        key = 4'b1111;
+        clk.next(5);
+        $assert(led == 4'b0100, "S1 again turns D1 off");
+        $finish();
+    }
+}

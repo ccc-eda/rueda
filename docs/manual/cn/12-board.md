@@ -89,7 +89,7 @@ PMOD1A 的引脚：1–4 = 4、2、47、45，7–10 = 3、48、46、44；PMOD1B�
 
 项目里有一个 `.board` 文件时，⚡ 烧录会把它当成一块**自己设计的 PMOD 模块**插上虚拟板：上面的元器件和连线照文件仿真，
 虚拟板右边出现它的卡片（LED、可以拉的温度、移位寄存器的输出、按钮，以及电气规则检查 ERC 的结果）。
-示例：“实验：I²C 温度计”（`veryl/examples/thermo.board`）——LM75 温度传感器接 I²C，74HC595 带 8 颗 LED。
+示例（由简单到复杂）：“按钮与 LED 扩展板”（`keys.board`，上拉电阻和限流电阻）、“74HC595 跑马灯扩展板”（`runner.board`）、“I²C 温度计”（`veryl/examples/thermo.board`）——LM75 温度传感器接 I²C，74HC595 带 8 颗 LED。欢迎页的“🔌 设计扩展板（PCB）”从温度计开始，示例库的 🔌 筛选列出全部。
 
 ```text
 board "PMOD thermometer"

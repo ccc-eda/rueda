@@ -38,6 +38,9 @@
 | [lab_gates](https://ccc-eda.github.io/rueda/web/dist/index.html#ex=lab_gates&board=1) | 面包板：两个开关 → AND、OR、XOR、NOT 四颗 LED（电阻、接线都画好了） | `veryl/examples/src/gates.veryl`（`Gates`）、`veryl/examples/gates.pcf` | `reda sim veryl/examples/src/gates.veryl`<br>`reda fpga --pnr veryl --pcf veryl/examples/gates.pcf --bin gates.bin veryl/examples/src/gates.veryl` |
 | [lab_counter](https://ccc-eda.github.io/rueda/web/dist/index.html#ex=lab_counter&board=1) | BTN1 每按一下加一（同步器 + 上升缘），8 位显示在 PMOD1A 的 LED；BTN2 归零 | `veryl/examples/src/button_counter.veryl`（`ButtonCounter`）、`veryl/examples/button_counter.pcf` | 同上，换文件名 |
 | [lab_traffic](https://ccc-eda.github.io/rueda/web/dist/index.html#ex=lab_traffic&board=1) | 红绿灯状态机：绿 5 秒 → 黄 1 秒 → 红 4 秒，绿灯时按 BTN1 提早结束；LED 在面包板上 | `veryl/examples/src/traffic.veryl`（`TrafficLight`）、`veryl/examples/traffic.pcf` | 同上，换文件名 |
+| [lab_keys](https://ccc-eda.github.io/rueda/web/dist/index.html#ex=lab_keys&board=1) | 扩展板：4 个按钮（上拉电阻）和 4 颗 LED（限流电阻），每按一下切换对应的 LED | `veryl/examples/src/keys.veryl`（`Keys`）、`veryl/examples/keys.pcf`、`veryl/examples/keys.board` | `reda sim veryl/examples/src/keys.veryl`<br>`reda board veryl/examples/keys.board` |
+| [lab_runner](https://ccc-eda.github.io/rueda/web/dist/index.html#ex=lab_runner&board=1) | 扩展板：74HC595 带 8 颗 LED，三个引脚控制 8 颗灯，一颗亮灯来回跑 | `veryl/examples/src/runner.veryl`（`Runner`）、`veryl/examples/runner.pcf`、`veryl/examples/runner.board` | 同上，换文件名 |
+| [lab_thermo](https://ccc-eda.github.io/rueda/web/dist/index.html#ex=lab_thermo&board=1) | 扩展板：LM75 温度传感器（I²C）和 74HC595 带 8 颗 LED，用二进制显示温度；可以拉温度滑杆 | `veryl/examples/src/thermo.veryl`（`Thermo`）、`veryl/examples/thermo.pcf`、`veryl/examples/thermo.board` | 同上，换文件名 |
 
 `veryl/tutorial/check.sh` 一次跑完教学的整条流程（仿真、综合、FPGA）。
 

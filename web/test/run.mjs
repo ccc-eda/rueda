@@ -281,6 +281,24 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   core.call({ cmd: 'board_run', cycles: 1_300_000, inputs: [], pcb_temp: [['U1', 41]] });
   ps = shows(core.call({ cmd: 'board_run', cycles: 1000, inputs: [] }));
   if (ps.U2 !== 41 || leds(ps) !== 41 || ps.U1 !== 41) problems.push(`thermometer at 41 °C shows ${ps.U2} (LEDs ${leds(ps)})`);
+  // keys.board: a button pulled up (0 = pressed) toggles its LED
+  b = ex('lab_keys');
+  core.call({ cmd: 'board_load', files: b.files.filter((f) => f.name.endsWith('.veryl')), top: 'Keys', pcf: b.pcf });
+  const kp = core.call({ cmd: 'board_periph', pcb: b.files.find((f) => f.name.endsWith('.board')).src }).pcb;
+  if (kp.erc.length || kp.parts.length !== 17) problems.push(`keys.board: ${kp.parts.length} parts, ERC ${JSON.stringify(kp.erc)}`);
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [] });
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [], pcb_press: [['S3', true]] });
+  core.call({ cmd: 'board_run', cycles: 100, inputs: [], pcb_press: [['S3', false]] });
+  ps = shows(core.call({ cmd: 'board_run', cycles: 1000, inputs: [] }));
+  if (!(ps.D3 > 0.99) || ps.D1 > 0.01) problems.push(`keys: S3 pressed, D1 ${ps.D1} D3 ${ps.D3}`);
+  // runner.board: the 74HC595 shows the lit LED, one step every 0.1 s
+  b = ex('lab_runner');
+  core.call({ cmd: 'board_load', files: b.files.filter((f) => f.name.endsWith('.veryl')), top: 'Runner', pcf: b.pcf });
+  core.call({ cmd: 'board_periph', pcb: b.files.find((f) => f.name.endsWith('.board')).src });
+  ps = shows(core.call({ cmd: 'board_run', cycles: 1000, inputs: [] }));
+  const ra = ps.U1;
+  ps = shows(core.call({ cmd: 'board_run', cycles: 1_200_100, inputs: [] }));
+  if (ra !== 1 || ps.U1 !== 2) problems.push(`runner shows ${ra} then ${ps.U1}, not 1 then 2`);
   b = ex('vga');
   core.call({ cmd: 'board_load', files: b.files, top: 'VgaDemo', pcf: b.pcf });
   core.call({ cmd: 'board_periph', vga: { hs: 42, vs: 36, r: [45, 47, 2, 4], g: [31, 34, 38, 43], b: [44, 46, 48, 3] } });
@@ -578,7 +596,7 @@ for (const id of ['tut_blinky', 'seq101', 'lab_traffic']) {
   const main = fs.readFileSync(path.join(dist, '../src/ide/main.ts'), 'utf8');
   const goals = main.slice(main.indexOf('const goals = ')).split('\n];')[0];
   for (const [, id] of goals.matchAll(/ex: '([\w-]+)'/g)) if (!ALL_EXAMPLES.some((e) => e.id === id)) errs.push(`welcome: no example ${id}`);
-  if ([...goals.matchAll(/ex: '/g)].length !== 5) errs.push('welcome: not five starting points');
+  if ([...goals.matchAll(/ex: '/g)].length !== 6) errs.push('welcome: not six starting points');
   const ok = !errs.length;
   if (!ok) bad++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} caps     ${ctx.VERYL_EXAMPLES.length} examples, first steps ${JSON.stringify(firsts)}${errs.length ? ': ' + errs.slice(0, 4).join('; ') : ''}`);
