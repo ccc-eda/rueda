@@ -64,14 +64,23 @@ body:not(.basic) #titlebar .tb-group select { max-width: 150px; }
 #guide .ab.view.on { background: #3b2d5c; border-color: #9a7ae0; color: #fff; }
 @media (max-width: 700px) { #guide .ab { padding: 3px 6px; } }
 #edArea.pcb-split #editorHost { right: 45%; }
-.pcb-prev { display: flex; flex-direction: column; min-height: 0; background: #1e1e1e; z-index: 5; }
-.pcb-prev:not(.fw-float) { position: absolute; top: 0; right: 0; bottom: 0; width: 45%; border-left: 1px solid var(--line); }
-.pcb-prev.fw-float { top: 30px; right: 20px; width: min(700px, calc(100% - 40px)); height: min(480px, calc(100% - 60px)); }
-.pcb-prev:not(.fw-float) > .fw-h .fw-t { visibility: visible; }
-.pcb-prev .nv-tab { white-space: nowrap; }
-.pcb-prev-h { display: flex; align-items: center; gap: 10px; padding: 4px 8px; font-size: 12px; min-width: 0; }
-.pcb-prev-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.pcb-prev-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; background: #151a21; }
+.fview { display: flex; flex-direction: column; min-height: 0; background: #1e1e1e; z-index: 5; }
+.fview:not(.fw-float) { position: absolute; top: 0; right: 0; bottom: 0; width: 45%; border-left: 1px solid var(--line); }
+.fview.fw-float { top: 30px; right: 20px; width: min(700px, calc(100% - 40px)); height: min(480px, calc(100% - 60px)); }
+.fview.fw:not(.fw-float) > .fw-h .fw-t { visibility: visible; }
+.fview .nv-tab { white-space: nowrap; }
+.fview-h { display: flex; align-items: center; gap: 10px; padding: 4px 8px; font-size: 12px; min-width: 0; }
+.fview-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.fview-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; background: #151a21; }
+.fview-nets { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.fview-pins { overflow: auto; flex: 1 1 auto; padding: 8px; }
+.fview-board { width: 100%; height: auto; display: block; }
+.fview-board [data-pin].hl .vb-hdr, .fview-board [data-pin].hl > .vb-led-body, .fview-board [data-pin].hl .vb-btn-base, .fview-board [data-pin].hl rect { stroke: #4fc3ff; stroke-width: 3; }
+.fview-tab { border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+.fview-tab th, .fview-tab td { text-align: left; padding: 2px 10px 2px 0; border-bottom: 1px solid #2a2f3a; }
+.fview-tab tr[data-pin] { cursor: default; }
+.fview-tab tr.hl td { background: #23384d; }
+.fview-tab tr.bad td { color: var(--warn); }
 .tree .item .badges { margin-left: auto; flex: 0 0 auto; display: flex; gap: 1px; font-size: 11px; }
 .tree .item .badges span { padding: 0 2px; border: 1px solid transparent; border-radius: 3px; opacity: .8; }
 .tree .item .badges .st, .side-hint .st { border: 1px solid var(--accent); border-radius: 3px; opacity: 1; }

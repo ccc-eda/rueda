@@ -665,6 +665,33 @@ fn pcb_desc(pcb: &eda::pcb::Board) -> Value {
     json!({ "name": pcb.desc.name, "parts": parts, "nets": nets, "erc": erc })
 }
 
+/// a pin file as text, without a design (the editor's preview): each set_io line's port, its FPGA pin
+/// and what that pin is on the iCEBreaker, and what is wrong (a pin twice, a port twice, a pin the
+/// board does not bring out)
+fn pcf_info(v: &Value) -> R<Value> {
+    use eda::fpga::board::icebreaker::{pin, Kind};
+    let src = v.get("src").and_then(|s| s.as_str()).unwrap_or("");
+    let (mut pins, mut problems) = (Vec::new(), Vec::new());
+    let (mut by_pin, mut by_port) = (std::collections::HashMap::new(), std::collections::HashMap::new());
+    for (i, l) in src.lines().enumerate() {
+        let w: Vec<&str> = l.split('#').next().unwrap_or("").split_whitespace().collect();
+        if w.first() != Some(&"set_io") { continue; }
+        let args: Vec<&str> = w[1..].iter().copied().filter(|a| !a.starts_with('-')).collect();
+        let line = i + 1;
+        let (Some(port), Some(num)) = (args.first(), args.get(1)) else { problems.push(json!({ "line": line, "msg": "set_io PORT PIN" })); continue };
+        let Ok(n) = num.parse::<u32>() else { problems.push(json!({ "line": line, "msg": format!("`{}` is not a pin number", num) })); continue };
+        if let Some(l0) = by_pin.insert(n, line) { problems.push(json!({ "line": line, "msg": format!("pin {} is also used on line {}", n, l0) })); }
+        if let Some(l0) = by_port.insert(port.to_string(), line) { problems.push(json!({ "line": line, "msg": format!("{} is also set on line {}", port, l0) })); }
+        let p = pin(n);
+        if p.is_none() { problems.push(json!({ "line": line, "msg": format!("pin {} is not brought out on the iCEBreaker", n) })); }
+        let kind = p.map(|p| match p.kind {
+            Kind::Clock => "clock", Kind::Button { .. } => "button", Kind::Led { .. } => "led", Kind::Uart { rx } => if rx { "uart_rx" } else { "uart_tx" }, Kind::Pmod => "pmod",
+        });
+        pins.push(json!({ "line": line, "port": port, "pin": n, "name": p.map(|p| p.name), "kind": kind }));
+    }
+    Ok(json!({ "ok": true, "pins": pins, "problems": problems }))
+}
+
 /// a .board as text, without a board to plug it into (the editor's preview): its description
 /// (`pcb`), or the parse error (`parse_error`)
 fn pcb_info(v: &Value) -> R<Value> {
@@ -920,6 +947,7 @@ pub fn dispatch(v: &Value) -> R<Value> {
         "board_reset" => board_reset(),
         "board_periph" => board_periph(v),
         "pcb_info" => pcb_info(v),
+        "pcf_info" => pcf_info(v),
         // Fluxa: the tests of a program (files merged, like `reda sim a.fx b.fx`), run on the
         // cooperative scheduler (no threads in WebAssembly)
         "fluxa_list" => {

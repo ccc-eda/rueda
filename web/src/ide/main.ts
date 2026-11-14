@@ -19,7 +19,7 @@ import { exchangeArea, readExchangeArea, tarFiles, untarFiles } from '../tar';
 import { CodeEditor, Marker } from './editor';
 import { langOf } from './highlight';
 import { FloatWin, floatWin } from './floatwin';
-import { PcbPreview } from './pcbprev';
+import { FilePreview, PcfInfo, viewOf } from './preview';
 import type { NvBoard } from './netview';
 import { Act, actHint, actName, badges, CapInput, caps, Fix, start } from './caps';
 
@@ -117,8 +117,8 @@ function blankFluxaProject(name: string): Project {
 // ---------------------------------------------------------------- state
 
 let core: Core | null = null;
-/** a .board's drawing beside it (the action bar's 🔌 PCB) */
-let pcbPrev: PcbPreview;
+/** a .board's or a pin file's drawing beside it (the action bar's 🔌 PCB, 📌 Pins) */
+let preview: FilePreview;
 let synth: SynthOverlay | null = null;
 let wave: WaveView | null = null;
 let ed: CodeEditor;
@@ -238,7 +238,7 @@ function showActive(): void {
     $('sbPos').textContent = '';
   }
   if (a === WELCOME) welcome();
-  pcbPrev.show(isFile ? a : undefined, file(a)?.src ?? '');
+  preview.show(isFile ? a : undefined, file(a)?.src ?? '');
   renderTabs();
   renderFiles();
   applyCaps();
@@ -1482,10 +1482,12 @@ function renderGuide(): void {
 }
 
 /** the views of a file, on the right of the action bar */
-type ViewKey = 'pcb' | 'circuit' | 'asm';
+type ViewKey = 'pcb' | 'pins' | 'circuit' | 'asm';
 function fileViews(name: string | undefined): { key: ViewKey; label: string; title: string; on?: boolean }[] {
   if (!name || !file(name)) return [];
-  if (name.endsWith('.board')) return [{ key: 'pcb', label: tr('🔌 PCB', '🔌 PCB'), on: pcbPrev?.isOpen,
+  if (name.endsWith('.pcf')) return [{ key: 'pins', label: tr('📌 腳位', '📌 Pins'), on: preview?.isOpen('pins'),
+    title: tr('板子上的腳位：這個檔案把每個埠接到哪支腳、那支腳在板上是什麼，邊改邊更新（不用燒錄）', 'The pins on the board: which pin each port goes to and what that pin is on the board, redrawn as you edit (no flashing needed)') }];
+  if (name.endsWith('.board')) return [{ key: 'pcb', label: tr('🔌 PCB', '🔌 PCB'), on: preview?.isOpen('pcb'),
     title: tr('畫出這塊擴充板：線路圖、電路圖，邊改邊更新（不用燒錄）', 'Draw this expansion board: its nets and schematic, redrawn as you edit (no flashing needed)') }];
   if (name.endsWith('.veryl') || name.endsWith('.fx')) return [{ key: 'circuit', label: tr('📐 電路圖', '📐 Circuit'),
     title: tr('游標所在模組的邏輯閘電路（合成、最佳化後，還沒對應到 FPGA 或標準元件）', 'The gates of the module at the cursor (synthesized and optimized, not yet mapped to the FPGA or standard cells)') }];
@@ -1495,7 +1497,7 @@ function fileViews(name: string | undefined): { key: ViewKey; label: string; tit
 
 function openView(v: ViewKey): void {
   const name = proj.active ?? '';
-  if (v === 'pcb') { pcbPrev.toggle(file(name)?.src ?? ''); renderGuide(); }
+  if (v === 'pcb' || v === 'pins') { preview.toggle(file(name)?.src ?? ''); renderGuide(); }
   else if (v === 'asm') openFile(ASM_TAB);
   else {
     // the module the cursor is in (a testbench: the first design module of the file)
@@ -1874,16 +1876,22 @@ function wire(): void {
   ($('tgSynth') as HTMLOptGroupElement).label = tr('合成（看電路）', 'Synthesis (the circuit)');
   ($('tgEmu') as HTMLOptGroupElement).label = tr('模擬機（跑軟體）', 'Emulator (software)');
   ed = new CodeEditor($('editorHost'));
-  pcbPrev = new PcbPreview($('edArea'), async src => {
-    if (!core) return { error: tr('還在載入', 'still loading') };
-    const r = await core.call<{ pcb?: NvBoard & { name: string }; parse_error?: string }>({ cmd: 'pcb_info', src });
-    return r.pcb ?? { error: r.parse_error ?? '' };
+  preview = new FilePreview($('edArea'), {
+    pcb: async src => {
+      if (!core) return { error: tr('還在載入', 'still loading') };
+      const r = await core.call<{ pcb?: NvBoard & { name: string }; parse_error?: string }>({ cmd: 'pcb_info', src });
+      return r.pcb ?? { error: r.parse_error ?? '' };
+    },
+    pins: async src => {
+      if (!core) throw new Error(tr('還在載入', 'still loading'));
+      return core.call<PcfInfo>({ cmd: 'pcf_info', src });
+    },
   });
   ed.onChange = text => {
     const f = file(proj.active ?? '');
     if (!f || ed.readOnly) return;
     f.src = text;
-    if (f.name.endsWith('.board')) pcbPrev.update(text);
+    if (viewOf(f.name)) preview.update(text);
     // the file's problems are stale now: the check finds syntax errors again, the next run the others
     problems = problems.filter(p => p.file !== f.name);
     changed();
@@ -2053,8 +2061,8 @@ async function boot(): Promise<void> {
     $('sbCore').textContent = `✓ WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr('（背景執行緒）', ' (worker thread)') : ''}`;
     for (const id of ['cmdRun', 'cmdVerify', 'cmdBoard', 'cmdEmu', 'flowTarget', 'flowStage']) $<HTMLButtonElement>(id).disabled = false;
     applyCaps();
-    // a .board open before the core was there: its preview now
-    pcbPrev.show(proj.active, file(proj.active ?? '')?.src ?? '');
+    // a .board or a pin file open before the core was there: its view now
+    preview.show(proj.active, file(proj.active ?? '')?.src ?? '');
     synth = new SynthOverlay(core, {
       embedded: true,
       onStage: k => {

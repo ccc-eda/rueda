@@ -3828,7 +3828,7 @@ target = { type = "directory", path = "target" }
       </div>
       <div class="vb-foot"></div>
       <div class="vb-pins hidden"></div>`;
-      this.svg.innerHTML = this.drawing();
+      this.svg.innerHTML = boardDrawing();
       this.q("[data-a=run]").onclick = () => this.setRunning(!this.running);
       this.q("[data-a=power]").onclick = () => this.power();
       this.q("[data-a=pace]").onchange = (e) => {
@@ -4491,50 +4491,50 @@ ${lines.join("\n")}
       this.q(".vb-foot").innerHTML = `<b>${esc3(i.top)}</b>\u3000${what}\u3000${i.default_pcf ? tr("\uFF08\u5C08\u6848\u6C92\u6709\u8173\u4F4D\u6A94\uFF1A\u4F7F\u7528\u6559\u5B78\u7684 iCEBreaker \u9810\u8A2D\u8173\u4F4D\uFF09", "(no pin file in the project: the tutorial's iCEBreaker pins)") : ""}<br>${tr("\u63A5\u7DDA", "Wiring")}\uFF1A${esc3(used.join("\u3000")) || "\u2014"}` + (i.warnings.length ? `<br><span class="vb-warn">\u26A0 ${esc3(i.warnings.slice(0, 3).join("\uFF1B"))}${i.warnings.length > 3 ? tr(`\u2026\uFF08\u5171 ${i.warnings.length} \u689D\uFF0C\u898B\u300C\u554F\u984C\u300D\u9762\u677F\uFF09`, `\u2026 (${i.warnings.length} in all, see Problems)`) : ""}</span>` : "") + `<br><span class="vb-hint">${tr("\u6309\u4F4F\u6309\u9215\uFF08\u6216\u6309\u9375 0 = BTN_N\u30011\u20133 = BTN1\u20133\uFF09\uFF1BShift+\u9EDE\u64CA\u53EF\u4EE5\u9396\u4F4F\u6309\u9215\u3002\u4F4D\u5143\u6D41\u6A21\u5F0F\u6A21\u64EC\u7684\u662F\u4F48\u5C40\u7E5E\u7DDA\u5F8C\u771F\u6B63\u6703\u71D2\u9032\u6676\u7247\u7684\u4F4D\u5143\u6D41\uFF08\u89E3\u78BC\u56DE\u96FB\u8DEF\u3001\u9010\u9031\u671F\u6A21\u64EC\uFF09\uFF0C\u901F\u5EA6\u4F9D\u8A2D\u8A08\u5927\u5C0F\u800C\u5B9A\uFF1B\u53EF\u4EE5\u628A\u4EFB\u4F55 .bin \u62D6\u653E\u5230\u677F\u5B50\u4E0A\u3002\u677F\u5B50\u7684\u5716\u662F\u793A\u610F\u5716\u3002", "Hold a button (or keys 0 = BTN_N, 1\u20133 = BTN1\u20133); Shift+click latches it. In bitstream mode the board runs the placed-and-routed bitstream that would be flashed (decoded back into a circuit, simulated cycle by cycle); the speed depends on the design size. Drop any .bin on the board. The board drawing is schematic.")}</span>`;
     }
     /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
-    drawing() {
-      const hdr = (x, y, pins, label, vertical = false) => {
-        let s = `<text x="${x + (vertical ? 22 : 60)}" y="${y - 8}" class="vb-silk" text-anchor="middle">${label}</text>`;
-        const rows = [[...pins.slice(0, 4), -1, -2], [...pins.slice(4), -1, -2]];
-        rows.forEach((row, r) => row.forEach((p, k) => {
-          const [px, py] = vertical ? [x + r * 22, y + k * 22] : [x + k * 22, y + r * 22];
-          if (p < 0) {
-            s += `<rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr-pwr"><title>${p === -1 ? "GND" : "3V3"}</title></rect>`;
-            return;
-          }
-          s += `<g data-pin="${p}"><rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr" data-hdr="${p}"/></g>`;
-        }));
-        return s;
-      };
-      const led = (x, y, pin, color, label) => `<g data-pin="${pin}"><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" class="vb-led-body"/><circle cx="${x}" cy="${y}" r="16" fill="${color}" filter="url(#vbGlow)" data-led="${pin}" style="opacity:0"/><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" fill="${color}" data-led="${pin}" style="opacity:0"/><text x="${x}" y="${y + 22}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
-      const btn = (x, y, pin, label) => `<g data-pin="${pin}" data-btn="${pin}" class="vb-btn"><rect x="${x - 15}" y="${y - 15}" width="30" height="30" rx="3" class="vb-btn-base"/><circle cx="${x}" cy="${y}" r="10" class="vb-btn-cap"/><text x="${x}" y="${y + 30}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
-      return `<defs><filter id="vbGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="5"/></filter></defs>
-      <rect x="10" y="20" width="640" height="290" rx="14" class="vb-pcb"/>
-      <rect x="670" y="20" width="240" height="290" rx="14" class="vb-pcb"/>
-      <line x1="660" y1="30" x2="660" y2="300" class="vb-perf"/>
-      <text x="30" y="300" class="vb-silk vb-title">iCEBreaker</text>
-      <rect x="0" y="135" width="42" height="56" rx="4" class="vb-usb"/><text x="48" y="128" class="vb-silk">USB</text>
-      <rect x="70" y="140" width="52" height="46" rx="3" class="vb-chip"/><text x="96" y="167" class="vb-chip-t" text-anchor="middle">FTDI</text>
-      <rect x="150" y="215" width="44" height="30" rx="2" class="vb-chip"/><text x="172" y="234" class="vb-chip-t" text-anchor="middle">flash</text>
-      <g data-pin="35"><rect x="160" y="80" width="40" height="24" rx="5" class="vb-osc"/><text x="180" y="96" class="vb-chip-t" text-anchor="middle">12M</text><title>12 MHz</title></g>
-      <rect x="245" y="95" width="140" height="140" rx="4" class="vb-chip vb-fpga"/>
-      <text x="315" y="160" class="vb-chip-t vb-fpga-t" text-anchor="middle">iCE40UP5K</text>
-      <text x="315" y="180" class="vb-chip-t" text-anchor="middle">SG48</text>
-      ${led(430, 60, 11, "#ff3b30", "LEDR_N")}
-      ${led(480, 60, 37, "#34c759", "LEDG_N")}
-      ${btn(440, 255, 10, "BTN_N")}
-      ${hdr(500, 120, PMOD1A, "PMOD1A", true)}
-      ${hdr(575, 120, PMOD1B, "PMOD1B", true)}
-      ${hdr(682, 120, PMOD2, "PMOD2", true)}
-      ${led(810, 115, 26, "#ff3b30", "LED1")}
-      ${led(810, 65, 27, "#34c759", "LED2")}
-      ${led(860, 115, 25, "#34c759", "LED3")}
-      ${led(810, 165, 23, "#34c759", "LED4")}
-      ${led(760, 115, 21, "#34c759", "LED5")}
-      ${btn(760, 250, 20, "BTN1")}
-      ${btn(810, 250, 19, "BTN2")}
-      ${btn(860, 250, 18, "BTN3")}`;
-    }
   };
+  function boardDrawing() {
+    const hdr = (x, y, pins, label, vertical = false) => {
+      let s = `<text x="${x + (vertical ? 22 : 60)}" y="${y - 8}" class="vb-silk" text-anchor="middle">${label}</text>`;
+      const rows = [[...pins.slice(0, 4), -1, -2], [...pins.slice(4), -1, -2]];
+      rows.forEach((row, r) => row.forEach((p, k) => {
+        const [px, py] = vertical ? [x + r * 22, y + k * 22] : [x + k * 22, y + r * 22];
+        if (p < 0) {
+          s += `<rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr-pwr"><title>${p === -1 ? "GND" : "3V3"}</title></rect>`;
+          return;
+        }
+        s += `<g data-pin="${p}"><rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr" data-hdr="${p}"/></g>`;
+      }));
+      return s;
+    };
+    const led = (x, y, pin, color, label) => `<g data-pin="${pin}"><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" class="vb-led-body"/><circle cx="${x}" cy="${y}" r="16" fill="${color}" filter="url(#vbGlow)" data-led="${pin}" style="opacity:0"/><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" fill="${color}" data-led="${pin}" style="opacity:0"/><text x="${x}" y="${y + 22}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
+    const btn = (x, y, pin, label) => `<g data-pin="${pin}" data-btn="${pin}" class="vb-btn"><rect x="${x - 15}" y="${y - 15}" width="30" height="30" rx="3" class="vb-btn-base"/><circle cx="${x}" cy="${y}" r="10" class="vb-btn-cap"/><text x="${x}" y="${y + 30}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
+    return `<defs><filter id="vbGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="5"/></filter></defs>
+    <rect x="10" y="20" width="640" height="290" rx="14" class="vb-pcb"/>
+    <rect x="670" y="20" width="240" height="290" rx="14" class="vb-pcb"/>
+    <line x1="660" y1="30" x2="660" y2="300" class="vb-perf"/>
+    <text x="30" y="300" class="vb-silk vb-title">iCEBreaker</text>
+    <rect x="0" y="135" width="42" height="56" rx="4" class="vb-usb"/><text x="48" y="128" class="vb-silk">USB</text>
+    <rect x="70" y="140" width="52" height="46" rx="3" class="vb-chip"/><text x="96" y="167" class="vb-chip-t" text-anchor="middle">FTDI</text>
+    <rect x="150" y="215" width="44" height="30" rx="2" class="vb-chip"/><text x="172" y="234" class="vb-chip-t" text-anchor="middle">flash</text>
+    <g data-pin="35"><rect x="160" y="80" width="40" height="24" rx="5" class="vb-osc"/><text x="180" y="96" class="vb-chip-t" text-anchor="middle">12M</text><title>12 MHz</title></g>
+    <rect x="245" y="95" width="140" height="140" rx="4" class="vb-chip vb-fpga"/>
+    <text x="315" y="160" class="vb-chip-t vb-fpga-t" text-anchor="middle">iCE40UP5K</text>
+    <text x="315" y="180" class="vb-chip-t" text-anchor="middle">SG48</text>
+    ${led(430, 60, 11, "#ff3b30", "LEDR_N")}
+    ${led(480, 60, 37, "#34c759", "LEDG_N")}
+    ${btn(440, 255, 10, "BTN_N")}
+    ${hdr(500, 120, PMOD1A, "PMOD1A", true)}
+    ${hdr(575, 120, PMOD1B, "PMOD1B", true)}
+    ${hdr(682, 120, PMOD2, "PMOD2", true)}
+    ${led(810, 115, 26, "#ff3b30", "LED1")}
+    ${led(810, 65, 27, "#34c759", "LED2")}
+    ${led(860, 115, 25, "#34c759", "LED3")}
+    ${led(810, 165, 23, "#34c759", "LED4")}
+    ${led(760, 115, 21, "#34c759", "LED5")}
+    ${btn(760, 250, 20, "BTN1")}
+    ${btn(810, 250, 19, "BTN2")}
+    ${btn(860, 250, 18, "BTN3")}`;
+  }
 
   // src/ide/pi.ts
   var PI_HEADER = [
@@ -5701,84 +5701,141 @@ ${lines.join("\n")}
     return e;
   }
 
-  // src/ide/pcbprev.ts
-  var PcbPreview = class {
-    constructor(area, parse) {
+  // src/ide/preview.ts
+  var viewOf = (name) => name?.endsWith(".board") ? "pcb" : name?.endsWith(".pcf") ? "pins" : null;
+  var FilePreview = class {
+    constructor(area, calls) {
       __publicField(this, "area", area);
-      __publicField(this, "parse", parse);
+      __publicField(this, "calls", calls);
       __publicField(this, "win");
       __publicField(this, "fw");
       __publicField(this, "nets");
+      __publicField(this, "pinBox");
       __publicField(this, "msg");
+      __publicField(this, "name");
+      /** the open file and its view (none: the window is hidden) */
       __publicField(this, "file", "");
+      __publicField(this, "kind", null);
       __publicField(this, "timer", 0);
       __publicField(this, "gen", 0);
-      /** the preview is wanted (it opens again with the next .board file) */
-      __publicField(this, "open", false);
-      try {
-        this.open = localStorage.getItem("rueda.pcbprev") === "1";
-      } catch {
+      /** each view is wanted or not (it opens again with the next file of its kind) */
+      __publicField(this, "open", { pcb: false, pins: false });
+      for (const k of ["pcb", "pins"]) {
+        try {
+          this.open[k] = localStorage.getItem("rueda.view." + k) === "1";
+        } catch {
+        }
       }
       this.win = document.createElement("div");
-      this.win.className = "pcb-prev hidden";
-      this.win.innerHTML = `<div class="pcb-prev-h"><span class="fw-t">\u283F \u{1F50C} <span class="pcb-prev-name"></span></span><span class="pcb-prev-msg"></span></div><div class="pcb-prev-body"></div>`;
+      this.win.className = "fview hidden";
+      this.win.innerHTML = `<div class="fview-h"><span class="fw-t">\u283F <span class="fview-name"></span></span><span class="fview-msg"></span></div><div class="fview-body"><div class="fview-nets"></div><div class="fview-pins"></div></div>`;
       area.appendChild(this.win);
-      this.msg = this.win.querySelector(".pcb-prev-msg");
-      this.nets = new NetView(this.win.querySelector(".pcb-prev-body"));
-      this.fw = floatWin(this.win, this.win.querySelector(".pcb-prev-h"), { key: "pcb.preview", auto: () => window.innerWidth < 1e3, onChange: () => this.layout() });
+      this.msg = this.win.querySelector(".fview-msg");
+      this.name = this.win.querySelector(".fview-name");
+      this.nets = new NetView(this.win.querySelector(".fview-nets"));
+      this.pinBox = this.win.querySelector(".fview-pins");
+      this.fw = floatWin(this.win, this.win.querySelector(".fview-h"), { key: "file.preview", auto: () => window.innerWidth < 1e3, onChange: () => this.layout() });
     }
-    get isOpen() {
-      return this.open;
+    isOpen(k) {
+      return this.open[k];
     }
-    /** the active file changed: the preview of a .board, if it is wanted */
+    /** the active file changed: its view, if it has one and it is wanted */
     show(name, src) {
-      const on = !!name?.endsWith(".board");
-      this.file = on ? name : "";
-      this.win.classList.toggle("hidden", !(on && this.open));
+      this.kind = viewOf(name);
+      if ((this.kind ? name : "") !== this.file) {
+        this.name.textContent = "";
+        this.msg.textContent = "";
+      }
+      this.file = this.kind ? name : "";
+      const on = !!this.kind && this.open[this.kind];
+      this.win.classList.toggle("hidden", !on);
+      if (this.kind) this.win.dataset.kind = this.kind;
       this.layout();
-      if (on && this.open) this.update(src, 0);
+      if (on) this.update(src, 0);
     }
-    /** the .board's text changed: draw it again a moment after the typing stops */
+    /** the file's text changed: draw it again a moment after the typing stops */
     update(src, wait = 300) {
-      if (!this.file || !this.open) return;
+      const k = this.kind;
+      if (!k || !this.open[k]) return;
       clearTimeout(this.timer);
-      this.timer = window.setTimeout(async () => {
-        const g = ++this.gen;
-        let r;
-        try {
-          r = await this.parse(src);
-        } catch (e) {
-          r = { error: String(e.message ?? e) };
-        }
-        if (g !== this.gen) return;
-        this.win.querySelector(".pcb-prev-name").textContent = tr("\u64F4\u5145\u677F", "Expansion board") + " " + ("name" in r && r.name ? r.name : this.file);
-        if ("error" in r) {
-          this.msg.innerHTML = `<span class="vb-err">\u2717 ${esc2(r.error)}</span>`;
-          return;
-        }
-        const errs = r.erc.filter((d) => d.error).length, warns = r.erc.length - errs;
-        this.msg.innerHTML = !r.erc.length ? '<span class="vb-dim">ERC \u2713</span>' : `<span class="${errs ? "vb-err" : "vb-dim"}" title="${esc2(r.erc.map((d) => (d.error ? "\u2717 " : "\u26A0 ") + d.msg).join("\n"))}">ERC ${errs ? `\u2717 ${errs}` : ""} ${warns ? `\u26A0 ${warns}` : ""}</span>`;
-        this.nets.set(r);
-      }, wait);
+      this.timer = window.setTimeout(() => k === "pcb" ? this.drawPcb(src) : this.drawPins(src), wait);
     }
-    /** 🔌 PCB: show or hide it (`src`: the open .board's text) */
+    /** the action bar's button: show or hide the open file's view (`src`: its text) */
     toggle(src) {
-      this.open = !this.open;
+      const k = this.kind;
+      if (!k) return;
+      this.open[k] = !this.open[k];
       try {
-        localStorage.setItem("rueda.pcbprev", this.open ? "1" : "0");
+        localStorage.setItem("rueda.view." + k, this.open[k] ? "1" : "0");
       } catch {
       }
-      this.win.classList.toggle("hidden", !(this.open && this.file));
+      this.win.classList.toggle("hidden", !this.open[k]);
       this.layout();
-      if (this.open && this.file) {
+      if (this.open[k]) {
         this.fw.unfold();
         this.fw.clamp();
         this.update(src, 0);
       }
     }
+    async drawPcb(src) {
+      const g = ++this.gen;
+      let r;
+      try {
+        r = await this.calls.pcb(src);
+      } catch (e) {
+        r = { error: String(e.message ?? e) };
+      }
+      if (g !== this.gen) return;
+      if ("error" in r) {
+        if (!this.name.textContent) this.name.textContent = "\u{1F50C} " + this.file;
+        this.msg.innerHTML = `<span class="vb-err">\u2717 ${esc2(r.error)}</span>`;
+        return;
+      }
+      this.name.textContent = `\u{1F50C} ${tr("\u64F4\u5145\u677F", "Expansion board")} ${r.name || this.file}`;
+      const errs = r.erc.filter((d) => d.error).length, warns = r.erc.length - errs;
+      this.msg.innerHTML = !r.erc.length ? '<span class="vb-dim">ERC \u2713</span>' : `<span class="${errs ? "vb-err" : "vb-dim"}" title="${esc2(r.erc.map((d) => (d.error ? "\u2717 " : "\u26A0 ") + d.msg).join("\n"))}">ERC ${errs ? `\u2717 ${errs}` : ""} ${warns ? `\u26A0 ${warns}` : ""}</span>`;
+      this.nets.set(r);
+    }
+    async drawPins(src) {
+      const g = ++this.gen;
+      let r;
+      try {
+        r = await this.calls.pins(src);
+      } catch (e) {
+        this.msg.innerHTML = `<span class="vb-err">\u2717 ${esc2(String(e.message ?? e))}</span>`;
+        return;
+      }
+      if (g !== this.gen) return;
+      this.name.textContent = `\u{1F4CC} ${tr("\u8173\u4F4D", "Pins")} ${this.file}`;
+      this.msg.innerHTML = !r.problems.length ? `<span class="vb-dim">${tr(`${r.pins.length} \u652F\u8173`, `${r.pins.length} pins`)} \u2713</span>` : `<span class="vb-err" title="${esc2(r.problems.map((p) => `line ${p.line}: ${p.msg}`).join("\n"))}">\u26A0 ${esc2(`line ${r.problems[0].line}: ${r.problems[0].msg}`)}${r.problems.length > 1 ? ` (+${r.problems.length - 1})` : ""}</span>`;
+      const kind = (k) => k ? { clock: tr("\u6642\u8108", "clock"), button: tr("\u6309\u9215", "button"), led: "LED", uart_rx: "UART RX", uart_tx: "UART TX", pmod: "PMOD" }[k] ?? k : "\u2014";
+      const bad = new Set(r.problems.map((p) => p.line));
+      this.pinBox.innerHTML = `<svg class="vb-svg fview-board" viewBox="0 0 920 330" xmlns="http://www.w3.org/2000/svg">${boardDrawing()}</svg><table class="fview-tab"><tr><th>${tr("\u57E0", "Port")}</th><th>${tr("\u8173", "Pin")}</th><th>${tr("\u677F\u4E0A", "On the board")}</th></tr>` + r.pins.map((p) => `<tr data-pin="${p.pin}"${bad.has(p.line) ? ' class="bad"' : ""}><td>${esc2(p.port)}</td><td>${p.pin}</td><td>${esc2(p.name ?? "?")} <span class="vb-dim">${esc2(kind(p.kind))}</span></td></tr>`).join("") + `</table>`;
+      const svg = this.pinBox.querySelector("svg");
+      const ports = /* @__PURE__ */ new Map();
+      for (const p of r.pins) ports.set(p.pin, [...ports.get(p.pin) ?? [], p.port]);
+      for (const el2 of svg.querySelectorAll("[data-pin]")) {
+        const n = +el2.dataset.pin;
+        const used = ports.get(n);
+        el2.classList.toggle("used", !!used);
+        const t = el2.querySelector("title") ?? el2.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "title"));
+        t.textContent = `${tr("\u8173", "pin")} ${n}` + (used ? ` \u2194 ${used.join(", ")}` : tr("\uFF1A\u6C92\u6709\u7528\u5230", ": not used"));
+      }
+      const light = (n, on) => {
+        for (const el2 of this.pinBox.querySelectorAll(`[data-pin="${n}"]`)) el2.classList.toggle("hl", on);
+      };
+      for (const el2 of this.pinBox.querySelectorAll("[data-pin]")) {
+        const n = +el2.dataset.pin;
+        el2.addEventListener("pointerenter", () => light(n, true));
+        el2.addEventListener("pointerleave", () => light(n, false));
+      }
+    }
     /** docked and shown: the editor gives it the right part of the area */
     layout() {
       this.area.classList.toggle("pcb-split", !this.win.classList.contains("hidden") && !this.fw.floating);
+      const k = this.win.dataset.kind;
+      this.win.querySelector(".fview-nets").classList.toggle("hidden", k !== "pcb");
+      this.pinBox.classList.toggle("hidden", k !== "pins");
     }
   };
 
@@ -5943,7 +6000,7 @@ test ${task.toLowerCase()}_doubles {
     return { id: uid(), name, files: [{ name: f, src: FX_TEMPLATE(task) }], open: [f], active: f };
   }
   var core = null;
-  var pcbPrev;
+  var preview;
   var synth = null;
   var wave = null;
   var ed;
@@ -6059,7 +6116,7 @@ test ${task.toLowerCase()}_doubles {
       $2("sbPos").textContent = "";
     }
     if (a === WELCOME) welcome();
-    pcbPrev.show(isFile ? a : void 0, file(a)?.src ?? "");
+    preview.show(isFile ? a : void 0, file(a)?.src ?? "");
     renderTabs();
     renderFiles();
     applyCaps();
@@ -7305,10 +7362,16 @@ ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what 
   }
   function fileViews(name) {
     if (!name || !file(name)) return [];
+    if (name.endsWith(".pcf")) return [{
+      key: "pins",
+      label: tr("\u{1F4CC} \u8173\u4F4D", "\u{1F4CC} Pins"),
+      on: preview?.isOpen("pins"),
+      title: tr("\u677F\u5B50\u4E0A\u7684\u8173\u4F4D\uFF1A\u9019\u500B\u6A94\u6848\u628A\u6BCF\u500B\u57E0\u63A5\u5230\u54EA\u652F\u8173\u3001\u90A3\u652F\u8173\u5728\u677F\u4E0A\u662F\u4EC0\u9EBC\uFF0C\u908A\u6539\u908A\u66F4\u65B0\uFF08\u4E0D\u7528\u71D2\u9304\uFF09", "The pins on the board: which pin each port goes to and what that pin is on the board, redrawn as you edit (no flashing needed)")
+    }];
     if (name.endsWith(".board")) return [{
       key: "pcb",
       label: tr("\u{1F50C} PCB", "\u{1F50C} PCB"),
-      on: pcbPrev?.isOpen,
+      on: preview?.isOpen("pcb"),
       title: tr("\u756B\u51FA\u9019\u584A\u64F4\u5145\u677F\uFF1A\u7DDA\u8DEF\u5716\u3001\u96FB\u8DEF\u5716\uFF0C\u908A\u6539\u908A\u66F4\u65B0\uFF08\u4E0D\u7528\u71D2\u9304\uFF09", "Draw this expansion board: its nets and schematic, redrawn as you edit (no flashing needed)")
     }];
     if (name.endsWith(".veryl") || name.endsWith(".fx")) return [{
@@ -7321,8 +7384,8 @@ ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what 
   }
   function openView(v) {
     const name = proj.active ?? "";
-    if (v === "pcb") {
-      pcbPrev.toggle(file(name)?.src ?? "");
+    if (v === "pcb" || v === "pins") {
+      preview.toggle(file(name)?.src ?? "");
       renderGuide();
     } else if (v === "asm") openFile(ASM_TAB);
     else {
@@ -7694,16 +7757,22 @@ ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what 
     $2("tgSynth").label = tr("\u5408\u6210\uFF08\u770B\u96FB\u8DEF\uFF09", "Synthesis (the circuit)");
     $2("tgEmu").label = tr("\u6A21\u64EC\u6A5F\uFF08\u8DD1\u8EDF\u9AD4\uFF09", "Emulator (software)");
     ed = new CodeEditor($2("editorHost"));
-    pcbPrev = new PcbPreview($2("edArea"), async (src) => {
-      if (!core) return { error: tr("\u9084\u5728\u8F09\u5165", "still loading") };
-      const r = await core.call({ cmd: "pcb_info", src });
-      return r.pcb ?? { error: r.parse_error ?? "" };
+    preview = new FilePreview($2("edArea"), {
+      pcb: async (src) => {
+        if (!core) return { error: tr("\u9084\u5728\u8F09\u5165", "still loading") };
+        const r = await core.call({ cmd: "pcb_info", src });
+        return r.pcb ?? { error: r.parse_error ?? "" };
+      },
+      pins: async (src) => {
+        if (!core) throw new Error(tr("\u9084\u5728\u8F09\u5165", "still loading"));
+        return core.call({ cmd: "pcf_info", src });
+      }
     });
     ed.onChange = (text) => {
       const f = file(proj.active ?? "");
       if (!f || ed.readOnly) return;
       f.src = text;
-      if (f.name.endsWith(".board")) pcbPrev.update(text);
+      if (viewOf(f.name)) preview.update(text);
       problems = problems.filter((p) => p.file !== f.name);
       changed();
     };
@@ -7903,7 +7972,7 @@ ${tr("\uFF08\u9EDE\u4E00\u4E0B\u770B\u600E\u9EBC\u8FA6\uFF09", "(click for what 
       $2("sbCore").textContent = `\u2713 WebAssembly ${(performance.now() - t0).toFixed(0)} ms${core.inWorker ? tr("\uFF08\u80CC\u666F\u57F7\u884C\u7DD2\uFF09", " (worker thread)") : ""}`;
       for (const id of ["cmdRun", "cmdVerify", "cmdBoard", "cmdEmu", "flowTarget", "flowStage"]) $2(id).disabled = false;
       applyCaps();
-      pcbPrev.show(proj.active, file(proj.active ?? "")?.src ?? "");
+      preview.show(proj.active, file(proj.active ?? "")?.src ?? "");
       synth = new SynthOverlay(core, {
         embedded: true,
         onStage: (k) => {

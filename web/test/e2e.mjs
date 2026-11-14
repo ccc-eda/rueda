@@ -154,15 +154,31 @@ for (const size of SIZES) {
     const { ctx, page, errors } = await open(size, '#ex=lab_keys');
     await page.click('#fileList .nm >> text=keys.board');
     await page.click('#guide [data-view="pcb"]');
-    await page.waitForSelector('.pcb-prev svg', { timeout: 10000 });
-    const ok = await page.textContent('.pcb-prev-msg');
+    await page.waitForSelector('.fview .nv-scroll svg', { timeout: 10000 });
+    const ok = await page.textContent('.fview-msg');
     await page.evaluate(() => { const ta = document.querySelector('#editorHost textarea'); ta.value = ta.value.replace('part S4 btn', 'part S4 button'); ta.dispatchEvent(new Event('input', { bubbles: true })); });
-    await page.waitForFunction(() => /line 9/.test(document.querySelector('.pcb-prev-msg').textContent), null, { timeout: 5000 });
+    await page.waitForFunction(() => /line 9/.test(document.querySelector('.fview-msg').textContent), null, { timeout: 5000 });
     await page.click('#guide [data-view="pcb"]');
-    const hidden = await page.$eval('.pcb-prev', (w) => w.classList.contains('hidden'));
+    const hidden = await page.$eval('.fview', (w) => w.classList.contains('hidden'));
     await ctx.close();
     if (!/ERC ✓/.test(ok)) return `ERC: ${ok}`;
     if (!hidden) return 'not hidden by a second click';
+    return errors.length ? `page errors: ${errors[0]}` : null;
+  });
+
+  // a pin file's pins on the board, without flashing; a pin set twice is reported with its line
+  await check('.pcf: 📌 Pins on the board, problems with their line', size, async () => {
+    const { ctx, page, errors } = await open(size, '#ex=lab_keys');
+    await page.click('#fileList .nm >> text=pins.pcf');
+    await page.click('#guide [data-view="pins"]');
+    await page.waitForSelector('.fview-pins tr[data-pin]', { timeout: 10000 });
+    const r = await page.evaluate(() => ({ rows: document.querySelectorAll('.fview-pins tr[data-pin]').length, used: document.querySelectorAll('.fview-board [data-pin].used').length, msg: document.querySelector('.fview-msg').textContent }));
+    await page.evaluate(() => { const ta = document.querySelector('#editorHost textarea'); ta.value += '\nset_io o_x 4\n'; ta.dispatchEvent(new Event('input', { bubbles: true })); });
+    await page.waitForFunction(() => /also used/.test(document.querySelector('.fview-msg').textContent), null, { timeout: 5000 });
+    await page.click('#guide [data-view="pins"]');
+    await ctx.close();
+    if (r.rows !== 10 || r.used !== 10) return `rows ${r.rows}, pins drawn ${r.used}`;
+    if (!/✓/.test(r.msg)) return `bar: ${r.msg}`;
     return errors.length ? `page errors: ${errors[0]}` : null;
   });
 

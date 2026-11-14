@@ -101,7 +101,7 @@ export class VirtualBoard {
       </div>
       <div class="vb-foot"></div>
       <div class="vb-pins hidden"></div>`;
-    this.svg.innerHTML = this.drawing();
+    this.svg.innerHTML = boardDrawing();
     this.q('[data-a=run]').onclick = () => this.setRunning(!this.running);
     this.q('[data-a=power]').onclick = () => this.power();
     this.q<HTMLSelectElement>('[data-a=pace]').onchange = e => { this.realtime = (e.target as HTMLSelectElement).value === 'rt'; };
@@ -721,51 +721,55 @@ export class VirtualBoard {
   }
 
   /** the board: main section (USB, FPGA, LEDs, button, PMOD1A/1B) and the break-off section */
-  private drawing(): string {
-    const hdr = (x: number, y: number, pins: number[], label: string, vertical = false) => {
-      let s = `<text x="${x + (vertical ? 22 : 60)}" y="${y - 8}" class="vb-silk" text-anchor="middle">${label}</text>`;
-      // 2 × 6 header: signal pins 1-4 / 7-10, then GND and 3V3
-      const rows = [[...pins.slice(0, 4), -1, -2], [...pins.slice(4), -1, -2]];
-      rows.forEach((row, r) => row.forEach((p, k) => {
-        const [px, py] = vertical ? [x + r * 22, y + k * 22] : [x + k * 22, y + r * 22];
-        if (p < 0) { s += `<rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr-pwr"><title>${p === -1 ? 'GND' : '3V3'}</title></rect>`; return; }
-        s += `<g data-pin="${p}"><rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr" data-hdr="${p}"/></g>`;
-      }));
-      return s;
-    };
-    const led = (x: number, y: number, pin: number, color: string, label: string) =>
-      `<g data-pin="${pin}"><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" class="vb-led-body"/>`
-      + `<circle cx="${x}" cy="${y}" r="16" fill="${color}" filter="url(#vbGlow)" data-led="${pin}" style="opacity:0"/>`
-      + `<rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" fill="${color}" data-led="${pin}" style="opacity:0"/>`
-      + `<text x="${x}" y="${y + 22}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
-    const btn = (x: number, y: number, pin: number, label: string) =>
-      `<g data-pin="${pin}" data-btn="${pin}" class="vb-btn"><rect x="${x - 15}" y="${y - 15}" width="30" height="30" rx="3" class="vb-btn-base"/>`
-      + `<circle cx="${x}" cy="${y}" r="10" class="vb-btn-cap"/><text x="${x}" y="${y + 30}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
-    return `<defs><filter id="vbGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="5"/></filter></defs>
-      <rect x="10" y="20" width="640" height="290" rx="14" class="vb-pcb"/>
-      <rect x="670" y="20" width="240" height="290" rx="14" class="vb-pcb"/>
-      <line x1="660" y1="30" x2="660" y2="300" class="vb-perf"/>
-      <text x="30" y="300" class="vb-silk vb-title">iCEBreaker</text>
-      <rect x="0" y="135" width="42" height="56" rx="4" class="vb-usb"/><text x="48" y="128" class="vb-silk">USB</text>
-      <rect x="70" y="140" width="52" height="46" rx="3" class="vb-chip"/><text x="96" y="167" class="vb-chip-t" text-anchor="middle">FTDI</text>
-      <rect x="150" y="215" width="44" height="30" rx="2" class="vb-chip"/><text x="172" y="234" class="vb-chip-t" text-anchor="middle">flash</text>
-      <g data-pin="35"><rect x="160" y="80" width="40" height="24" rx="5" class="vb-osc"/><text x="180" y="96" class="vb-chip-t" text-anchor="middle">12M</text><title>12 MHz</title></g>
-      <rect x="245" y="95" width="140" height="140" rx="4" class="vb-chip vb-fpga"/>
-      <text x="315" y="160" class="vb-chip-t vb-fpga-t" text-anchor="middle">iCE40UP5K</text>
-      <text x="315" y="180" class="vb-chip-t" text-anchor="middle">SG48</text>
-      ${led(430, 60, 11, '#ff3b30', 'LEDR_N')}
-      ${led(480, 60, 37, '#34c759', 'LEDG_N')}
-      ${btn(440, 255, 10, 'BTN_N')}
-      ${hdr(500, 120, PMOD1A, 'PMOD1A', true)}
-      ${hdr(575, 120, PMOD1B, 'PMOD1B', true)}
-      ${hdr(682, 120, PMOD2, 'PMOD2', true)}
-      ${led(810, 115, 26, '#ff3b30', 'LED1')}
-      ${led(810, 65, 27, '#34c759', 'LED2')}
-      ${led(860, 115, 25, '#34c759', 'LED3')}
-      ${led(810, 165, 23, '#34c759', 'LED4')}
-      ${led(760, 115, 21, '#34c759', 'LED5')}
-      ${btn(760, 250, 20, 'BTN1')}
-      ${btn(810, 250, 19, 'BTN2')}
-      ${btn(860, 250, 18, 'BTN3')}`;
-  }
+
+}
+
+/** the iCEBreaker as a drawing (viewBox 0 0 920 330): each pin's part carries data-pin (the virtual
+ * board, the pin file's view) */
+export function boardDrawing(): string {
+  const hdr = (x: number, y: number, pins: number[], label: string, vertical = false) => {
+    let s = `<text x="${x + (vertical ? 22 : 60)}" y="${y - 8}" class="vb-silk" text-anchor="middle">${label}</text>`;
+    // 2 × 6 header: signal pins 1-4 / 7-10, then GND and 3V3
+    const rows = [[...pins.slice(0, 4), -1, -2], [...pins.slice(4), -1, -2]];
+    rows.forEach((row, r) => row.forEach((p, k) => {
+      const [px, py] = vertical ? [x + r * 22, y + k * 22] : [x + k * 22, y + r * 22];
+      if (p < 0) { s += `<rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr-pwr"><title>${p === -1 ? 'GND' : '3V3'}</title></rect>`; return; }
+      s += `<g data-pin="${p}"><rect x="${px}" y="${py}" width="18" height="18" rx="2" class="vb-hdr" data-hdr="${p}"/></g>`;
+    }));
+    return s;
+  };
+  const led = (x: number, y: number, pin: number, color: string, label: string) =>
+    `<g data-pin="${pin}"><rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" class="vb-led-body"/>`
+    + `<circle cx="${x}" cy="${y}" r="16" fill="${color}" filter="url(#vbGlow)" data-led="${pin}" style="opacity:0"/>`
+    + `<rect x="${x - 9}" y="${y - 6}" width="18" height="12" rx="2" fill="${color}" data-led="${pin}" style="opacity:0"/>`
+    + `<text x="${x}" y="${y + 22}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
+  const btn = (x: number, y: number, pin: number, label: string) =>
+    `<g data-pin="${pin}" data-btn="${pin}" class="vb-btn"><rect x="${x - 15}" y="${y - 15}" width="30" height="30" rx="3" class="vb-btn-base"/>`
+    + `<circle cx="${x}" cy="${y}" r="10" class="vb-btn-cap"/><text x="${x}" y="${y + 30}" class="vb-silk" text-anchor="middle">${label}</text></g>`;
+  return `<defs><filter id="vbGlow" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="5"/></filter></defs>
+    <rect x="10" y="20" width="640" height="290" rx="14" class="vb-pcb"/>
+    <rect x="670" y="20" width="240" height="290" rx="14" class="vb-pcb"/>
+    <line x1="660" y1="30" x2="660" y2="300" class="vb-perf"/>
+    <text x="30" y="300" class="vb-silk vb-title">iCEBreaker</text>
+    <rect x="0" y="135" width="42" height="56" rx="4" class="vb-usb"/><text x="48" y="128" class="vb-silk">USB</text>
+    <rect x="70" y="140" width="52" height="46" rx="3" class="vb-chip"/><text x="96" y="167" class="vb-chip-t" text-anchor="middle">FTDI</text>
+    <rect x="150" y="215" width="44" height="30" rx="2" class="vb-chip"/><text x="172" y="234" class="vb-chip-t" text-anchor="middle">flash</text>
+    <g data-pin="35"><rect x="160" y="80" width="40" height="24" rx="5" class="vb-osc"/><text x="180" y="96" class="vb-chip-t" text-anchor="middle">12M</text><title>12 MHz</title></g>
+    <rect x="245" y="95" width="140" height="140" rx="4" class="vb-chip vb-fpga"/>
+    <text x="315" y="160" class="vb-chip-t vb-fpga-t" text-anchor="middle">iCE40UP5K</text>
+    <text x="315" y="180" class="vb-chip-t" text-anchor="middle">SG48</text>
+    ${led(430, 60, 11, '#ff3b30', 'LEDR_N')}
+    ${led(480, 60, 37, '#34c759', 'LEDG_N')}
+    ${btn(440, 255, 10, 'BTN_N')}
+    ${hdr(500, 120, PMOD1A, 'PMOD1A', true)}
+    ${hdr(575, 120, PMOD1B, 'PMOD1B', true)}
+    ${hdr(682, 120, PMOD2, 'PMOD2', true)}
+    ${led(810, 115, 26, '#ff3b30', 'LED1')}
+    ${led(810, 65, 27, '#34c759', 'LED2')}
+    ${led(860, 115, 25, '#34c759', 'LED3')}
+    ${led(810, 165, 23, '#34c759', 'LED4')}
+    ${led(760, 115, 21, '#34c759', 'LED5')}
+    ${btn(760, 250, 20, 'BTN1')}
+    ${btn(810, 250, 19, 'BTN2')}
+    ${btn(860, 250, 18, 'BTN3')}`;
 }
