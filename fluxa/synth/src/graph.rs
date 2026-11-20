@@ -210,8 +210,13 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     // an instance's named nets (its variables, state, memories) under its name: `mem3.dmem.2`, `$mem:mem3.dmem.2:clk`
     let mut nets: Vec<(String, Vec<Bit>)> = vec![];
     let inst_name = |k: usize, inst: &Inst| format!("{}{}", inst.name.trim_start_matches('$').to_lowercase(), k);
+    // where the gates go (before optimization): each instance (a network's own parts below it) and each FIFO
+    let mut area: Vec<(String, usize)> = vec![];
     for (k, inst) in insts.iter().enumerate() {
         let nl = &inst.s.netlist;
+        let me = inst_name(k, inst);
+        if inst.s.area.is_empty() { area.push((me.clone(), nl.cells.len())); }
+        else { area.extend(inst.s.area.iter().map(|(p, n)| (format!("{}.{}", me, p), *n))); }
         let base = b.next_wire;
         let maxw = nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()))
             .filter_map(|x| if let Bit::W(w) = x { Some(w) } else { None }).max().unwrap_or(0);
@@ -222,7 +227,6 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
         b.next_wire = base + maxw + 1;
         let mut pm = HashMap::new();
         for p in &nl.ports { pm.insert(p.name.clone(), p.bits.iter().map(|x| map(*x)).collect::<Vec<Bit>>()); }
-        let me = inst_name(k, inst);
         for (n, bits) in &nl.nets {
             let n = match n.strip_prefix("$mem:") { Some(r) => format!("$mem:{}.{}", me, r), None => format!("{}.{}", me, n) };
             nets.push((n, bits.iter().map(|x| map(*x)).collect()));
@@ -290,7 +294,10 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
             // the network's own channel: straight through (the other end is the environment's)
             (pd.clone(), pc, pv, cr)
         } else {
-            fifo(&mut b, rst, clk, *depth, w, &pd, pc, pv, cr)
+            let before = b.cells.len();
+            let r = fifo(&mut b, rst, clk, *depth, w, &pd, pc, pv, cr);
+            area.push((format!("fifo {} ({} x {} bits)", cname, depth, w + 1), b.cells.len() - before));
+            r
         };
         match pr_target { Some(t) => set(&mut alias, &t, &[pready]), None => { if let End::Top(n) = p { out_ports.push(Port { name: format!("{}_ready", n), dir: Dir::Out, bits: vec![pready] }); } } }
         match (q, cd) {
@@ -308,13 +315,23 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     let nl: Netlist = netlist::optimize(b, &alias, ports, nets, &decl.name)?;
     let mut warnings = vec![];
     for inst in &insts { warnings.extend(inst.s.warnings.iter().map(|w| format!("{}: {}", inst.name, w))); }
+    // FIFOs that dominate the area: usually depths raised past what the network needs
+    let total: usize = area.iter().map(|x| x.1).sum();
+    let fifos: Vec<&(String, usize)> = area.iter().filter(|x| x.0.contains("fifo ")).collect();
+    let fsum: usize = fifos.iter().map(|x| x.1).sum();
+    if total > 0 && fsum * 10 >= total * 3 && !insts.is_empty() {
+        let mut big: Vec<&&(String, usize)> = fifos.iter().collect();
+        big.sort_by(|a, b| b.1.cmp(&a.1));
+        let names: Vec<String> = big.iter().take(3).map(|x| x.0.trim_start_matches("fifo ").to_string()).collect();
+        warnings.push(format!("FIFOs are {}% of the gates ({} channels; largest: {}): a depth beyond what the network needs costs registers", fsum * 100 / total, fifos.len(), names.join(", ")));
+    }
     // instance k of task T is `t<k>` (its own instances below it)
     let mut tree = vec![(String::new(), decl.name.clone())];
     for (k, inst) in insts.iter().enumerate() {
         let me = inst_name(k, inst);
         for (p, t) in &inst.s.insts { tree.push((if p.is_empty() { me.clone() } else { format!("{}.{}", me, p) }, t.clone())); }
     }
-    Ok(crate::Synth { netlist: nl, iface, warnings, insts: tree })
+    Ok(crate::Synth { netlist: nl, iface, warnings, insts: tree, area })
 }
 
 /// a FIFO of `depth` tokens of `w` data bits (+ the close flag): push side (data, close, valid)

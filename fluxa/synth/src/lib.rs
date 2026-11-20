@@ -27,6 +27,9 @@ pub struct Synth {
     pub warnings: Vec<String>,
     /// the task and, for a network, its instances: (path, task); the task itself is ("", name)
     pub insts: Vec<(String, String)>,
+    /// a network's gates before optimization, by part: (instance path or `fifo NAME (D x W bits)`, cells);
+    /// empty for a single task
+    pub area: Vec<(String, usize)>,
 }
 
 /// parameters fixed to constants (`--param`, a spawn's arguments): integers, booleans, arrays, tuples
@@ -65,7 +68,7 @@ fn specialize(prog: &Arc<Program>, decl: &FnDecl, params: &Params) -> Result<Arc
 
 /// the task synthesized by default: the last one declared
 pub fn default_top(prog: &Program) -> Option<String> {
-    prog.fns.values().filter(|d| d.kind == FnKind::Task).max_by_key(|d| d.line).map(|d| d.name.clone())
+    prog.fns.values().filter(|d| d.kind == FnKind::Task && !prog.is_std(d.line)).max_by_key(|d| d.line).map(|d| d.name.clone())
 }
 
 /// the const generics of task `top` as the program spawns it: the first `spawn top::<…>` whose
@@ -104,7 +107,7 @@ pub fn spawn_params(prog: &Program, top: &str) -> Params {
 
 /// the tasks of a program, in declaration order
 pub fn tasks(prog: &Program) -> Vec<String> {
-    let mut t: Vec<&Arc<FnDecl>> = prog.fns.values().filter(|d| d.kind == FnKind::Task).collect();
+    let mut t: Vec<&Arc<FnDecl>> = prog.fns.values().filter(|d| d.kind == FnKind::Task && !prog.is_std(d.line)).collect();
     t.sort_by_key(|d| d.line);
     t.into_iter().map(|d| d.name.clone()).collect()
 }

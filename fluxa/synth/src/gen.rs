@@ -1267,7 +1267,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         }
     }
     iface.mem_inits = mem_loads;
-    Ok(crate::Synth { netlist, iface, warnings, insts: vec![(String::new(), decl.name.clone())] })
+    Ok(crate::Synth { netlist, iface, warnings, insts: vec![(String::new(), decl.name.clone())], area: vec![] })
 }
 
 /// a memory address: the bits that pick one of `n` words (a block RAM has no more; an

@@ -1,0 +1,44 @@
+1795215058	0	--help
+1795215177	2	sim probe.fx
+1795215436	1	synth --top gemm ../../examples/gemm.fx
+1795215436	0	synth --top Conv3x3 ../conv3x3/fluxa/conv3x3.fx
+1795215455	0	sim probe2.fx
+1795215455	0	synth --top FooTop probe2.fx
+1795215541	1	synth --top Top probe_pe.fx
+1795215818	2	sim std.fx
+1795215826	1	sim std.fx std_test.fx
+1795215856	1	sim std.fx std_test.fx --test mm2_two_pairs --trace
+1795215867	0	synth --top Mm4Top std.fx std_test.fx
+1795215915	0	synth --top Mm4Top std.fx std_test.fx --format json
+1795215992	0	sim probe3.fx
+1795215992	0	synth --top Mm4 probe3.fx
+1795216042	0	synth --top Win8x6Top std.fx std_test.fx
+1795216053	0	fpga --help
+1795216114	1	sim std.fx std_test.fx
+1795216188	1	sim std.fx std_test.fx --test mm2_two_pairs --trace
+1795216240	1	sim std.fx std_test.fx --test mm2_two_pairs --trace
+1795216285	0	sim std.fx std_test.fx --test mm2_two_pairs --trace
+1795216295	0	sim std.fx std_test.fx
+1795216302	0	synth --top Mm4Top std.fx std_test.fx
+1795216304	0	synth --top Win8x6Top std.fx std_test.fx
+1795216306	0	synth --top Mm2Top std.fx std_test.fx
+1795216314	1	fpga --device hx8k --package ct256 --top Mm4Top --bin /tmp/m.bin std.fx std_test.fx
+1795216417	0	synth --top Matmul /tmp/simple.fx
+1795216417	1	fpga --device hx8k --package ct256 --top Matmul --bin /tmp/simple.bin /tmp/simple.fx]minimax[
+1795216429	0	synth --help
+1795216429	0	fpga --help
+1795216429	0	check --help
+1795216429	2	list std.fx std_test.fx]minimax[
+1795216505	1	check std.fx std_test.fx
+1795216516	0	synth --top Mm4Top --format json std.fx std_test.fx
+1795216573	0	sim std.fx std_test.fx --coop
+1795216575	0	synth --top Mm4Top std.fx std_test.fx
+1795216576	0	synth --top Mm2Top std.fx std_test.fx
+1795216576	0	synth --top Win8x6Top std.fx std_test.fx
+1795216589	0	synth --top PeFirst --param N=4 --param AW=8 --param CW=32 std.fx
+1795216589	0	synth --top Pe --param N=4 --param AW=8 --param CW=32 --param COL=1 std.fx
+1795216593	0	synth --top MatrixFeeder --param AW=8 std.fx
+1795216607	1	sim std.fx /tmp/repeat.fx --test repeat4
+1795216641	0	sim probe_core.fx
+1795216641	0	synth --top Core --param N=4 --param AW=8 --param CW=32 probe_core.fx
+1795216648	1	fpga --device hx8k --package ct256 --top Core --param N=4 --param AW=8 --param CW=32 --bin /tmp/core.bin probe_core.fx

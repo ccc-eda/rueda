@@ -295,6 +295,11 @@ fn fx_synth(r: &mut Report, prog: &Arc<fluxa::ast::Program>, a: &FxArgs, fpga: b
         }
     };
     for w in &s.warnings { r.diag(from_text("synth", "warning", w)); }
+    // a network: where the gates go (before optimization), the largest parts first
+    let mut parts = s.area.clone();
+    parts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let total: usize = parts.iter().map(|x| x.1).sum();
+    let fifo: usize = parts.iter().filter(|x| x.0.contains("fifo ")).map(|x| x.1).sum();
     let mut nl = s.netlist;
     if fpga {
         nl = match eda::fpga::ice40::map(&nl) {
@@ -313,6 +318,12 @@ fn fx_synth(r: &mut Report, prog: &Arc<fluxa::ast::Program>, a: &FxArgs, fpga: b
         .with("ports", J::Arr(ports))
         .with("cells_total", count(&|_| true))
         .with("cells", J::Obj(stats.iter().map(|(t, n)| (t.clone(), J::from(*n))).collect()));
+    if total > 0 {
+        m.set("gates_by_part", J::obj()
+            .with("total", total)
+            .with("fifo_pct", (fifo * 100 / total) as i64)
+            .with("largest", J::Arr(parts.iter().take(12).map(|(p, n)| J::obj().with("part", p).with("gates", *n)).collect())));
+    }
     if fpga {
         // iCE40UP5K: 5280 LUT4s (and as many flip-flops), 30 block RAMs, 8 DSPs
         let (lut, ff, bram, dsp) = (count(&|t| t == "SB_LUT4"), count(&|t| t.starts_with("SB_DFF")), count(&|t| t == "SB_RAM40_4K"), count(&|t| t == "SB_MAC16"));

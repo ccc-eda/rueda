@@ -60,6 +60,8 @@ pub fn check(prog: &Arc<Program>) -> Vec<Finding> {
     }
     out.extend(crate::rates::rates(prog));
     out.extend(crate::rates::ports(prog));
+    // 標準庫自己的發現不報（它有自己的測試）
+    out.retain(|f| !prog.is_std(f.line));
     out.sort_by(|a, b| (a.line, a.code, &a.msg).cmp(&(b.line, b.code, &b.msg)));
     out.dedup();
     out

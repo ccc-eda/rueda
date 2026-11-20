@@ -64,6 +64,10 @@ pub fn load(file: &str, src: &str) -> Result<Arc<Program>, String> {
 }
 
 /// 解析多個檔案（依序），合併後求值編譯期常數。類比 `iverilog a.v b.v`。
+/// 標準庫的原始碼（`std/std.fx`）與它在 `Program::files` 裡的名稱
+pub const STD_SRC: &str = include_str!("../std/std.fx");
+pub const STD_FILE: &str = "<std>";
+
 pub fn load_many(files: &[(String, String)]) -> Result<Arc<Program>, String> {
     let mut prog: Option<Program> = None;
     for (idx, (file, src)) in files.iter().enumerate() {
@@ -73,6 +77,16 @@ pub fn load_many(files: &[(String, String)]) -> Result<Arc<Program>, String> {
         match prog.as_mut() {
             None => prog = Some(p),
             Some(acc) => acc.merge(p).map_err(|m| format!("{}: {}", file, m))?,
+        }
+    }
+    // 用到 `std::` 就併入標準庫，放在最後一個檔案之後（使用者的行號不變）；同名的以使用者為準
+    if let Some(acc) = prog.as_mut() {
+        if files.iter().any(|(_, s)| s.contains("std::")) && !acc.files.iter().any(|f| f == STD_FILE) {
+            let mut lib = parser::parse_program_at(STD_FILE, STD_SRC, files.len() as u32)
+                .map_err(|e| format!("{}:{}: syntax error: {}", STD_FILE, e.line % ast::FILE_STRIDE, e.msg))?;
+            lib.fns.retain(|k, _| !acc.fns.contains_key(k));
+            lib.tests.clear();
+            acc.merge(lib).map_err(|m| format!("{}: {}", STD_FILE, m))?;
         }
     }
     let prog = Arc::new(prog.ok_or_else(|| "no input files".to_string())?);

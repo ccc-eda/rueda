@@ -242,6 +242,11 @@ impl Program {
         format!("{}:{}", name, line % FILE_STRIDE)
     }
 
+    /// 這一行在標準庫（`std/std.fx`）裡嗎
+    pub fn is_std(&self, line: u32) -> bool {
+        self.files.get((line / FILE_STRIDE) as usize).is_some_and(|f| f == crate::STD_FILE)
+    }
+
     /// `loc` 的兩個部分：(檔名，檔內行號)
     pub fn file_line(&self, line: u32) -> (String, u32) {
         let idx = (line / FILE_STRIDE) as usize;
