@@ -63,7 +63,7 @@ Veryl 多出來的主要是兩件 Fluxa 替你做掉的事：**valid / ready 握
 | 實作 | LC | LUT4 | CARRY | DFF | BRAM | Fmax (MHz) |
 |---|---|---|---|---|---|---|
 | fir4，AI 寫的 Fluxa | 260 | 165 | 47 | 29 | 0 | 224 |
-| fir4，人寫的 Fluxa（`fluxa/examples/fir4.fx`） | 191 | 125 | 37 | 29 | 0 | 213 |
+| fir4，Claude Opus 5.5 寫的範例（`fluxa/examples/fir4.fx`） | 191 | 125 | 37 | 29 | 0 | 213 |
 | dot8，Fluxa | 1658 | 1521 | 94 | 625 | 0 | 86 |
 | crc32，Fluxa | 141 | 139 | 0 | 37 | 0 | 200 |
 | crc32，Veryl | 148 | 146 | 0 | 34 | 0 | 179 |
@@ -75,9 +75,11 @@ nextpnr 每次的 Fmax 有約 ±5% 的變動（同一份 `fir4.fx` 量過 222 �
 
 兩種語言都寫得出來的兩個核心，**面積和速度在同一個量級**：crc32 幾乎一樣，sort4 的 Fluxa 多 22% 面積、但快 22%。所以 Fluxa 的抽象沒有讓硬體明顯變差。
 
-### 3.4 AI 寫的 Fluxa 和人寫的差在哪
+### 3.4 便宜模型寫的 Fluxa 和 Opus 寫的差在哪
 
-- **不必要的加寬**：fir4 兩個模型（MiniMax、GLM）都把樣本先 `to::<i32>()` 再乘，面積比人寫的多 36%。位寬推導本來就會給出剛好的寬度，加寬反而浪費。這正是 `reda check` 可以補上的提示（目前它只檢查「裝不下」，不檢查「太寬」）。
+`fluxa/examples/` 的範例也是 AI 寫的：Claude Opus 5.5 在開發 Fluxa 時寫的。所以這裡比較的是便宜模型和強模型，不是 AI 和人。
+
+- **不必要的加寬**：fir4 兩個模型（MiniMax、GLM）都把樣本先 `to::<i32>()` 再乘，面積比 Opus 寫的範例多 36%。位寬推導本來就會給出剛好的寬度，加寬反而浪費。這正是 `reda check` 可以補上的提示（目前它只檢查「裝不下」，不檢查「太寬」）。
 - **pipeline**：這一輪 MiniMax 在 fir4、dot8、crc32 都用了 `pipeline(ii = 1)`。前一輪 GLM 寫的 dot8 沒有用，結果是 874 LC、26 MHz 的循序電路；MiniMax 的 pipeline 版本是 1658 LC、86 MHz。
 
 ## 4. 實驗過程中修掉的工具問題
@@ -103,7 +105,7 @@ Veryl crc32 第一次執行時，模型的第一步就寫出 `list_files path=".
 - 40 步的預算對 Veryl 不利：它需要更多步。給更多步會不會過，還沒試。
 - Veryl 的參考資料可能不夠：手冊兩章加兩個範例，裡面沒有 valid / ready 握手的完整範例；Fluxa 的範例（fir4、mac）則跟題目很接近。
 - 沒有量**吞吐量**（每個樣本幾個時脈）。Fluxa 用了 `pipeline(ii = 1)` 的核心理論上每拍一筆，但沒有用共同的測試台實測，Veryl 版本的吞吐量也沒量。
-- 人寫的對照只有 fir4 一個（`fluxa/examples/fir4.fx`），沒有人寫的 Veryl 版本。
+- 沒有人寫的對照。唯一的參考版本 `fluxa/examples/fir4.fx` 也是 AI（Claude Opus 5.5）寫的，所以比較的是便宜模型和強模型；Veryl 則完全沒有參考版本。
 
 ## 6. 大一點的核心：標準庫的平行模式值不值得做
 
