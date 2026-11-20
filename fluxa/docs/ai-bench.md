@@ -1,8 +1,10 @@
-# 方向 C：讓 AI 寫硬體，Fluxa 對 Veryl
+# AI 撰寫硬體實驗：Fluxa 對 Veryl
 
-> 分支：`aitest`。實驗檔案在 `fluxa/bench/`。相關：[fluxa-static-check.md](fluxa-static-check.md)、[ai-feedback.md](ai-feedback.md)。
+> 實驗檔案在 [`fluxa/bench/`](../bench/)（規格、腳本、AI 寫出的程式、每次 reda 呼叫的紀錄）。相關：[Fluxa 靜態檢查](../../docs/note/fluxa-static-check.md)、[`reda --format json`](../../docs/note/ai-feedback.md)、[語言規格](Fluxa語言規格v0.1.md)。
 
 ## 1. 問題
+
+AI 時代寫程式變便宜，**確認程式是對的**仍然昂貴；硬體又是「錯了不能熱修」的極端。Fluxa 的設計（Kahn 通道、位寬推導、`reda check` 的靜態檢查、同一個 test 跑行為模擬與閘級模擬）把錯誤往前移，理論上應該讓 AI 寫硬體比較可靠。這份實驗用數字檢驗這個說法。
 
 Fluxa 對高階電路有沒有價值？這裡用一個具體的問法回答：**同一個便宜的模型、同一份規格、同樣的回饋工具，寫 Fluxa 和寫 Veryl，哪一個比較寫得出來？寫出來的硬體差多少？**
 
@@ -21,7 +23,7 @@ flowchart LR
 - **5 個核心**（`fluxa/bench/*/spec.md`）：fir4（4 階 FIR）、dot8（8 對內積）、crc32（位元組串流 CRC-32）、sort4（每 4 個排序）、hist（16 格直方圖，用記憶體）。每份規格附上測試向量，期望值由 Python 算出。
 - **共用規則**（`common.md`）：兩種語言用同一個 valid / ready / close 串流介面，各自寫出設計和檢查全部向量的測試。
 - **參考資料**：Fluxa 給 `docs/manual/tw/17-fluxa.md`、`fluxa/docs/synthesis-plan.md`、`fir4.fx`、`mac.fx`；Veryl 給 `04-veryl.md`、`05-sim.md`、`fifo.veryl`、`seq101.veryl`。
-- **執行**：`run.sh LANG KERNEL`。模型用 agge 的 agent 模式（`-y`，能自己跑 shell），每個組合一個獨立的工作目錄，一次只跑一個（MiniMax 的 Token Plan 限制同時的請求）。agge 預設每個 agent 最多 40 步。`bin/reda` 記下每一次 reda 呼叫。
+- **執行**：`run.sh LANG KERNEL`。模型用 agge 的 agent 模式（`-y`，能自己跑 shell），每個組合一個獨立的工作目錄（`fluxa/bench/KERNEL/LANG/`），一次只跑一個（MiniMax 的 Token Plan 限制同時的請求）。agge 預設每個 agent 最多 40 步。`bin/reda` 記下每一次 reda 呼叫。
 - **驗證**：不論模型回答什麼，我都重新跑模擬與合成，並讀過測試，確認它真的檢查了規格的每一個向量。
 - **量測**：`measure.sh`，`reda fpga` 走 nextpnr 佈局繞線，iCE40 HX8K（ct256）。UP5K 的 48 腳封裝放不下 dot8 那麼寬的介面，所以全部用 HX8K。
 
@@ -103,7 +105,20 @@ Veryl crc32 第一次執行時，模型的第一步就寫出 `list_files path=".
 - 沒有量**吞吐量**（每個樣本幾個時脈）。Fluxa 用了 `pipeline(ii = 1)` 的核心理論上每拍一筆，但沒有用共同的測試台實測，Veryl 版本的吞吐量也沒量。
 - 人寫的對照只有 fir4 一個（`fluxa/examples/fir4.fx`），沒有人寫的 Veryl 版本。
 
-## 6. 下一步
+## 6. 如何重現
+
+需要 `reda`（`cargo build --release -p rueda`）、`agge`（設定 `MINIMAX_API_KEY`）、nextpnr-ice40。
+
+```bash
+cd fluxa/bench
+./run.sh fluxa fir4 minimax                 # 一個組合：模型寫、自己跑 reda，紀錄在 fir4/fluxa/
+for k in fir4 dot8 crc32 sort4 hist; do for l in fluxa veryl; do ./run.sh $l $k minimax; done; done
+./measure.sh fir4/fluxa/fir4.fx Fir4        # 一行 TSV：檔案、LC、LUT4、CARRY、DFF、BRAM、Fmax
+```
+
+MiniMax 一次只跑一個組合（同時跑會撞上 HTTP 429）。agge 需要包含工具標籤修復的版本（agge 的 commit `54886d1` 以後）。
+
+## 7. 下一步
 
 1. 每組跑 3 次以上，記錄成功率的分布；再換一個模型（例如 GLM，等端點穩定時）。
 2. Veryl 的參考資料補一個 valid / ready 握手的範例，看差距會不會縮小。這可以分辨「語言本身難」和「文件不夠」。
