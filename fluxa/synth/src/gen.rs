@@ -292,7 +292,11 @@ impl<'p> Gen<'p> {
 
     /// the type of the part of variable `name` at `path`
     fn part_ty(&self, name: &str, path: &[PathStep], line: u32) -> R<Ty> {
-        let mut t = self.vars.get(name).cloned().ok_or_else(|| format!("{}: wrapping operators need a typed variable on the left", self.here(line)))?;
+        // the simulator's rule: the variable's type is declared (`let x: T`, `carry`, a parameter),
+        // not inferred from what is assigned (`let x = a + b`, `for v in rx`)
+        let need = || format!("{}: wrapping operators need a typed variable on the left; use `.wrap::<T>()` otherwise", self.here(line));
+        if self.untyped.contains(name) { return Err(need()); }
+        let mut t = self.vars.get(name).cloned().ok_or_else(need)?;
         for s in path {
             t = match (t, s) {
                 (Ty::Array(e, _), _) => *e,

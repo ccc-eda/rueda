@@ -848,6 +848,14 @@ impl Interp {
             let t = self.eval_type(&p.ty).await?;
             let v = coerce(v, &t)
                 .map_err(|m| self.me(format!("argument `{}` of `{}`: {}", p.name, decl.name, m)))?;
+            // a channel parameter takes a channel of its element type (synthesis builds the FIFO
+            // from the channel's declared type and wires it to the port: they must agree)
+            if let (RtType::Chan(want, _), Value::Rx(c) | Value::Tx(c)) = (&t, &v) {
+                let (have, name) = { let w = self.sh.lock(); (w.chans[*c].elem.clone(), w.chans[*c].name.clone()) };
+                if !crate::value::same_type(&have, want) {
+                    return self.err(format!("argument `{}` of `{}`: the channel `{}` carries {}, the parameter is chan<{}>", p.name, decl.name, name, have, want));
+                }
+            }
             self.declare(&p.name, Var { val: v, ty: Some(t), reg: false, pending: None });
         }
         if positional.next().is_some() {

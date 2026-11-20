@@ -71,6 +71,8 @@ fn rv64(file: &str) -> Vec<(String, bool, String)> {
 #[test] fn deadlock_is_reported() { all_fail_with("err_deadlock", "deadlock"); }
 #[test] fn linearity_is_reported() { all_fail_with("err_linear", "does not own the rx endpoint"); }
 #[test] fn narrowing_is_reported() { all_fail_with("err_narrow", "does not fit u8"); }
+#[test] fn channel_type_is_reported() { all_fail_with("err_chan_type", "carries i8, the parameter is chan<i16>"); }
+#[test] fn wrap_needs_a_declared_type() { all_fail_with("err_wrap_untyped", "wrapping operators need a typed variable"); }
 
 /// 死結偵測不可有競態誤判：重複執行多次都必須通過
 #[test]

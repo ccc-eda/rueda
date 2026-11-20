@@ -278,6 +278,20 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
             if producer.contains_key(&c) || consumer.contains_key(&c) { return Err(format!("{}: channel `{}` has only one end", decl.name, cname)); }
             continue;
         };
+        // the FIFO is built from the channel's declared type: an instance port of another type
+        // would be padded or cut silently (the simulator refuses it at the spawn, so must we)
+        if let Ok(declared) = Ty::of_rt(&chans[c].1) {
+            for e in [p, q] {
+                if let End::Inst(k, n) = e {
+                    let io = &insts[*k].s.iface;
+                    if let Some((_, t)) = io.outs.iter().chain(&io.ins).find(|x| &x.0 == n) {
+                        if *t != declared {
+                            return Err(format!("{}: channel `{}` carries {}, but `{}`'s port `{}` is {}", decl.name, cname, ty_name(&declared), insts[*k].name, n, ty_name(t)));
+                        }
+                    }
+                }
+            }
+        }
         let w = chan_ty(c, &producer, &consumer)?.width();
         // the producer's side: data, close, valid out of it, ready into it
         let (pd, pc, pv, pr_target): (Vec<Bit>, Bit, Bit, Option<Vec<Bit>>) = match p {
@@ -378,4 +392,15 @@ fn fifo(b: &mut Builder, rst: Bit, clk: Bit, depth: usize, w: usize, d: &[Bit], 
         b.ff("$_SDFF_PP0_".into(), vec![("C", clk), ("D", dd), ("R", rst), ("Q", *q)]);
     }
     (word[..w].to_vec(), word[w], pop_valid, push_ready)
+}
+
+/// a type as Fluxa writes it: `i8`, `u5`, `int<0..=9>`, `bool`, arrays and tuples
+fn ty_name(t: &Ty) -> String {
+    match t {
+        Ty::Int { lo, hi } => fluxa::check::type_name(*lo, *hi),
+        Ty::Bool => "bool".into(),
+        Ty::Fixed { i, f, .. } => format!("fixed<{}, {}>", i, f),
+        Ty::Array(e, n) => format!("[{}; {}]", ty_name(e), n),
+        Ty::Tuple(ts) => format!("({})", ts.iter().map(ty_name).collect::<Vec<_>>().join(", ")),
+    }
 }

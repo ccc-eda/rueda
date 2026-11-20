@@ -103,3 +103,12 @@ fn static_check_channels() {
         assert!(c == 0, "{}: {}", ok, o);
     }
 }
+
+#[test]
+fn synthesis_agrees_with_the_simulator() {
+    // a channel of another type than the port, and +% on an inferred variable: refused by both
+    let (c, o) = reda(&["synth", "--format", "json", "--top", "Net", "fluxa/examples/err_chan_type.fx"]);
+    assert!(c == 1 && has(&o, "carries i8, but `Wide`'s port `y` is i16"), "{}", o);
+    let (c, o) = reda(&["synth", "--format", "json", "--top", "Inc", "fluxa/examples/err_wrap_untyped.fx"]);
+    assert!(c == 1 && has(&o, "wrapping operators need a typed variable"), "{}", o);
+}

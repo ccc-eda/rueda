@@ -424,6 +424,17 @@ pub fn coerce(v: Value, t: &RtType) -> Result<Value, String> {
     }
 }
 
+/// 兩個型別相同嗎（`Any` 與任何型別相同）：通道的元素型別與參數宣告的元素型別要一致
+pub fn same_type(a: &RtType, b: &RtType) -> bool {
+    match (a, b) {
+        (RtType::Any, _) | (_, RtType::Any) => true,
+        (RtType::Array(x, n), RtType::Array(y, m)) | (RtType::Mem(x, n), RtType::Mem(y, m)) => n == m && same_type(x, y),
+        (RtType::Tuple(xs), RtType::Tuple(ys)) => xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| same_type(x, y)),
+        (RtType::Chan(x, _), RtType::Chan(y, _)) => same_type(x, y),
+        _ => a == b,
+    }
+}
+
 // ---------------------------------------------------------------- 算術
 
 pub fn as_f64(v: &Value) -> Option<f64> {
