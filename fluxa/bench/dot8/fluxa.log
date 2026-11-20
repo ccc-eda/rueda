@@ -1,0 +1,4 @@
+1795169353	1	sim --format json dot8.fx
+1795169516	0	sim --format json dot8.fx
+1795169657	0	synth --format json --top Dot8 dot8.fx
+1795169748	1	check --format json dot8.fx

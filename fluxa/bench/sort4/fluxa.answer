@@ -1,0 +1,31 @@
+I'll write a first version of sort4.fx based on the Fluxa patterns from the examples, then iterate with reda.<tool_call>write_file path="sort4.fx">```
+// sort4: sort groups of four, ascending
+task Sort4(x: in chan<u8>, y: out chan<u8>) {
+    for a in x {
+        let b = x.recv();
+        let c = x.recv();
+        let d = x.recv();
+        // 5-comparator sorting network for 4 elements
+        let (p, q) = if a <= b { (a, b) } else { (b, a) };
+        let (r, s) = if c <= d { (c, d) } else { (d, c) };
+        let (t, u) = if p <= r { (p, r) } else { (r, p) };
+        let (v, w) = if q <= s { (q, s) } else { (s, q) };
+        let (m, n) = if v <= u { (v, u) } else { (u, v) };
+        y.send(t);
+        y.send(m);
+        y.send(n);
+        y.send(w);
+    }
+}
+
+test sort4_vectors {
+    let (tx, rx) = chan::<u8>(depth = 12);
+    let (ty, ry) = chan::<u8>(depth = 12);
+    spawn Sort4(rx, ty);
+    let xs: [u8; 12] = [9, 3, 7, 1, 0, 255, 128, 128, 5, 5, 5, 4];
+    let ys: [u8; 12] = [1, 3, 7, 9, 0, 128, 128, 255, 4, 5, 5, 5];
+    for k in 0..12 { tx.send(xs[k]); }
+    tx.close();
+    for k in 0..12 { assert ry.recv() == ys[k]; }
+}
+```

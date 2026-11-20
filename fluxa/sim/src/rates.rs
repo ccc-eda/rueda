@@ -242,6 +242,19 @@ impl<'a> Rates<'a> {
         // for v in rx：收完所有 token；本體跑 T(rx) 次
         if let Some(ep) = self.ep_name(b, iter) {
             let key = self.key_of(b, &ep);
+            // 本體裡又從同一條通道收：一輪收好幾個，次數不是 T(rx)，當作未知
+            let again = {
+                let mut hit = false;
+                walk(&Expr { kind: ExprKind::Block(body.clone()), line: 0 }, &mut |x| {
+                    if let ExprKind::Method(c, n, _, _) = &x.kind { if n == "recv" && matches!(&c.kind, ExprKind::Path(p) if p.len() == 1 && p[0] == ep) { hit = true; } }
+                });
+                hit
+            };
+            if again {
+                b.sum.bump(&ep, false, None);
+                self.block(b, body, &Mult(None));
+                return;
+            }
             let inner = match (&m.0, &key) {
                 (Some((1, None)), Some(k)) => { b.sum.bump(&ep, false, Some(Lin::var(k))); Mult(Some((1, Some(k.clone())))) }
                 _ => { b.sum.bump(&ep, false, None); Mult(None) }
@@ -643,29 +656,33 @@ fn const_int(prog: &Arc<Program>, e: &Expr) -> Option<i128> {
     }
 }
 
+/// 區塊裡每個陳述式的運算式，包括內層迴圈的本體
+fn walk_block(b: &Block, f: &mut dyn FnMut(&Expr)) {
+    for s in &b.stmts {
+        match &s.kind {
+            StmtKind::Let { init: Some(x), .. } | StmtKind::Carry { init: x, .. } | StmtKind::Expr(x) | StmtKind::Return(Some(x)) | StmtKind::Spawn(x) => walk(x, f),
+            StmtKind::Assign { target, value, .. } => { walk(target, f); walk(value, f) }
+            StmtKind::Assert { cond, .. } => walk(cond, f),
+            StmtKind::For { iter, body, .. } => { walk(iter, f); walk_block(body, f) }
+            StmtKind::Parallel(ss) => walk_block(&Block { stmts: ss.clone(), tail: None }, f),
+            _ => {}
+        }
+    }
+    if let Some(t) = &b.tail { walk(t, f) }
+}
+
 /// 運算式樹的每個節點，包括區塊裡的陳述式
 fn walk(e: &Expr, f: &mut dyn FnMut(&Expr)) {
     f(e);
-    let blk = |b: &Block, f: &mut dyn FnMut(&Expr)| {
-        for s in &b.stmts {
-            match &s.kind {
-                StmtKind::Let { init: Some(x), .. } | StmtKind::Carry { init: x, .. } | StmtKind::Expr(x) | StmtKind::Return(Some(x)) | StmtKind::Spawn(x) => walk(x, f),
-                StmtKind::Assign { target, value, .. } => { walk(target, f); walk(value, f) }
-                StmtKind::Assert { cond, .. } => walk(cond, f),
-                _ => {}
-            }
-        }
-        if let Some(t) = &b.tail { walk(t, f) }
-    };
     match &e.kind {
         ExprKind::Unary(_, x) | ExprKind::Cast(x, _) | ExprKind::Field(x, _) => walk(x, f),
         ExprKind::Binary(_, a, b) | ExprKind::Index(a, b) | ExprKind::Range(a, b, _) | ExprKind::Repeat(a, b) => { walk(a, f); walk(b, f) }
         ExprKind::Slice(a, b, c) => { walk(a, f); walk(b, f); walk(c, f) }
         ExprKind::Call(x, args) | ExprKind::Method(x, _, _, args) => { walk(x, f); for a in args { walk(&a.value, f) } }
         ExprKind::Array(xs) | ExprKind::Tuple(xs) => for x in xs { walk(x, f) },
-        ExprKind::If(c, b, els) => { walk(c, f); blk(b, f); if let Some(x) = els { walk(x, f) } }
+        ExprKind::If(c, b, els) => { walk(c, f); walk_block(b, f); if let Some(x) = els { walk(x, f) } }
         ExprKind::Match(x, arms) => { walk(x, f); for a in arms { walk(&a.body, f) } }
-        ExprKind::Block(b) => blk(b, f),
+        ExprKind::Block(b) => walk_block(b, f),
         _ => {}
     }
 }
@@ -700,10 +717,10 @@ mod tests {
         // 收 11 個、只送 10 個 → 死結
         let t = format!("{} test t {{ let (a, ra) = chan::<u8>(depth = 2); spawn Gen(10, a); for _ in 0..11 {{ let v = ra.recv(); }} }}", TASKS);
         assert_eq!(codes(&t), vec!["E0501"]);
-        // Pair 一輪收 2 個、送 1 個：送 5 個進去，收 5 個出來 → 收不到
+        // Pair 一輪收 2 個（for v in x 裡又 x.recv()）：次數不是 T(x)，不檢查
         let t = format!("{} test t {{ let (a, ra) = chan::<u8>(depth = 8); let (b, rb) = chan::<u8>(depth = 8);
             spawn Pair(ra, b); for _ in 0..4 {{ a.send(1); }} a.close(); for _ in 0..4 {{ let v = rb.recv(); }} }}", TASKS);
-        assert_eq!(codes(&t), vec!["E0501"], "a 2:1 task");
+        assert!(codes(&t).is_empty(), "a 2:1 task: {:?}", codes(&t));
         // 剩 1 個在 FIFO 裡：W0503；剩 5 個、FIFO 只有 2：E0501
         let t = format!("{} test t {{ let (a, ra) = chan::<u8>(depth = 2); spawn Gen(10, a); for _ in 0..9 {{ let v = ra.recv(); }} }}", TASKS);
         assert_eq!(codes(&t), vec!["W0503"]);
@@ -712,6 +729,15 @@ mod tests {
         // spawn 之後再用端點
         let t = format!("{} test t {{ let (a, ra) = chan::<u8>(depth = 2); let (b, rb) = chan::<u8>(depth = 2); spawn Pass(ra, b); a.send(1); a.close(); let v = ra.recv(); let w = rb.recv(); }}", TASKS);
         assert!(codes(&t).contains(&"E0702".to_string()), "{:?}", codes(&t));
+    }
+
+    #[test]
+    fn several_receives_an_iteration() {
+        // for x0 in a { … a.recv() … }：一輪收 8 個，次數不是 T(a)，不能誤報
+        let t = "task D(a: in chan<i8>, y: out chan<i32>) { for x0 in a { let mut s: i32 = x0; for _ in 0..7 { s += a.recv(); } y.send(s); } }
+                 test t { let (ta, ra) = chan::<i8>(depth = 4); let (ty, ry) = chan::<i32>(depth = 4); spawn D(ra, ty);
+                 for k in 0..16 { ta.send(1); } ta.close(); let p = ry.recv(); let q = ry.recv(); }";
+        assert!(codes(t).is_empty(), "{:?}", codes(t));
     }
 
     #[test]

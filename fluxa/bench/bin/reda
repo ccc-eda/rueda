@@ -1,0 +1,9 @@
+#!/bin/sh
+# 記錄每一次 reda 呼叫（AI 撰寫實驗的迭代次數），再交給真正的 reda
+REAL="${REDA_REAL:-$(dirname "$0")/../../../target/release/reda}"
+"$REAL" "$@" > /tmp/reda-wrap-$$.out 2>&1
+code=$?
+cat /tmp/reda-wrap-$$.out
+rm -f /tmp/reda-wrap-$$.out
+[ -n "$REDA_LOG" ] && printf '%s\t%s\t%s\n' "$(date +%s)" "$code" "$*" >> "$REDA_LOG"
+exit $code
