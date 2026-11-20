@@ -1,0 +1,4 @@
+1795173559	1	sim sort4.veryl
+1795173590	1	sim sort4.veryl
+1795173597	0	sim sort4.veryl
+1795173600	0	synth --top Sort4 sort4.veryl

@@ -1,0 +1,176 @@
+module Fir4 (
+    clk     : input  clock,
+    rst     : input  reset,
+    x_data  : input  logic<8>,
+    x_valid : input  logic,
+    x_ready : output logic,
+    x_close : input  logic,
+    y_data  : output logic<8>,
+    y_valid : output logic,
+    y_close : output logic,
+    y_ready : input  logic,
+) {
+    var d1: logic<8>;
+    var d2: logic<8>;
+    var d3: logic<8>;
+
+    var out_valid: logic;
+    var out_close: logic;
+    var out_data : logic<8>;
+
+    // Sign-extend every tap to 16 bits before doing the multiply/accumulate.
+    let x0_ext: logic<16> = {8{x_data[7]}, x_data};
+    let d1_ext: logic<16> = {8{d1[7]}, d1};
+    let d2_ext: logic<16> = {8{d2[7]}, d2};
+    let d3_ext: logic<16> = {8{d3[7]}, d3};
+    let acc: logic<16> = 16'd3 * x0_ext + 16'd5 * d1_ext + 16'd5 * d2_ext + 16'd3 * d3_ext;
+    // Explicit sign fill is an arithmetic right shift by four.
+    let result: logic<16> = {acc[15], acc[15:4]};
+
+    assign x_ready = !out_valid || y_ready;
+    assign y_valid = out_valid;
+    assign y_close = out_close;
+    assign y_data  = out_data;
+
+    always_ff (clk) {
+        if_reset {
+            d1        = 0;
+            d2        = 0;
+            d3        = 0;
+            out_valid = 0;
+            out_close = 0;
+            out_data  = 0;
+        } else {
+            if out_valid && y_ready {
+                out_valid = 0;
+                out_close = 0;
+            }
+
+            if x_valid && x_ready {
+                if x_close {
+                    out_valid = 1;
+                    out_close = 1;
+                    out_data  = 0;
+                } else {
+                    out_valid = 1;
+                    out_close = 0;
+                    out_data  = result[7:0];
+
+                    d3 = d2;
+                    d2 = d1;
+                    d1 = x_data;
+                }
+            }
+        }
+    }
+}
+
+#[test(fir4_vectors)]
+module Fir4Test {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var x_data : logic<8>;
+    var x_valid: logic;
+    var x_ready: logic;
+    var x_close: logic;
+    var y_data : logic<8>;
+    var y_valid: logic;
+    var y_close: logic;
+    var y_ready: logic;
+
+    inst dut: Fir4 (
+        clk     : clk,
+        rst     : rst,
+        x_data  : x_data,
+        x_valid : x_valid,
+        x_ready : x_ready,
+        x_close : x_close,
+        y_data  : y_data,
+        y_valid : y_valid,
+        y_close : y_close,
+        y_ready : y_ready,
+    );
+
+    initial {
+        x_data  = 0;
+        x_valid = 0;
+        x_close = 0;
+        y_ready = 1;
+
+        rst.assert();
+        clk.next(10);
+
+        x_data = 8'd16;
+        x_valid = 1;
+        clk.next();
+        $assert(x_ready, "ready for first sample");
+        $assert(y_valid, "output valid for first sample");
+        $assert(!y_close, "output not closed for first sample");
+        $assert(y_data == 8'd3, "first output");
+
+        x_data = 8'd0;
+        clk.next();
+        $assert(y_valid, "output valid for second sample");
+        $assert(y_data == 8'd5, "second output");
+
+        clk.next();
+        $assert(y_valid, "output valid for third sample");
+        $assert(y_data == 8'd5, "third output");
+
+        clk.next();
+        $assert(y_valid, "output valid for fourth sample");
+        $assert(y_data == 8'd3, "fourth output");
+
+        clk.next();
+        $assert(y_valid, "output valid for fifth sample");
+        $assert(y_data == 8'd0, "fifth output");
+
+        x_data = 8'd224;
+        clk.next();
+        $assert(y_valid, "output valid for sixth sample");
+        $assert(y_data == 8'd253, "sixth output");
+
+        x_data = 8'd32;
+        clk.next();
+        $assert(y_valid, "output valid for seventh sample");
+        $assert(y_data == 8'd1, "seventh output");
+
+        x_data = 8'd7;
+        clk.next();
+        $assert(y_valid, "output valid for eighth sample");
+        $assert(y_data == 8'd6, "eighth output");
+
+        x_data = 8'd128;
+        clk.next();
+        $assert(y_valid, "output valid for ninth sample");
+        $assert(y_data == 8'd241, "ninth output");
+
+        x_data = 8'd127;
+        clk.next();
+        $assert(y_valid, "output valid for tenth sample");
+        $assert(y_data == 8'd248, "tenth output");
+
+        x_data = 8'd100;
+        clk.next();
+        $assert(y_valid, "output valid for eleventh sample");
+        $assert(y_data == 8'd19, "eleventh output");
+
+        x_data = 8'd156;
+        clk.next();
+        $assert(y_valid, "output valid for twelfth sample");
+        $assert(y_data == 8'd28, "twelfth output");
+
+        x_data  = 0;
+        x_close = 1;
+        clk.next();
+        $assert(y_valid, "close output is valid");
+        $assert(y_close, "output stream is closed");
+
+        x_valid = 0;
+        x_close = 0;
+        clk.next();
+        $assert(!y_valid, "no output after close");
+        $finish();
+    }
+}

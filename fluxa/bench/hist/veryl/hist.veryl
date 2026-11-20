@@ -1,0 +1,259 @@
+module Hist (
+    clk    : input  clock,
+    rst    : input  reset,
+    x_data : input  logic<4>,
+    x_valid: input  logic,
+    x_ready: output logic,
+    x_close: input  logic,
+    y_data : output logic<16>,
+    y_valid: output logic,
+    y_close: output logic,
+    y_ready: input  logic,
+) {
+    const STATE_COUNT: logic<2> = 2'd0;
+    const STATE_OUTPUT: logic<2> = 2'd1;
+    const STATE_CLOSE : logic<2> = 2'd2;
+    const STATE_DONE  : logic<2> = 2'd3;
+
+    var counts : logic<16>[16];
+    var state  : logic<2>;
+    var out_idx: logic<4>;
+
+    always_ff (clk) {
+        if rst {
+            for i in 0..16 {
+                counts[i] = 16'd0;
+            }
+            state   = STATE_COUNT;
+            out_idx = 4'd0;
+        } else {
+            case state {
+                STATE_COUNT: {
+                    if x_valid && x_ready {
+                        if x_close {
+                            state   = STATE_OUTPUT;
+                            out_idx = 4'd0;
+                        } else {
+                            counts[x_data] = counts[x_data] + 16'd1;
+                        }
+                    }
+                }
+                STATE_OUTPUT: {
+                    if y_valid && y_ready {
+                        if out_idx == 4'd15 {
+                            state = STATE_CLOSE;
+                        } else {
+                            out_idx = out_idx + 4'd1;
+                        }
+                    }
+                }
+                STATE_CLOSE: {
+                    if y_valid && y_ready {
+                        state = STATE_DONE;
+                    }
+                }
+                default: {
+                    state = STATE_COUNT;
+                }
+            }
+        }
+    }
+
+    assign x_ready = state == STATE_COUNT;
+    assign y_valid = state == STATE_OUTPUT || state == STATE_CLOSE;
+    assign y_close = state == STATE_CLOSE;
+
+    always_comb {
+        if state == STATE_OUTPUT {
+            y_data = counts[out_idx];
+        } else {
+            y_data = 16'd0;
+        }
+    }
+}
+
+#[test(hist_test)]
+module TestHist {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var x_data : logic<4>;
+    var x_valid: logic;
+    var x_ready: logic;
+    var x_close: logic;
+    var y_data : logic<16>;
+    var y_valid: logic;
+    var y_close: logic;
+    var y_ready: logic;
+
+    inst dut: Hist (
+        clk    : clk,
+        rst    : rst,
+        x_data : x_data,
+        x_valid: x_valid,
+        x_ready: x_ready,
+        x_close: x_close,
+        y_data : y_data,
+        y_valid: y_valid,
+        y_close: y_close,
+        y_ready: y_ready,
+    );
+
+    initial {
+        x_data  = 4'd0;
+        x_valid = 1'b0;
+        x_close = 1'b0;
+        y_ready = 1'b1;
+
+        rst.assert();
+        clk.next();
+
+        x_valid = 1'b1;
+
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd9;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd8;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd5;  clk.next();
+        x_data = 4'd3;  clk.next();
+        x_data = 4'd4;  clk.next();
+        x_data = 4'd2;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd1;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd0;  clk.next();
+        x_data = 4'd6;  clk.next();
+        x_data = 4'd7;  clk.next();
+        x_data = 4'd15; clk.next();
+        x_data = 4'd15; clk.next();
+        x_data = 4'd14; clk.next();
+
+        x_data  = 4'd0;
+        x_close = 1'b1;
+        clk.next();
+
+        $display("first output valid=%d close=%d data=%d", y_valid, y_close, y_data);
+        $assert(y_valid && !y_close && y_data == 16'd8, "count 0");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd8, "count 1");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd12, "count 2");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd12, "count 3");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd10, "count 4");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd8, "count 5");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd9, "count 6");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd8, "count 7");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd12, "count 8");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd13, "count 9");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd0, "count 10");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd0, "count 11");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd0, "count 12");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd0, "count 13");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd1, "count 14");
+        clk.next();
+        $assert(y_valid && !y_close && y_data == 16'd2, "count 15");
+        clk.next();
+        $assert(y_valid && y_close, "output close");
+        clk.next();
+
+        $finish();
+    }
+}

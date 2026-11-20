@@ -1,0 +1,188 @@
+module Crc32 (
+    clk     : input  clock      ,
+    rst     : input  reset      ,
+    x_data  : input  logic<8>   ,
+    x_valid : input  logic      ,
+    x_ready : output logic      ,
+    x_close : input  logic      ,
+    y_data  : output logic<32>  ,
+    y_valid : output logic      ,
+    y_ready : input  logic      ,
+    y_close : output logic      ,
+) {
+    var crc     : logic<32>;
+    var crc_next: logic<32>;
+    var state   : logic<2>;
+
+    // Reflected CRC-32 update for one input byte.
+    always_comb {
+        crc_next = crc ^ {24'd0, x_data};
+        for _i in 0..8 {
+            if (crc_next & 32'd1) != 0 {
+                crc_next = (crc_next >> 1) ^ 32'hEDB88320;
+            } else {
+                crc_next = crc_next >> 1;
+            }
+        }
+    }
+
+    always_ff (clk) {
+        if_reset {
+            crc  = 32'hFFFFFFFF;
+            state = 2'd0;
+        } else {
+            case state {
+                2'd0: {
+                    if (x_valid && x_ready) {
+                        if (x_close) {
+                            state = 2'd1;
+                        } else {
+                            crc = crc_next;
+                        }
+                    }
+                }
+                2'd1: {
+                    if (y_ready) {
+                        state = 2'd2;
+                    }
+                }
+                2'd2: {
+                    if (y_ready) {
+                        state = 2'd3;
+                    }
+                }
+                default: {
+                    state = 2'd0;
+                }
+            }
+        }
+    }
+
+    assign x_ready = state == 2'd0;
+    assign y_data  = crc ^ 32'hFFFFFFFF;
+    assign y_valid = state == 2'd1;
+    assign y_close = state == 2'd2;
+}
+
+#[test(crc32_123456789)]
+module TestCrc32Ascii {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var x_data : logic<8>;
+    var x_valid: logic;
+    var x_ready: logic;
+    var x_close: logic;
+    var y_data : logic<32>;
+    var y_valid: logic;
+    var y_ready: logic;
+    var y_close: logic;
+
+    inst dut: Crc32 (
+        clk     : clk     ,
+        rst     : rst     ,
+        x_data  : x_data  ,
+        x_valid : x_valid ,
+        x_ready : x_ready ,
+        x_close : x_close ,
+        y_data  : y_data  ,
+        y_valid : y_valid ,
+        y_ready : y_ready ,
+        y_close : y_close ,
+    );
+
+    initial {
+        x_data  = 8'd0;
+        x_valid = 1'b0;
+        x_close = 1'b0;
+        y_ready = 1'b0;
+
+        rst.assert();
+        clk.next(10);
+
+        x_data  = 8'h31; x_valid = 1'b1; clk.next();
+        x_data  = 8'h32; clk.next();
+        x_data  = 8'h33; clk.next();
+        x_data  = 8'h34; clk.next();
+        x_data  = 8'h35; clk.next();
+        x_data  = 8'h36; clk.next();
+        x_data  = 8'h37; clk.next();
+        x_data  = 8'h38; clk.next();
+        x_data  = 8'h39; clk.next();
+        x_valid = 1'b1;
+        x_close = 1'b1; clk.next();
+        x_close = 1'b0;
+
+        $assert(y_valid == 1'b1, "ASCII CRC output must be valid");
+        $assert(y_data == 32'hCBF43926, "ASCII CRC value");
+        $assert(y_close == 1'b0, "ASCII CRC close must follow the value");
+
+        y_ready = 1'b1;
+        clk.next();
+        $assert(y_valid == 1'b0, "ASCII CRC value consumed");
+        $assert(y_close == 1'b1, "ASCII output close marker");
+        clk.next();
+        $assert(y_valid == 1'b0, "ASCII output ended");
+        $assert(y_close == 1'b0, "ASCII close marker consumed");
+        $finish();
+    }
+}
+
+#[test(crc32_binary)]
+module TestCrc32Binary {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var x_data : logic<8>;
+    var x_valid: logic;
+    var x_ready: logic;
+    var x_close: logic;
+    var y_data : logic<32>;
+    var y_valid: logic;
+    var y_ready: logic;
+    var y_close: logic;
+
+    inst dut: Crc32 (
+        clk     : clk     ,
+        rst     : rst     ,
+        x_data  : x_data  ,
+        x_valid : x_valid ,
+        x_ready : x_ready ,
+        x_close : x_close ,
+        y_data  : y_data  ,
+        y_valid : y_valid ,
+        y_ready : y_ready ,
+        y_close : y_close ,
+    );
+
+    initial {
+        x_data  = 8'd0;
+        x_valid = 1'b0;
+        x_close = 1'b0;
+        y_ready = 1'b0;
+
+        rst.assert();
+        clk.next(10);
+
+        x_data  = 8'h00; x_valid = 1'b1; clk.next();
+        x_data  = 8'hFF; clk.next();
+        x_data  = 8'h10; clk.next();
+        x_data  = 8'h20; clk.next();
+        x_valid = 1'b1;
+        x_close = 1'b1; clk.next();
+        x_close = 1'b0;
+
+        $assert(y_valid == 1'b1, "binary CRC output must be valid");
+        $assert(y_data == 32'hEE70D968, "binary CRC value");
+        $assert(y_close == 1'b0, "binary CRC close must follow the value");
+
+        y_ready = 1'b1;
+        clk.next();
+        $assert(y_valid == 1'b0, "binary CRC value consumed");
+        $assert(y_close == 1'b1, "binary output close marker");
+        clk.next();
+        $assert(y_valid == 1'b0, "binary output ended");
+        $assert(y_close == 1'b0, "binary close marker consumed");
+        $finish();
+    }
+}

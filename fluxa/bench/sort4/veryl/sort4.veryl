@@ -1,0 +1,316 @@
+module Sort4 (
+    clk     : input  clock,
+    rst     : input  reset,
+    x_data  : input  logic<8>,
+    x_valid : input  logic,
+    x_ready : output logic,
+    x_close : input  logic,
+    y_data  : output logic<8>,
+    y_valid : output logic,
+    y_close : output logic,
+    y_ready : input  logic,
+) {
+    // phase: 0 = collecting a group, 1 = group is ready to emit,
+    //        2 = emitting a group, 3 = closed.
+    var phase     : logic<2>;
+    var group_idx : logic<2>;
+    var v0        : logic<8>;
+    var v1        : logic<8>;
+    var v2        : logic<8>;
+    var v3        : logic<8>;
+
+    var ab_lo: logic<8>;
+    var ab_hi: logic<8>;
+    var cd_lo: logic<8>;
+    var cd_hi: logic<8>;
+    var s0   : logic<8>;
+    var s1   : logic<8>;
+    var s2   : logic<8>;
+    var s3   : logic<8>;
+    var mid0 : logic<8>;
+    var mid1 : logic<8>;
+
+    var out_valid: logic;
+    var out_close: logic;
+    var out_data : logic<8>;
+    var out_index: logic<2>;
+
+    // First two comparisons of a four-input sorting network.
+    always_comb {
+        if v0 <= v1 {
+            ab_lo = v0;
+            ab_hi = v1;
+        } else {
+            ab_lo = v1;
+            ab_hi = v0;
+        }
+
+        if v2 <= v3 {
+            cd_lo = v2;
+            cd_hi = v3;
+        } else {
+            cd_lo = v3;
+            cd_hi = v2;
+        }
+    }
+
+    // Cross comparisons of the sorting network.
+    always_comb {
+        if ab_lo <= cd_lo {
+            s0 = ab_lo;
+            s2 = cd_lo;
+        } else {
+            s0 = cd_lo;
+            s2 = ab_lo;
+        }
+
+        if ab_hi <= cd_hi {
+            s1 = ab_hi;
+            s3 = cd_hi;
+        } else {
+            s1 = cd_hi;
+            s3 = ab_hi;
+        }
+    }
+
+    // The remaining middle comparison.
+    always_comb {
+        if s1 <= s2 {
+            mid0 = s1;
+            mid1 = s2;
+        } else {
+            mid0 = s2;
+            mid1 = s1;
+        }
+    }
+
+    assign x_ready = phase == 2'd0;
+    assign y_data  = out_data;
+    assign y_valid = out_valid;
+    assign y_close = out_close;
+
+    always_ff (clk) {
+        if_reset {
+            phase     = 0;
+            group_idx = 0;
+            v0        = 0;
+            v1        = 0;
+            v2        = 0;
+            v3        = 0;
+            out_valid = 0;
+            out_close = 0;
+            out_data  = 0;
+            out_index = 0;
+        } else {
+            // Start emitting a group on the cycle after its fourth input
+            // token has been accepted.  The sorting network has therefore
+            // settled before its first result is loaded.
+            if phase == 2'd1 {
+                phase     = 2;
+                out_valid = 1;
+                out_close = 0;
+                out_data  = s0;
+                out_index = 0;
+            }
+
+            // Retire an output, if one was accepted this cycle.  The output
+            // register is changed only when y_ready is asserted, so data and
+            // valid are held otherwise.
+            if out_valid && y_ready {
+                if out_close {
+                    out_valid = 0;
+                    out_close = 0;
+                } else {
+                    case out_index {
+                        2'd0: {
+                            out_data  = mid0;
+                            out_index = 1;
+                        }
+                        2'd1: {
+                            out_data  = mid1;
+                            out_index = 2;
+                        }
+                        2'd2: {
+                            out_data  = s3;
+                            out_index = 3;
+                        }
+                        2'd3: {
+                            out_valid = 0;
+                            out_close = 0;
+                            phase     = 0;
+                        }
+                        default: {
+                        }
+                    }
+                }
+            }
+
+            // Consume one input token when the handshake succeeds.
+            if x_valid && x_ready {
+                if x_close {
+                    out_valid = 1;
+                    out_close = 1;
+                    out_data  = 0;
+                    phase     = 3;
+                } else {
+                    case group_idx {
+                        2'd0: {
+                            v0 = x_data;
+                        }
+                        2'd1: {
+                            v1 = x_data;
+                        }
+                        2'd2: {
+                            v2 = x_data;
+                        }
+                        default: {
+                            v3    = x_data;
+                            phase = 1;
+                        }
+                    }
+
+                    if group_idx == 2'd3 {
+                        group_idx = 0;
+                    } else {
+                        group_idx = group_idx + 2'd1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test(sort4_vectors)]
+module Sort4Test {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var x_data : logic<8>;
+    var x_valid: logic;
+    var x_ready: logic;
+    var x_close: logic;
+    var y_data : logic<8>;
+    var y_valid: logic;
+    var y_close: logic;
+    var y_ready: logic;
+
+    inst dut: Sort4 (
+        clk     : clk,
+        rst     : rst,
+        x_data  : x_data,
+        x_valid : x_valid,
+        x_ready : x_ready,
+        x_close : x_close,
+        y_data  : y_data,
+        y_valid : y_valid,
+        y_close : y_close,
+        y_ready : y_ready,
+    );
+
+    initial {
+        x_data  = 0;
+        x_valid = 0;
+        x_close = 0;
+        y_ready = 1;
+
+        rst.assert();
+        clk.next(10);
+
+        // First group: 9, 3, 7, 1 -> 1, 3, 7, 9.
+        x_data  = 8'd9;
+        x_valid = 1;
+        $assert(x_ready, "ready for first input");
+        clk.next();
+        x_data = 8'd3;
+        $assert(x_ready, "ready for second input");
+        clk.next();
+        x_data = 8'd7;
+        $assert(x_ready, "ready for third input");
+        clk.next();
+        x_data = 8'd1;
+        $assert(x_ready, "ready for fourth input");
+        clk.next();
+
+        // Stall the first output once to check that it is held.
+        x_valid = 0;
+        y_ready = 0;
+        clk.next();
+        $assert(y_valid, "first output is valid");
+        $assert(!y_close, "first output is not close");
+        $assert(y_data == 8'd1, "first output is 1");
+        clk.next();
+        $assert(y_valid && y_data == 8'd1, "first output is held");
+
+        y_ready = 1;
+        clk.next();
+        $assert(y_valid && y_data == 8'd3, "second output is 3");
+        clk.next();
+        $assert(y_valid && y_data == 8'd7, "third output is 7");
+        clk.next();
+        $assert(y_valid && y_data == 8'd9, "fourth output is 9");
+        clk.next();
+        $assert(!y_valid, "no output between groups");
+        $assert(x_ready, "ready for fifth input");
+
+        // Second group: 0, 255, 128, 128 -> 0, 128, 128, 255.
+        x_data  = 8'd0;
+        x_valid = 1;
+        clk.next();
+        x_data = 8'd255;
+        clk.next();
+        x_data = 8'd128;
+        clk.next();
+        x_data = 8'd128;
+        clk.next();
+        x_valid = 0;
+        clk.next();
+        $assert(y_valid && !y_close, "fifth output is valid");
+        $assert(y_data == 8'd0, "fifth output is 0");
+        clk.next();
+        $assert(y_valid && y_data == 8'd128, "sixth output is 128");
+        clk.next();
+        $assert(y_valid && y_data == 8'd128, "seventh output is 128");
+        clk.next();
+        $assert(y_valid && y_data == 8'd255, "eighth output is 255");
+        clk.next();
+        $assert(!y_valid, "no output between second and third groups");
+        $assert(x_ready, "ready for ninth input");
+
+        // Third group: 5, 5, 5, 4 -> 4, 5, 5, 5.
+        x_data  = 8'd5;
+        x_valid = 1;
+        clk.next();
+        x_data = 8'd5;
+        clk.next();
+        x_data = 8'd5;
+        clk.next();
+        x_data = 8'd4;
+        clk.next();
+        x_valid = 0;
+        clk.next();
+        $assert(y_valid && !y_close, "ninth output is valid");
+        $assert(y_data == 8'd4, "ninth output is 4");
+        clk.next();
+        $assert(y_valid && y_data == 8'd5, "tenth output is 5");
+        clk.next();
+        $assert(y_valid && y_data == 8'd5, "eleventh output is 5");
+        clk.next();
+        $assert(y_valid && y_data == 8'd5, "twelfth output is 5");
+        clk.next();
+        $assert(!y_valid, "all data outputs consumed");
+        $assert(x_ready, "ready for close token");
+
+        x_valid = 1;
+        x_close = 1;
+        clk.next();
+        $assert(y_valid, "close output is valid");
+        $assert(y_close, "output stream is closed");
+
+        x_valid = 0;
+        x_close = 0;
+        clk.next();
+        $assert(!y_valid, "no output after close");
+        $assert(!x_ready, "input is closed");
+        $finish();
+    }
+}

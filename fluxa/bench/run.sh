@@ -6,7 +6,10 @@ cd "$(dirname "$0")"
 LANG_=$1; K=$2; MODEL=${3:-minimax,glm}
 ROOT=$(cd ../.. && pwd)
 export PATH="$(pwd)/bin:$PATH"
-export REDA_LOG="$(pwd)/$K/$LANG_.log"
+# 每個組合一個獨立的工作目錄：兩種語言的版本互相看不到
+W="$K/$LANG_"
+mkdir -p "$W" && cp "$K/spec.md" "$W/"
+export REDA_LOG="$(pwd)/$W/reda.log"
 : > "$REDA_LOG"
 DOCS="$ROOT/docs/manual/tw"
 if [ "$LANG_" = fluxa ]; then
@@ -22,7 +25,7 @@ Iterate until both pass:  reda sim $K.veryl   and   reda synth --top <ModuleName
 Use only the reda command to check your work."
 fi
 START=$(date +%s)
-agge ask -y -q --brief 3 -m "$MODEL" -o "$K" -f common.md -f "$K/spec.md" $FILES "$TASK
-When both pass, answer with one line: DONE. If you give up, answer: GAVE UP and why." > "$K/$LANG_.answer" 2>&1
+agge ask -y -q --brief 3 -m "$MODEL" -o "$W" -f common.md -f "$W/spec.md" $FILES "$TASK
+When both pass, answer with one line: DONE. If you give up, answer: GAVE UP and why." > "$W/answer" 2>&1
 END=$(date +%s)
-echo "$LANG_ $K: $(( END - START ))s, $(wc -l < "$REDA_LOG" | tr -d ' ') reda runs, answer: $(tail -1 "$K/$LANG_.answer")"
+echo "$LANG_ $K: $(( END - START ))s, $(wc -l < "$REDA_LOG" | tr -d ' ') reda runs, answer: $(tail -1 "$W/answer")"

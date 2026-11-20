@@ -1,0 +1,3 @@
+1795171858	0	check --format json fir4.fx
+1795171860	0	sim --format json fir4.fx
+1795171861	0	synth --format json --top Fir4 fir4.fx

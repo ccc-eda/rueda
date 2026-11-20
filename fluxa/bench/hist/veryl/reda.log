@@ -1,0 +1,7 @@
+1795173711	1	sim hist.veryl
+1795173729	1	sim hist.veryl
+1795173740	1	sim hist.veryl
+1795173748	1	sim hist.veryl
+1795173787	1	sim hist.veryl
+1795173806	0	synth --top Hist hist.veryl
+1795173831	1	sim --vcd wave.vcd hist.veryl

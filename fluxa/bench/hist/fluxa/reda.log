@@ -1,0 +1,8 @@
+1795173623	0	sim --format json hist.fx
+1795173623	0	synth --format json --top Hist hist.fx
+1795173623	1	check --format json hist.fx
+1795173629	0	sim --format json hist.fx
+1795173629	0	synth --format json --top Hist hist.fx
+1795173629	0	check --format json hist.fx
+1795173629	0	sim --format json hist.fx
+1795173629	0	synth --format json --top Hist hist.fx

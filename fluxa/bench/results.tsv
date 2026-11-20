@@ -1,0 +1,9 @@
+file	LC	LUT4	CARRY	DFF	BRAM	Fmax
+fir4/fluxa/fir4.fx	260	165	47	29	0	223.66
+dot8/fluxa/dot8.fx	1658	1521	94	625	0	86.27
+crc32/fluxa/crc32.fx	141	139	0	37	0	199.52
+sort4/fluxa/sort4.fx	363	316	35	79	0	67.47
+hist/fluxa/hist.fx	128	120	4	24	1	110.79
+crc32/veryl/crc32.veryl	148	146	0	34	0	179.18
+sort4/veryl/sort4.veryl	298	251	35	48	0	55.14
+../examples/fir4.fx	191	125	37	29	0	212.68

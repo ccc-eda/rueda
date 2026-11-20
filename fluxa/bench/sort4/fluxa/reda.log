@@ -1,0 +1,6 @@
+1795173367	1	check --format json sort4.fx
+1795173383	0	sim --format json sort4.fx
+1795173386	0	synth --format json --top Sort4 sort4.fx
+1795173392	0	check --format json sort4.fx
+1795173394	0	sim --format json sort4.fx
+1795173396	0	synth --format json --top Sort4 sort4.fx

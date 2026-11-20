@@ -1,0 +1,10 @@
+1795171960	1	sim fir4.veryl
+1795172008	1	sim fir4.veryl
+1795172026	1	sim fir4.veryl
+1795172053	1	sim fir4.veryl
+1795172082	1	sim fir4.veryl
+1795172090	0	synth --top Fir4 fir4.veryl
+1795172105	0	help synth
+1795172108	0	synth --top Fir4 --verilog fir4.v fir4.veryl
+1795172750	1	sim fir4.veryl
+1795172773	1	sim probe.veryl

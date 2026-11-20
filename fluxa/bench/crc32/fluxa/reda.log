@@ -1,0 +1,3 @@
+1795173306	0	sim --format json crc32.fx
+1795173308	0	synth --format json --top Crc32 crc32.fx
+1795173308	0	check --format json crc32.fx

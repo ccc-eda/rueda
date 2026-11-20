@@ -1,0 +1,8 @@
+<edit_file path="hist.veryl"><old>        rst.assert();
+        clk.next();
+
+        x_valid = 1'b1; </old><new>        rst.assert();
+        clk.next();
+        rst.deassert();
+
+        x_valid = 1'b1; </new>

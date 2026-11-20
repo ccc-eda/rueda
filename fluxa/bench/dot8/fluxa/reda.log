@@ -1,0 +1,8 @@
+1795172824	0	sim --format json dot8.fx
+1795172830	1	synth --format json --top Dot8 dot8.fx
+1795172839	1	check --format json dot8.fx
+1795172897	0	sim --format json dot8.fx
+1795172899	1	synth --format json --top Dot8 dot8.fx
+1795172924	0	sim --format json dot8.fx
+1795172926	0	synth --format json --top Dot8 dot8.fx
+1795172928	0	check --format json dot8.fx

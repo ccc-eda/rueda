@@ -1,0 +1,6 @@
+1795174177	1	sim crc32.veryl
+1795174198	1	sim crc32.veryl
+1795174269	1	sim crc32.veryl
+1795174320	1	sim crc32.veryl
+1795174391	0	sim crc32.veryl
+1795174395	0	synth --top Crc32 crc32.veryl

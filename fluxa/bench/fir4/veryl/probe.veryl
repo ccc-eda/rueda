@@ -1,0 +1,13 @@
+module Probe {
+    let a: i16 = -16'sd3;
+    let b: i16 = 16'shff80;
+    let c: i16 = a * b;
+}
+
+#[test(probe_test)]
+module ProbeTest {
+    initial {
+        $display("a=%d b=%d c=%d", Probe::a, Probe::b, Probe::c);
+        $finish();
+    }
+}

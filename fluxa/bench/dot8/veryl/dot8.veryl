@@ -1,0 +1,231 @@
+module Dot8 (
+    clk     : input  clock,
+    rst     : input  reset,
+    a_data  : input  logic<8>,
+    a_valid : input  logic,
+    a_ready : output logic,
+    a_close : input  logic,
+    b_data  : input  logic<8>,
+    b_valid : input  logic,
+    b_ready : output logic,
+    b_close : input  logic,
+    y_data  : output logic<32>,
+    y_valid : output logic,
+    y_close : output logic,
+    y_ready : input  logic,
+) {
+    var acc      : logic<32>;
+    var count    : logic<4>;
+    var out_valid: logic;
+    var out_close: logic;
+    var out_data : logic<32>;
+
+    // Sign-extend both operands to 32 bits before multiplying.
+    let a_ext: logic<32> = $signed(a_data);
+    let b_ext: logic<32> = $signed(b_data);
+    let product: logic<32> = a_ext * b_ext;
+
+    // There is one output-buffer entry.  When it is occupied, input is
+    // backpressured until the output has been accepted.
+    assign a_ready = !out_valid || y_ready;
+    assign b_ready = !out_valid || y_ready;
+    assign y_data  = out_data;
+    assign y_valid = out_valid;
+    assign y_close = out_close;
+
+    always_ff (clk) {
+        if_reset {
+            acc       = 0;
+            count     = 0;
+            out_valid = 0;
+            out_close = 0;
+            out_data  = 0;
+        } else {
+            // Retire an output, if one was accepted this cycle.
+            if out_valid && y_ready {
+                out_valid = 0;
+                out_close = 0;
+            }
+
+            // A data token is consumed only when both input streams contain
+            // ordinary (non-close) tokens.
+            if a_valid && a_ready && !a_close &&
+               b_valid && b_ready && !b_close {
+                if count == 4'd7 {
+                    acc       = acc + product;
+                    count     = 0;
+                    out_valid = 1;
+                    out_close = 0;
+                    out_data  = acc + product;
+                } else {
+                    acc   = acc + product;
+                    count = count + 4'd1;
+                }
+            }
+
+            // The two input streams close together.  Any previously queued
+            // result has either already been accepted or prevents the close
+            // tokens from being accepted through the ready signals.
+            if a_valid && a_ready && a_close &&
+               b_valid && b_ready && b_close {
+                out_valid = 1;
+                out_close = 1;
+                out_data  = 0;
+            }
+        }
+    }
+}
+
+#[test(dot8_vectors)]
+module Dot8Test {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var a_data : logic<8>;
+    var a_valid: logic;
+    var a_ready: logic;
+    var a_close: logic;
+    var b_data : logic<8>;
+    var b_valid: logic;
+    var b_ready: logic;
+    var b_close: logic;
+    var y_data : logic<32>;
+    var y_valid: logic;
+    var y_close: logic;
+    var y_ready: logic;
+
+    inst dut: Dot8 (
+        clk     : clk,
+        rst     : rst,
+        a_data  : a_data,
+        a_valid : a_valid,
+        a_ready : a_ready,
+        a_close : a_close,
+        b_data  : b_data,
+        b_valid : b_valid,
+        b_ready : b_ready,
+        b_close : b_close,
+        y_data  : y_data,
+        y_valid : y_valid,
+        y_close : y_close,
+        y_ready : y_ready,
+    );
+
+    initial {
+        a_data  = 0;
+        a_valid = 0;
+        a_close = 0;
+        b_data  = 0;
+        b_valid = 0;
+        b_close = 0;
+        y_ready = 1;
+
+        rst.assert();
+        clk.next(10);
+
+        // Pair 1: 1 * 8.
+        a_data = 8'd1;
+        b_data = 8'd8;
+        a_valid = 1;
+        b_valid = 1;
+        $assert(a_ready && b_ready, "first pair accepted");
+        clk.next();
+
+        // Pair 2: 2 * 7.
+        a_data = 8'd2;
+        b_data = 8'd7;
+        $assert(a_ready && b_ready, "second pair accepted");
+        clk.next();
+
+        // Pair 3: 3 * 6.
+        a_data = 8'd3;
+        b_data = 8'd6;
+        $assert(a_ready && b_ready, "third pair accepted");
+        clk.next();
+
+        // Pair 4: 4 * 5.
+        a_data = 8'd4;
+        b_data = 8'd5;
+        $assert(a_ready && b_ready, "fourth pair accepted");
+        clk.next();
+
+        // Pair 5: 5 * 4.
+        a_data = 8'd5;
+        b_data = 8'd4;
+        $assert(a_ready && b_ready, "fifth pair accepted");
+        clk.next();
+
+        // Pair 6: 6 * 3.
+        a_data = 8'd6;
+        b_data = 8'd3;
+        $assert(a_ready && b_ready, "sixth pair accepted");
+        clk.next();
+
+        // Pair 7: 7 * 2.
+        a_data = 8'd7;
+        b_data = 8'd2;
+        $assert(a_ready && b_ready, "seventh pair accepted");
+        clk.next();
+
+        // Pair 8: 8 * 1.  This completes the first group.
+        a_data = 8'd8;
+        b_data = 8'd1;
+        $assert(a_ready && b_ready, "eighth pair accepted");
+        clk.next();
+        $assert(y_valid, "first result is valid");
+        $assert(!y_close, "first result is not close");
+        $assert(y_data == 32'd120, "first result is 120");
+
+        // Pair 9: 127 * 127.
+        a_data = 8'd127;
+        b_data = 8'd127;
+        $assert(a_ready && b_ready, "ninth pair accepted");
+        clk.next();
+
+        // Pair 10: 127 * 127.
+        $assert(a_ready && b_ready, "tenth pair accepted");
+        clk.next();
+
+        // Pair 11: 127 * 127.
+        $assert(a_ready && b_ready, "eleventh pair accepted");
+        clk.next();
+
+        // Pair 12: 127 * 127.
+        $assert(a_ready && b_ready, "twelfth pair accepted");
+        clk.next();
+
+        // Pair 13: -128 * -128.
+        a_data = 8'h80;
+        b_data = 8'h80;
+        $assert(a_ready && b_ready, "thirteenth pair accepted");
+        clk.next();
+
+        // Pair 14: -128 * -128.
+        $assert(a_ready && b_ready, "fourteenth pair accepted");
+        clk.next();
+
+        // Pair 15: -128 * -128.
+        $assert(a_ready && b_ready, "fifteenth pair accepted");
+        clk.next();
+
+        // Pair 16: -128 * -128.  This completes the second group.
+        $assert(a_ready && b_ready, "sixteenth pair accepted");
+        clk.next();
+        $display("second y_valid={} y_close={} y_data={}", y_valid, y_close, y_data);
+        $assert(y_valid, "second result is valid");
+        $assert(!y_close, "second result is not close");
+        $assert(y_data == 32'd130052, "second result is 130052");
+
+        // End both input streams after all sixteen pairs.
+        a_valid = 0;
+        b_valid = 0;
+        a_close = 1;
+        b_close = 1;
+        $assert(a_ready && b_ready, "close tokens accepted");
+        clk.next();
+        $assert(y_valid, "close result is valid");
+        $assert(y_close, "output stream is closed");
+
+        $finish();
+    }
+}
