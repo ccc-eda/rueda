@@ -1,0 +1,3 @@
+1795216967	0	sim --format json mm4.fx
+1795216970	0	synth --format json --top Mm4 mm4.fx
+1795216971	0	check --format json mm4.fx

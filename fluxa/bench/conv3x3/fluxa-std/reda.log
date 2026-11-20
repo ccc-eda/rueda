@@ -1,0 +1,6 @@
+1795217039	0	sim --format json conv3x3.fx
+1795217041	0	synth --format json --top Conv3x3 conv3x3.fx
+1795217042	1	check --format json conv3x3.fx
+1795217071	0	check --format json conv3x3.fx
+1795217073	0	sim --format json conv3x3.fx
+1795217074	0	synth --format json --top Conv3x3 conv3x3.fx

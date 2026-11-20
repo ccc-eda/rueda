@@ -177,6 +177,32 @@ sha256 的問題是 AI 的演算法錯誤，不是 Fluxa 的限制：
 - mm4 的 Fluxa 執行中，摘要行曾因腳本修改而損壞；表中的資料由 `reda` log 與檔案時間重建。
 - 這一輪證明的是固定 operation generator 的價值；`map(f)`、`reduce` 等更高階抽象仍需要獨立實驗。
 
+### 6.6 有了標準庫之後
+
+依照 §6.4 的建議，第一個步驟已完成：新增 `fluxa/sim/std/std.fx`，提供 `std::SystolicMatmul::<N, AW, CW>` 與 `std::Window3x3::<W, H, PW>`，詳見 [std.md](std.md)；語言本身沒有修改。
+
+兩個生成器由 MiniMax 依據 `fluxa/bench/std/spec.md` 草擬兩輪，並經審查。以 `N = 3`、16 位元輸入測試時，發現兩個內部通道被寫死為 `i8`，已修正。
+
+沿用 §6.1 的相同實驗設定，只測 Fluxa，並將 `std.md` 作為額外參考資料；工作目錄分別為 `mm4/fluxa-std` 與 `conv3x3/fluxa-std`。
+
+| 核心 | 沒有標準庫（§6.1） | 有標準庫 |
+|---|---|---|
+| mm4 | 319 行；11 次 reda；約 17 分鐘；37,233 LC | 33 行；3 次 reda；66 s；18,008 LC；其中一行為 `spawn std::SystolicMatmul::<4, 8, 32>(a, b, c)` |
+| conv3x3 | 97 行；6 次 reda；466 s；832 LC；77.5 MHz | 模型沒有使用 `std::Window3x3`，而是自行撰寫：80 行；6 次 reda；100 s；888 LC；88.2 MHz |
+
+兩個實驗最後都通過模擬與合成。
+
+mm4 的接線問題已經消失，不再需要加深 FIFO，所有通道的 depth 都是 2；但 18,008 LC 仍放不下只有 7,680 LC 的 HX8K。成本現在主要來自 PE tasks：每個約 1,162 個通用閘，做成循序狀態機，乘法器用 LUT 實作。因此下一個問題是改善 task synthesis，而不是再由標準庫解決。
+
+conv3x3 是單一串流核心，難度不夠高，模型沒有主動採用標準庫而自行寫出實作。這表示標準庫在接線才是主要難點時才發揮作用。
+
+同時也補了手接網路時用的工具：網路合成現在會依實例與 FIFO 回報閘數（`reda synth --format json` 的 `metrics.gates_by_part`），並在 FIFO 佔總閘數 30% 或以上時發出警告。對 §6.1 中 AI 寫的 mm4，工具會報告 FIFO 佔 56%，並指出 depth 為 16 的通道。
+
+途中也發現兩項不一致，列為後續工作：
+
+- `+%` 的左側未指定型別時，行為模擬器會報錯，但合成與閘級模擬都接受。
+- 網路合成從通道兩端取得通道寬度，忽略宣告的元素型別；先前將通道寫死為 `i8` 的錯誤因此能通過閘級模擬，卻在行為模擬失敗。
+
 ## 7. 如何重現
 
 需要 `reda`（`cargo build --release -p rueda`）、`agge`（設定 `MINIMAX_API_KEY`）、nextpnr-ice40。
@@ -185,6 +211,7 @@ sha256 的問題是 AI 的演算法錯誤，不是 Fluxa 的限制：
 cd fluxa/bench
 ./run.sh fluxa fir4 minimax                 # 一個組合：模型寫、自己跑 reda，紀錄在 fir4/fluxa/
 SIMONLY=1 MAXSTEPS=80 ./run.sh fluxa tpu4 minimax   # 只要求模擬通過，步數上限 80
+TAG=std EXTRA=../docs/std.md ./run.sh fluxa mm4 minimax   # 多給標準庫文件，工作目錄 mm4/fluxa-std/
 for k in fir4 dot8 crc32 sort4 hist; do for l in fluxa veryl; do ./run.sh $l $k minimax; done; done
 ./measure.sh fir4/fluxa/fir4.fx Fir4        # 一行 TSV：檔案、LC、LUT4、CARRY、DFF、BRAM、Fmax
 ```
