@@ -105,20 +105,91 @@ Veryl crc32 第一次執行時，模型的第一步就寫出 `list_files path=".
 - 沒有量**吞吐量**（每個樣本幾個時脈）。Fluxa 用了 `pipeline(ii = 1)` 的核心理論上每拍一筆，但沒有用共同的測試台實測，Veryl 版本的吞吐量也沒量。
 - 人寫的對照只有 fir4 一個（`fluxa/examples/fir4.fx`），沒有人寫的 Veryl 版本。
 
-## 6. 如何重現
+## 6. 大一點的核心：標準庫的平行模式值不值得做
+
+候選的下一步是在 Fluxa 標準庫用 comptime 做平行模式（`map`、`reduce`、`stencil`、`systolic_matmul`），降階成 task 網路，補上 MLIR `linalg` 那一層的抽象。值不值得做，要看 AI 寫大一點的核心時卡在哪裡。要回答的不是「Fluxa 能不能寫大型核心」，而是：**AI 卡住時，問題出在控制能力，還是網路接線與資源估算？**
+
+### 6.1 實驗
+
+沿用 §2 的方法：MiniMax-M3.1-Flash 透過 agge 執行，一次只跑一個組合。mm4、conv3x3 要跑模擬與合成，步數上限為 40；sha256、tpu4、simt4 只跑 Fluxa 模擬，步數上限為 80。規格在 `fluxa/bench/*/spec.md`，期望值由 Python 參考模型算出：
+
+- **mm4**：4 × 4 矩陣乘法，規定寫成 16 個 PE 實例的脈動陣列（A 往東、B 往南）。
+- **conv3x3**：8 × 6 影像串流的 3 × 3 卷積，只能保留兩列 line buffer。
+- **sha256**：SHA-256 與比特幣的 SHA-256d 挖礦器；用創世區塊驗證，從答案前 20 個 nonce 開始找。
+- **tpu4**：4 × 4 int8 矩陣單元（16 個 PE 任務）加上解碼 LOADW / LOADX / MATMUL（含 ReLU）/ STORE / HALT 的控制任務，跑兩層 MLP。
+- **simt4**：4 條 lane 的 SIMT 核心（前端與遮罩堆疊、4 個 lane 任務、記憶體任務），跑 saxpy 和 IF / ELSE 分支發散。
+
+| 核心 | 語言 | 結果 | 行數 | reda 次數 | 時間 |
+|---|---|---|---:|---:|---:|
+| mm4 | Fluxa | ✅ 模擬與合成通過；網路結構正確，但 nextpnr 放不下 | 319 | 11 | 約 17 分鐘 |
+| mm4 | Veryl | ❌ 模擬與合成都失敗 | 993 | 3 | 579 s |
+| conv3x3 | Fluxa | ✅ 通過 | 97 | 6 | 466 s |
+| conv3x3 | Veryl | ✅ 通過 | 285 | 2 | 173 s |
+| sha256 | Fluxa | △「abc」通過；創世區塊挖礦失敗，回傳 `0xFFFFFFFF` | 213 | 7 | 609 s |
+| tpu4 | Fluxa | ✅ 模擬通過；網路結構正確 | 261 | 至少 2* | 507 s |
+| simt4 | Fluxa | ✅ 第一次嘗試即通過 | 327 | 1 | 918 s |
+
+\* 模型把 trace 輸出改寫進 `reda.log`，覆蓋了原有紀錄，因此只能確定至少有 2 次呼叫。
+
+mm4 的 Fluxa 版本結構正確：16 個 `Pe`、邊界上 8 個吸收多餘值的 `Drain`，以及 `BRow`、`BColumn`、`Feeder`、`Collect`。tpu4 也正確組成 16 個 `Pe`、`Grid` 與 `Controller`。這表示 AI **有能力手寫大型 task network**。
+
+### 6.2 硬體結果
+
+| 實作 | LC | LUT4 | DFF | Fmax (MHz) |
+|---|---:|---:|---:|---:|
+| conv3x3，Fluxa | 832 | 737 | 348 | 77.5 |
+| conv3x3，Veryl | 674 | 581 | 193 | 39.7 |
+| mm4，Fluxa | 37,233 | — | 13,647 | — |
+
+conv3x3 的 Fluxa 版本比 Veryl 多用一些邏輯，但 Fmax 較高。
+
+mm4 才是方向 B 真正要解決的問題：37,233 LC 已遠超 HX8K 的 7,680 LC，nextpnr 無法佈置。設計中有 79 條通道，其中 60 條的 depth 被提高到 16。AI 是在反覆處理模擬死結時，把 FIFO depth 一路加大；模擬不會因此變慢或被懲罰，但硬體面積會直接爆掉。
+
+即使把所有 depth 都設成 2，模擬仍會因為 feeding order 需要的深度而死結；改成 2 後仍有 18,644 LC。除了 FIFO，每個 task 自己的控制成本也很高。
+
+### 6.3 sha256 失敗不是語言瓶頸
+
+sha256 的問題是 AI 的演算法錯誤，不是 Fluxa 的限制：
+
+- 80-byte 的區塊標頭必須跨兩個 64-byte SHA block；加上 padding 後應是 128 bytes。
+- 模型把整份標頭塞進一個 block，又用長度覆寫 word 15。
+- 含有 nonce 的 words 16..19 因此根本沒有被雜湊。
+- 「abc」只需要一個 block，所以可以通過。
+
+模型最後是在修改程式時用完步數。這類錯誤要靠規格寫明區塊切分，或給一個參考實作，不是語言功能能解決的。
+
+### 6.4 判斷與建議
+
+結果支持做方向 B，但支持的是**先做固定操作的函式庫生成器**，不是立刻加入泛型的高階語言功能。
+
+1. **先做固定操作生成器，不改語言。** 例如 `systolic_matmul::<N>`、line-buffer stencil。mm4 證明手寫接線可行，但代價是 11 次修改、319 行程式，以及用不必要深度換取模擬通過的網路。生成器可以把 wiring、FIFO depth 與精簡的 PE 一起固定下來。
+2. **再考慮編譯期高階參數。** 例如 `map(f)` 需要另外處理函式值、型別與編譯行為，應等固定操作生成器的抽象穩定後再做。
+3. **補強檢查與 QoR。** `reda check` 應提示 FIFO depth 遠大於實際需求；工具也應報告 per-task area。網路式設計的合成 QoR 還需要改善，尤其是每個 task 的固定控制成本。
+
+控制密集的設計反而沒有卡住：simt4 包含 mask stack、4 個 lane task、memory task 與 divergent `IF/ELSE`，第一次嘗試就通過；tpu4 的 controller 也能正確解碼 `LOADW`、`LOADX`、`MATMUL`、`STORE`、`HALT`。因此目前的證據不支持「AI 寫不了大型核心」，而是指出真正的瓶頸在**網路接線與資源 sizing**。
+
+### 6.5 限制
+
+- 每個組合只跑一次，只使用 MiniMax-M3.1-Flash，不能據此估計成功率或一般化到其他模型。
+- sha256、tpu4、simt4 只有 Fluxa 版本，而且只做模擬，沒有硬體結果。
+- mm4 的 Fluxa 執行中，摘要行曾因腳本修改而損壞；表中的資料由 `reda` log 與檔案時間重建。
+- 這一輪證明的是固定 operation generator 的價值；`map(f)`、`reduce` 等更高階抽象仍需要獨立實驗。
+
+## 7. 如何重現
 
 需要 `reda`（`cargo build --release -p rueda`）、`agge`（設定 `MINIMAX_API_KEY`）、nextpnr-ice40。
 
 ```bash
 cd fluxa/bench
 ./run.sh fluxa fir4 minimax                 # 一個組合：模型寫、自己跑 reda，紀錄在 fir4/fluxa/
+SIMONLY=1 MAXSTEPS=80 ./run.sh fluxa tpu4 minimax   # 只要求模擬通過，步數上限 80
 for k in fir4 dot8 crc32 sort4 hist; do for l in fluxa veryl; do ./run.sh $l $k minimax; done; done
 ./measure.sh fir4/fluxa/fir4.fx Fir4        # 一行 TSV：檔案、LC、LUT4、CARRY、DFF、BRAM、Fmax
 ```
 
 MiniMax 一次只跑一個組合（同時跑會撞上 HTTP 429）。agge 需要包含工具標籤修復的版本（agge 的 commit `54886d1` 以後）。
 
-## 7. 下一步
+## 8. 下一步
 
 1. 每組跑 3 次以上，記錄成功率的分布；再換一個模型（例如 GLM，等端點穩定時）。
 2. Veryl 的參考資料補一個 valid / ready 握手的範例，看差距會不會縮小。這可以分辨「語言本身難」和「文件不夠」。

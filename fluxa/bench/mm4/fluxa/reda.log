@@ -1,0 +1,11 @@
+1795176027	1	sim --format json mm4.fx
+1795176134	1	sim --format json mm4.fx
+1795176144	1	sim --format json mm4.fx
+1795176150	1	sim --format json mm4.fx
+1795176174	2	sim --format json --trace --stats mm4.fx
+1795176177	1	sim --trace --stats mm4.fx
+1795176266	0	sim --format json mm4.fx
+1795176269	1	synth --format json --top Mm4 mm4.fx
+1795176284	0	sim --format json mm4.fx
+1795176290	0	synth --format json --top Mm4 mm4.fx
+1795176292	1	check --format json mm4.fx

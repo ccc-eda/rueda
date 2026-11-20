@@ -1,0 +1,7 @@
+1795183000	1	sim --format json probe.fx
+1795183027	1	sim --format json probe.fx
+1795183145	0	sim --format json probe.fx
+1795183152	0	sim --format json probe.fx
+1795183195	0	sim --format json probe.fx
+1795183280	0	sim --format json probe.fx
+1795183349	1	sim --format json sha256.fx

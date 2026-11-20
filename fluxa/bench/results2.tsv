@@ -1,0 +1,5 @@
+file	LC	LUT4	CARRY	DFF	BRAM	Fmax
+mm4/fluxa/mm4.fx	37233	34223	1728	13647	0	?
+conv3x3/fluxa/conv3x3.fx	832	737	55	348	0	77.54
+conv3x3/veryl/conv3x3.veryl	674	581	55	193	0	39.65
+mm4/fluxa-depth2/mm4.fx	18644	15634	1728	5339	0	?

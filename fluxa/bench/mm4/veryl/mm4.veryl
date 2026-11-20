@@ -1,0 +1,993 @@
+module Mm4Pe (
+    clk             : input  clock,
+    rst             : input  reset,
+    clear           : input  logic,
+    i_west_a_data   : input  logic<8>,
+    i_west_a_valid  : input  logic,
+    o_west_a_ready  : output logic,
+    i_north_b_data  : input  logic<8>,
+    i_north_b_valid : input  logic,
+    o_north_b_ready : output logic,
+    o_east_a_data   : output logic<8>,
+    o_east_a_valid  : output logic,
+    i_east_a_ready  : input  logic,
+    o_south_b_data  : output logic<8>,
+    o_south_b_valid : output logic,
+    i_south_b_ready : input  logic,
+    o_result_data   : output logic<32>,
+    o_result_valid  : output logic,
+    i_result_ready  : input  logic,
+) {
+    var east_a_data   : logic<8>;
+    var east_a_valid  : logic;
+    var south_b_data  : logic<8>;
+    var south_b_valid : logic;
+    var accumulator   : logic<32>;
+    var count         : logic<3>;
+    var result_data   : logic<32>;
+    var result_valid  : logic;
+
+    let a_ext: logic<32> = $signed(i_west_a_data);
+    let b_ext: logic<32> = $signed(i_north_b_data);
+    let product: logic<32> = a_ext * b_ext;
+
+    // Both directions advance as one pair.  Holding the pair when either
+    // neighboring PE is busy keeps the A and B waves synchronized.
+    let input_ready: logic = !east_a_valid ||
+                             (i_east_a_ready && i_south_b_ready);
+
+    assign o_west_a_ready  = input_ready;
+    assign o_north_b_ready = input_ready;
+    assign o_east_a_data   = east_a_data;
+    assign o_east_a_valid  = east_a_valid;
+    assign o_south_b_data  = south_b_data;
+    assign o_south_b_valid = south_b_valid;
+    assign o_result_data   = result_data;
+    assign o_result_valid  = result_valid;
+
+    always_ff (clk) {
+        if rst {
+            east_a_valid  = 0;
+            south_b_valid = 0;
+            east_a_data   = 0;
+            south_b_data  = 0;
+            accumulator   = 0;
+            count         = 0;
+            result_data   = 0;
+            result_valid  = 0;
+        } else if clear {
+            east_a_valid  = 0;
+            south_b_valid = 0;
+            east_a_data   = 0;
+            south_b_data  = 0;
+            accumulator   = 0;
+            count         = 0;
+            result_data   = 0;
+            result_valid  = 0;
+        } else {
+            if result_valid && i_result_ready {
+                result_valid = 0;
+            }
+
+            if east_a_valid && i_east_a_ready && i_south_b_ready {
+                east_a_valid  = 0;
+                south_b_valid = 0;
+            }
+
+            if i_west_a_valid && i_north_b_valid && input_ready {
+                east_a_valid  = 1;
+                east_a_data   = i_west_a_data;
+                south_b_valid = 1;
+                south_b_data  = i_north_b_data;
+
+                accumulator = accumulator + product;
+                if count == 3'd3 {
+                    count        = 3'd4;
+                    result_data  = accumulator + product;
+                    result_valid = 1;
+                } else {
+                    count = count + 3'd1;
+                }
+            }
+        }
+    }
+}
+
+module Mm4 (
+    clk     : input  clock,
+    rst     : input  reset,
+    a_data  : input  logic<8>,
+    a_valid : input  logic,
+    a_ready : output logic,
+    a_close : input  logic,
+    b_data  : input  logic<8>,
+    b_valid : input  logic,
+    b_ready : output logic,
+    b_close : input  logic,
+    c_data  : output logic<32>,
+    c_valid : output logic,
+    c_close : output logic,
+    c_ready : input  logic,
+) {
+    const ST_COLLECT  : logic<3> = 3'd0;
+    const ST_PREPARE : logic<3> = 3'd1;
+    const ST_RUN     : logic<3> = 3'd2;
+    const ST_OUTPUT  : logic<3> = 3'd3;
+    const ST_CLOSE   : logic<3> = 3'd4;
+    const ST_DONE    : logic<3> = 3'd5;
+
+    var phase             : logic<3>;
+    var a_count           : logic<5>;
+    var b_count           : logic<5>;
+    var cycle             : logic<4>;
+    var result_count      : logic<5>;
+    var output_index      : logic<4>;
+    var a_mem             : logic<8>[16];
+    var b_mem             : logic<8>[16];
+    var c_mem             : logic<32>[16];
+    var pe_clear          : logic;
+
+    // Boundary launch ports into the west and north edges of the array.
+    var a_launch_data_0  : logic<8>;
+    var a_launch_data_1  : logic<8>;
+    var a_launch_data_2  : logic<8>;
+    var a_launch_data_3  : logic<8>;
+    var a_launch_valid_0 : logic;
+    var a_launch_valid_1 : logic;
+    var a_launch_valid_2 : logic;
+    var a_launch_valid_3 : logic;
+    var a_launch_ready_0 : logic;
+    var a_launch_ready_1 : logic;
+    var a_launch_ready_2 : logic;
+    var a_launch_ready_3 : logic;
+    var b_launch_data_0  : logic<8>;
+    var b_launch_data_1  : logic<8>;
+    var b_launch_data_2  : logic<8>;
+    var b_launch_data_3  : logic<8>;
+    var b_launch_valid_0 : logic;
+    var b_launch_valid_1 : logic;
+    var b_launch_valid_2 : logic;
+    var b_launch_valid_3 : logic;
+    var b_launch_ready_0 : logic;
+    var b_launch_ready_1 : logic;
+    var b_launch_ready_2 : logic;
+    var b_launch_ready_3 : logic;
+
+    // Ready signals at the west and north side of each processing element.
+    var aw00_ready       : logic;
+    var aw01_ready       : logic;
+    var aw02_ready       : logic;
+    var aw03_ready       : logic;
+    var aw10_ready       : logic;
+    var aw11_ready       : logic;
+    var aw12_ready       : logic;
+    var aw13_ready       : logic;
+    var aw20_ready       : logic;
+    var aw21_ready       : logic;
+    var aw22_ready       : logic;
+    var aw23_ready       : logic;
+    var aw30_ready       : logic;
+    var aw31_ready       : logic;
+    var aw32_ready       : logic;
+    var aw33_ready       : logic;
+    var bn00_ready       : logic;
+    var bn01_ready       : logic;
+    var bn02_ready       : logic;
+    var bn03_ready       : logic;
+    var bn10_ready       : logic;
+    var bn11_ready       : logic;
+    var bn12_ready       : logic;
+    var bn13_ready       : logic;
+    var bn20_ready       : logic;
+    var bn21_ready       : logic;
+    var bn22_ready       : logic;
+    var bn23_ready       : logic;
+    var bn30_ready       : logic;
+    var bn31_ready       : logic;
+    var bn32_ready       : logic;
+    var bn33_ready       : logic;
+
+    // A values travel east.
+    var a01_data         : logic<8>;
+    var a01_valid        : logic;
+    var a02_data         : logic<8>;
+    var a02_valid        : logic;
+    var a03_data         : logic<8>;
+    var a03_valid        : logic;
+    var a11_data         : logic<8>;
+    var a11_valid        : logic;
+    var a12_data         : logic<8>;
+    var a12_valid        : logic;
+    var a13_data         : logic<8>;
+    var a13_valid        : logic;
+    var a21_data         : logic<8>;
+    var a21_valid        : logic;
+    var a22_data         : logic<8>;
+    var a22_valid        : logic;
+    var a23_data         : logic<8>;
+    var a23_valid        : logic;
+    var a31_data         : logic<8>;
+    var a31_valid        : logic;
+    var a32_data         : logic<8>;
+    var a32_valid        : logic;
+    var a33_data         : logic<8>;
+    var a33_valid        : logic;
+
+    // B values travel south.
+    var b10_data         : logic<8>;
+    var b10_valid        : logic;
+    var b20_data         : logic<8>;
+    var b20_valid        : logic;
+    var b30_data         : logic<8>;
+    var b30_valid        : logic;
+    var b11_data         : logic<8>;
+    var b11_valid        : logic;
+    var b21_data         : logic<8>;
+    var b21_valid        : logic;
+    var b31_data         : logic<8>;
+    var b31_valid        : logic;
+    var b12_data         : logic<8>;
+    var b12_valid        : logic;
+    var b22_data         : logic<8>;
+    var b22_valid        : logic;
+    var b32_data         : logic<8>;
+    var b32_valid        : logic;
+    var b13_data         : logic<8>;
+    var b13_valid        : logic;
+    var b23_data         : logic<8>;
+    var b23_valid        : logic;
+    var b33_data         : logic<8>;
+    var b33_valid        : logic;
+
+    // Results leaving the sixteen processing elements.
+    var r00_data         : logic<32>;
+    var r00_valid        : logic;
+    var r01_data         : logic<32>;
+    var r01_valid        : logic;
+    var r02_data         : logic<32>;
+    var r02_valid        : logic;
+    var r03_data         : logic<32>;
+    var r03_valid        : logic;
+    var r10_data         : logic<32>;
+    var r10_valid        : logic;
+    var r11_data         : logic<32>;
+    var r11_valid        : logic;
+    var r12_data         : logic<32>;
+    var r12_valid        : logic;
+    var r13_data         : logic<32>;
+    var r13_valid        : logic;
+    var r20_data         : logic<32>;
+    var r20_valid        : logic;
+    var r21_data         : logic<32>;
+    var r21_valid        : logic;
+    var r22_data         : logic<32>;
+    var r22_valid        : logic;
+    var r23_data         : logic<32>;
+    var r23_valid        : logic;
+    var r30_data         : logic<32>;
+    var r30_valid        : logic;
+    var r31_data         : logic<32>;
+    var r31_valid        : logic;
+    var r32_data         : logic<32>;
+    var r32_valid        : logic;
+    var r33_data         : logic<32>;
+    var r33_valid        : logic;
+
+    var launch_done      : logic;
+    var result_accepted  : logic<5>;
+
+    // Unused outputs at the east and south boundaries.
+    var unused_a03_data  : logic<8>;
+    var unused_a03_valid : logic;
+    var unused_a13_data  : logic<8>;
+    var unused_a13_valid : logic;
+    var unused_a23_data  : logic<8>;
+    var unused_a23_valid : logic;
+    var unused_a33_data  : logic<8>;
+    var unused_a33_valid : logic;
+    var unused_b30_data  : logic<8>;
+    var unused_b30_valid : logic;
+    var unused_b31_data  : logic<8>;
+    var unused_b31_valid : logic;
+    var unused_b32_data  : logic<8>;
+    var unused_b32_valid : logic;
+    var unused_b33_data  : logic<8>;
+    var unused_b33_valid : logic;
+
+    // Row 0.
+    inst pe00: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a_launch_data_0,
+        i_west_a_valid  : a_launch_valid_0,
+        o_west_a_ready  : aw00_ready,
+        i_north_b_data  : b_launch_data_0,
+        i_north_b_valid : b_launch_valid_0,
+        o_north_b_ready : bn00_ready,
+        o_east_a_data   : a01_data,
+        o_east_a_valid  : a01_valid,
+        i_east_a_ready  : aw01_ready,
+        o_south_b_data  : b10_data,
+        o_south_b_valid : b10_valid,
+        i_south_b_ready : bn10_ready,
+        o_result_data   : r00_data,
+        o_result_valid  : r00_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe01: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a01_data,
+        i_west_a_valid  : a01_valid,
+        o_west_a_ready  : aw01_ready,
+        i_north_b_data  : b_launch_data_1,
+        i_north_b_valid : b_launch_valid_1,
+        o_north_b_ready : bn01_ready,
+        o_east_a_data   : a02_data,
+        o_east_a_valid  : a02_valid,
+        i_east_a_ready  : aw02_ready,
+        o_south_b_data  : b11_data,
+        o_south_b_valid : b11_valid,
+        i_south_b_ready : bn11_ready,
+        o_result_data   : r01_data,
+        o_result_valid  : r01_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe02: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a02_data,
+        i_west_a_valid  : a02_valid,
+        o_west_a_ready  : aw02_ready,
+        i_north_b_data  : b_launch_data_2,
+        i_north_b_valid : b_launch_valid_2,
+        o_north_b_ready : bn02_ready,
+        o_east_a_data   : a03_data,
+        o_east_a_valid  : a03_valid,
+        i_east_a_ready  : aw03_ready,
+        o_south_b_data  : b12_data,
+        o_south_b_valid : b12_valid,
+        i_south_b_ready : bn12_ready,
+        o_result_data   : r02_data,
+        o_result_valid  : r02_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe03: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a03_data,
+        i_west_a_valid  : a03_valid,
+        o_west_a_ready  : aw03_ready,
+        i_north_b_data  : b_launch_data_3,
+        i_north_b_valid : b_launch_valid_3,
+        o_north_b_ready : bn03_ready,
+        o_east_a_data   : unused_a03_data,
+        o_east_a_valid  : unused_a03_valid,
+        i_east_a_ready  : 1'b1,
+        o_south_b_data  : b13_data,
+        o_south_b_valid : b13_valid,
+        i_south_b_ready : bn13_ready,
+        o_result_data   : r03_data,
+        o_result_valid  : r03_valid,
+        i_result_ready  : 1'b1,
+    );
+
+    // Row 1.
+    inst pe10: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a_launch_data_1,
+        i_west_a_valid  : a_launch_valid_1,
+        o_west_a_ready  : aw10_ready,
+        i_north_b_data  : b10_data,
+        i_north_b_valid : b10_valid,
+        o_north_b_ready : bn10_ready,
+        o_east_a_data   : a11_data,
+        o_east_a_valid  : a11_valid,
+        i_east_a_ready  : aw11_ready,
+        o_south_b_data  : b20_data,
+        o_south_b_valid : b20_valid,
+        i_south_b_ready : bn20_ready,
+        o_result_data   : r10_data,
+        o_result_valid  : r10_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe11: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a11_data,
+        i_west_a_valid  : a11_valid,
+        o_west_a_ready  : aw11_ready,
+        i_north_b_data  : b11_data,
+        i_north_b_valid : b11_valid,
+        o_north_b_ready : bn11_ready,
+        o_east_a_data   : a12_data,
+        o_east_a_valid  : a12_valid,
+        i_east_a_ready  : aw12_ready,
+        o_south_b_data  : b21_data,
+        o_south_b_valid : b21_valid,
+        i_south_b_ready : bn21_ready,
+        o_result_data   : r11_data,
+        o_result_valid  : r11_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe12: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a12_data,
+        i_west_a_valid  : a12_valid,
+        o_west_a_ready  : aw12_ready,
+        i_north_b_data  : b12_data,
+        i_north_b_valid : b12_valid,
+        o_north_b_ready : bn12_ready,
+        o_east_a_data   : a13_data,
+        o_east_a_valid  : a13_valid,
+        i_east_a_ready  : aw13_ready,
+        o_south_b_data  : b22_data,
+        o_south_b_valid : b22_valid,
+        i_south_b_ready : bn22_ready,
+        o_result_data   : r12_data,
+        o_result_valid  : r12_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe13: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a13_data,
+        i_west_a_valid  : a13_valid,
+        o_west_a_ready  : aw13_ready,
+        i_north_b_data  : b13_data,
+        i_north_b_valid : b13_valid,
+        o_north_b_ready : bn13_ready,
+        o_east_a_data   : unused_a13_data,
+        o_east_a_valid  : unused_a13_valid,
+        i_east_a_ready  : 1'b1,
+        o_south_b_data  : b23_data,
+        o_south_b_valid : b23_valid,
+        i_south_b_ready : bn23_ready,
+        o_result_data   : r13_data,
+        o_result_valid  : r13_valid,
+        i_result_ready  : 1'b1,
+    );
+
+    // Row 2.
+    inst pe20: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a_launch_data_2,
+        i_west_a_valid  : a_launch_valid_2,
+        o_west_a_ready  : aw20_ready,
+        i_north_b_data  : b20_data,
+        i_north_b_valid : b20_valid,
+        o_north_b_ready : bn20_ready,
+        o_east_a_data   : a21_data,
+        o_east_a_valid  : a21_valid,
+        i_east_a_ready  : aw21_ready,
+        o_south_b_data  : b30_data,
+        o_south_b_valid : b30_valid,
+        i_south_b_ready : bn30_ready,
+        o_result_data   : r20_data,
+        o_result_valid  : r20_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe21: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a21_data,
+        i_west_a_valid  : a21_valid,
+        o_west_a_ready  : aw21_ready,
+        i_north_b_data  : b21_data,
+        i_north_b_valid : b21_valid,
+        o_north_b_ready : bn21_ready,
+        o_east_a_data   : a22_data,
+        o_east_a_valid  : a22_valid,
+        i_east_a_ready  : aw22_ready,
+        o_south_b_data  : b31_data,
+        o_south_b_valid : b31_valid,
+        i_south_b_ready : bn31_ready,
+        o_result_data   : r21_data,
+        o_result_valid  : r21_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe22: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a22_data,
+        i_west_a_valid  : a22_valid,
+        o_west_a_ready  : aw22_ready,
+        i_north_b_data  : b22_data,
+        i_north_b_valid : b22_valid,
+        o_north_b_ready : bn22_ready,
+        o_east_a_data   : a23_data,
+        o_east_a_valid  : a23_valid,
+        i_east_a_ready  : aw23_ready,
+        o_south_b_data  : b32_data,
+        o_south_b_valid : b32_valid,
+        i_south_b_ready : bn32_ready,
+        o_result_data   : r22_data,
+        o_result_valid  : r22_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe23: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a23_data,
+        i_west_a_valid  : a23_valid,
+        o_west_a_ready  : aw23_ready,
+        i_north_b_data  : b23_data,
+        i_north_b_valid : b23_valid,
+        o_north_b_ready : bn23_ready,
+        o_east_a_data   : unused_a23_data,
+        o_east_a_valid  : unused_a23_valid,
+        i_east_a_ready  : 1'b1,
+        o_south_b_data  : b33_data,
+        o_south_b_valid : b33_valid,
+        i_south_b_ready : bn33_ready,
+        o_result_data   : r23_data,
+        o_result_valid  : r23_valid,
+        i_result_ready  : 1'b1,
+    );
+
+    // Row 3.
+    inst pe30: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a_launch_data_3,
+        i_west_a_valid  : a_launch_valid_3,
+        o_west_a_ready  : aw30_ready,
+        i_north_b_data  : b30_data,
+        i_north_b_valid : b30_valid,
+        o_north_b_ready : bn30_ready,
+        o_east_a_data   : a31_data,
+        o_east_a_valid  : a31_valid,
+        i_east_a_ready  : aw31_ready,
+        o_south_b_data  : unused_b30_data,
+        o_south_b_valid : unused_b30_valid,
+        i_south_b_ready : 1'b1,
+        o_result_data   : r30_data,
+        o_result_valid  : r30_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe31: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a31_data,
+        i_west_a_valid  : a31_valid,
+        o_west_a_ready  : aw31_ready,
+        i_north_b_data  : b31_data,
+        i_north_b_valid : b31_valid,
+        o_north_b_ready : bn31_ready,
+        o_east_a_data   : a32_data,
+        o_east_a_valid  : a32_valid,
+        i_east_a_ready  : aw32_ready,
+        o_south_b_data  : unused_b31_data,
+        o_south_b_valid : unused_b31_valid,
+        i_south_b_ready : 1'b1,
+        o_result_data   : r31_data,
+        o_result_valid  : r31_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe32: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a32_data,
+        i_west_a_valid  : a32_valid,
+        o_west_a_ready  : aw32_ready,
+        i_north_b_data  : b32_data,
+        i_north_b_valid : b32_valid,
+        o_north_b_ready : bn32_ready,
+        o_east_a_data   : a33_data,
+        o_east_a_valid  : a33_valid,
+        i_east_a_ready  : aw33_ready,
+        o_south_b_data  : unused_b32_data,
+        o_south_b_valid : unused_b32_valid,
+        i_south_b_ready : 1'b1,
+        o_result_data   : r32_data,
+        o_result_valid  : r32_valid,
+        i_result_ready  : 1'b1,
+    );
+    inst pe33: Mm4Pe (
+        clk             : clk,
+        rst             : rst,
+        clear           : pe_clear,
+        i_west_a_data   : a33_data,
+        i_west_a_valid  : a33_valid,
+        o_west_a_ready  : aw33_ready,
+        i_north_b_data  : b33_data,
+        i_north_b_valid : b33_valid,
+        o_north_b_ready : bn33_ready,
+        o_east_a_data   : unused_a33_data,
+        o_east_a_valid  : unused_a33_valid,
+        i_east_a_ready  : 1'b1,
+        o_south_b_data  : unused_b33_data,
+        o_south_b_valid : unused_b33_valid,
+        i_south_b_ready : 1'b1,
+        o_result_data   : r33_data,
+        o_result_valid  : r33_valid,
+        i_result_ready  : 1'b1,
+    );
+
+    assign a_launch_ready_0 = aw00_ready;
+    assign a_launch_ready_1 = aw10_ready;
+    assign a_launch_ready_2 = aw20_ready;
+    assign a_launch_ready_3 = aw30_ready;
+    assign b_launch_ready_0 = bn00_ready;
+    assign b_launch_ready_1 = bn01_ready;
+    assign b_launch_ready_2 = bn02_ready;
+    assign b_launch_ready_3 = bn03_ready;
+
+    always_comb {
+        a_ready = 0;
+        b_ready = 0;
+        if phase == ST_COLLECT {
+            if a_count < 5'd16 {
+                a_ready = 1;
+            }
+            if b_count < 5'd16 {
+                b_ready = 1;
+            }
+        }
+    }
+
+    always_comb {
+        c_data = 0;
+        if state == ST_OUTPUT {
+            c_data = c_mem[output_index];
+        }
+    }
+
+    assign c_valid = state == ST_OUTPUT || state == ST_CLOSE;
+    assign c_close = state == ST_CLOSE;
+    assign pe_clear = state == ST_PREPARE;
+
+    // A(i,k) enters row i at cycle i+k; B(k,j) enters column j at
+    // cycle j+k.  The registered PE links add j and i cycles respectively,
+    // so the two waves meet with the same k at PE(i,j).
+    always_comb {
+        a_launch_valid_0 = 0;
+        a_launch_valid_1 = 0;
+        a_launch_valid_2 = 0;
+        a_launch_valid_3 = 0;
+        a_launch_data_0  = 0;
+        a_launch_data_1  = 0;
+        a_launch_data_2  = 0;
+        a_launch_data_3  = 0;
+        b_launch_valid_0 = 0;
+        b_launch_valid_1 = 0;
+        b_launch_valid_2 = 0;
+        b_launch_valid_3 = 0;
+        b_launch_data_0  = 0;
+        b_launch_data_1  = 0;
+        b_launch_data_2  = 0;
+        b_launch_data_3  = 0;
+
+        if state == ST_RUN {
+            case cycle {
+                4'd0: {
+                    a_launch_valid_0 = 1;
+                    a_launch_data_0  = a_mem[0];
+                    b_launch_valid_0 = 1;
+                    b_launch_data_0  = b_mem[0];
+                }
+                4'd1: {
+                    a_launch_valid_0 = 1;
+                    a_launch_data_0  = a_mem[1];
+                    a_launch_valid_1 = 1;
+                    a_launch_data_1  = a_mem[4];
+                    b_launch_valid_0 = 1;
+                    b_launch_data_0  = b_mem[4];
+                    b_launch_valid_1 = 1;
+                    b_launch_data_1  = b_mem[1];
+                }
+                4'd2: {
+                    a_launch_valid_0 = 1;
+                    a_launch_data_0  = a_mem[2];
+                    a_launch_valid_1 = 1;
+                    a_launch_data_1  = a_mem[5];
+                    a_launch_valid_2 = 1;
+                    a_launch_data_2  = a_mem[8];
+                    b_launch_valid_0 = 1;
+                    b_launch_data_0  = b_mem[8];
+                    b_launch_valid_1 = 1;
+                    b_launch_data_1  = b_mem[5];
+                    b_launch_valid_2 = 1;
+                    b_launch_data_2  = b_mem[2];
+                }
+                4'd3: {
+                    a_launch_valid_0 = 1;
+                    a_launch_data_0  = a_mem[3];
+                    a_launch_valid_1 = 1;
+                    a_launch_data_1  = a_mem[6];
+                    a_launch_valid_2 = 1;
+                    a_launch_data_2  = a_mem[9];
+                    a_launch_valid_3 = 1;
+                    a_launch_data_3  = a_mem[12];
+                    b_launch_valid_0 = 1;
+                    b_launch_data_0  = b_mem[12];
+                    b_launch_valid_1 = 1;
+                    b_launch_data_1  = b_mem[9];
+                    b_launch_valid_2 = 1;
+                    b_launch_data_2  = b_mem[6];
+                    b_launch_valid_3 = 1;
+                    b_launch_data_3  = b_mem[3];
+                }
+                4'd4: {
+                    a_launch_valid_1 = 1;
+                    a_launch_data_1  = a_mem[7];
+                    a_launch_valid_2 = 1;
+                    a_launch_data_2  = a_mem[10];
+                    a_launch_valid_3 = 1;
+                    a_launch_data_3  = a_mem[13];
+                    b_launch_valid_1 = 1;
+                    b_launch_data_1  = b_mem[13];
+                    b_launch_valid_2 = 1;
+                    b_launch_data_2  = b_mem[10];
+                    b_launch_valid_3 = 1;
+                    b_launch_data_3  = b_mem[7];
+                }
+                4'd5: {
+                    a_launch_valid_2 = 1;
+                    a_launch_data_2  = a_mem[11];
+                    a_launch_valid_3 = 1;
+                    a_launch_data_3  = a_mem[14];
+                    b_launch_valid_2 = 1;
+                    b_launch_data_2  = b_mem[14];
+                    b_launch_valid_3 = 1;
+                    b_launch_data_3  = b_mem[11];
+                }
+                4'd6: {
+                    a_launch_valid_3 = 1;
+                    a_launch_data_3  = a_mem[15];
+                    b_launch_valid_3 = 1;
+                    b_launch_data_3  = b_mem[15];
+                }
+                default: {
+                }
+            }
+        }
+    }
+
+    assign launch_done = (!a_launch_valid_0 || a_launch_ready_0) &&
+                         (!a_launch_valid_1 || a_launch_ready_1) &&
+                         (!a_launch_valid_2 || a_launch_ready_2) &&
+                         (!a_launch_valid_3 || a_launch_ready_3) &&
+                         (!b_launch_valid_0 || b_launch_ready_0) &&
+                         (!b_launch_valid_1 || b_launch_ready_1) &&
+                         (!b_launch_valid_2 || b_launch_ready_2) &&
+                         (!b_launch_valid_3 || b_launch_ready_3);
+
+    always_comb {
+        result_accepted = 0;
+        if r00_valid { result_accepted = result_accepted + 5'd1; }
+        if r01_valid { result_accepted = result_accepted + 5'd1; }
+        if r02_valid { result_accepted = result_accepted + 5'd1; }
+        if r03_valid { result_accepted = result_accepted + 5'd1; }
+        if r10_valid { result_accepted = result_accepted + 5'd1; }
+        if r11_valid { result_accepted = result_accepted + 5'd1; }
+        if r12_valid { result_accepted = result_accepted + 5'd1; }
+        if r13_valid { result_accepted = result_accepted + 5'd1; }
+        if r20_valid { result_accepted = result_accepted + 5'd1; }
+        if r21_valid { result_accepted = result_accepted + 5'd1; }
+        if r22_valid { result_accepted = result_accepted + 5'd1; }
+        if r23_valid { result_accepted = result_accepted + 5'd1; }
+        if r30_valid { result_accepted = result_accepted + 5'd1; }
+        if r31_valid { result_accepted = result_accepted + 5'd1; }
+        if r32_valid { result_accepted = result_accepted + 5'd1; }
+        if r33_valid { result_accepted = result_accepted + 5'd1; }
+    }
+
+    always_ff (clk) {
+        if rst {
+            state        = ST_COLLECT;
+            a_count      = 0;
+            b_count      = 0;
+            cycle        = 0;
+            result_count = 0;
+            output_index = 0;
+            for i in 0..16 {
+                a_mem[i] = 8'd0;
+                b_mem[i] = 8'd0;
+                c_mem[i] = 32'd0;
+            }
+        } else {
+            case state {
+                ST_COLLECT: {
+                    if a_valid && a_ready && !a_close {
+                        a_mem[a_count] = a_data;
+                        a_count = a_count + 5'd1;
+                    }
+                    if b_valid && b_ready && !b_close {
+                        b_mem[b_count] = b_data;
+                        b_count = b_count + 5'd1;
+                    }
+
+                    if a_count == 5'd16 && b_count == 5'd16 {
+                        state        = ST_PREPARE;
+                        cycle        = 0;
+                        result_count = 0;
+                        output_index = 0;
+                    } else if a_valid && a_ready && a_close &&
+                              b_valid && b_ready && b_close {
+                        state = ST_CLOSE;
+                    }
+                }
+                ST_PREPARE: {
+                    state = ST_RUN;
+                    cycle = 0;
+                }
+                ST_RUN: {
+                    if launch_done {
+                        cycle = cycle + 4'd1;
+                    }
+
+                    if r00_valid { c_mem[0]  = r00_data; }
+                    if r01_valid { c_mem[1]  = r01_data; }
+                    if r02_valid { c_mem[2]  = r02_data; }
+                    if r03_valid { c_mem[3]  = r03_data; }
+                    if r10_valid { c_mem[4]  = r10_data; }
+                    if r11_valid { c_mem[5]  = r11_data; }
+                    if r12_valid { c_mem[6]  = r12_data; }
+                    if r13_valid { c_mem[7]  = r13_data; }
+                    if r20_valid { c_mem[8]  = r20_data; }
+                    if r21_valid { c_mem[9]  = r21_data; }
+                    if r22_valid { c_mem[10] = r22_data; }
+                    if r23_valid { c_mem[11] = r23_data; }
+                    if r30_valid { c_mem[12] = r30_data; }
+                    if r31_valid { c_mem[13] = r31_data; }
+                    if r32_valid { c_mem[14] = r32_data; }
+                    if r33_valid { c_mem[15] = r33_data; }
+
+                    result_count = result_count + result_accepted;
+                    if result_count + result_accepted >= 5'd16 {
+                        state        = ST_OUTPUT;
+                        output_index = 0;
+                    }
+                }
+                ST_OUTPUT: {
+                    if c_valid && c_ready {
+                        if output_index == 4'd15 {
+                            state        = ST_COLLECT;
+                            a_count      = 0;
+                            b_count      = 0;
+                            output_index = 0;
+                        } else {
+                            output_index = output_index + 4'd1;
+                        }
+                    }
+                }
+                ST_CLOSE: {
+                    if c_valid && c_ready {
+                        state = ST_DONE;
+                    }
+                }
+                default: {
+                    state = ST_DONE;
+                }
+            }
+        }
+    }
+}
+
+#[test(mm4_vectors)]
+module Mm4Test {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var a_data  : logic<8>;
+    var a_valid : logic;
+    var a_ready : logic;
+    var a_close : logic;
+    var b_data  : logic<8>;
+    var b_valid : logic;
+    var b_ready : logic;
+    var b_close : logic;
+    var c_data  : logic<32>;
+    var c_valid : logic;
+    var c_close : logic;
+    var c_ready : logic;
+
+    inst dut: Mm4 (
+        clk     : clk,
+        rst     : rst,
+        a_data  : a_data,
+        a_valid : a_valid,
+        a_ready : a_ready,
+        a_close : a_close,
+        b_data  : b_data,
+        b_valid : b_valid,
+        b_ready : b_ready,
+        b_close : b_close,
+        c_data  : c_data,
+        c_valid : c_valid,
+        c_close : c_close,
+        c_ready : c_ready,
+    );
+
+    initial {
+        a_data  = 8'd0;
+        a_valid = 0;
+        a_close = 0;
+        b_data  = 8'd0;
+        b_valid = 0;
+        b_close = 0;
+        c_ready = 0;
+
+        rst.assert();
+        clk.next(10);
+
+        a_valid = 1;
+        b_valid = 1;
+
+        a_data = 8'sd1;   b_data = 8'sd2;   $assert(a_ready && b_ready, "A00/B00 accepted"); clk.next();
+        a_data = -8'sd2;  b_data = 8'sd0;   $assert(a_ready && b_ready, "A01/B01 accepted"); clk.next();
+        a_data = 8'sd3;   b_data = -8'sd1;  $assert(a_ready && b_ready, "A02/B02 accepted"); clk.next();
+        a_data = 8'sd4;   b_data = 8'sd3;   $assert(a_ready && b_ready, "A03/B03 accepted"); clk.next();
+
+        a_data = 8'sd5;   b_data = 8'sd1;   $assert(a_ready && b_ready, "A10/B10 accepted"); clk.next();
+        a_data = 8'sd6;   b_data = 8'sd4;   $assert(a_ready && b_ready, "A11/B11 accepted"); clk.next();
+        a_data = -8'sd7;  b_data = 8'sd2;   $assert(a_ready && b_ready, "A12/B12 accepted"); clk.next();
+        a_data = 8'sd8;   b_data = -8'sd5;  $assert(a_ready && b_ready, "A13/B13 accepted"); clk.next();
+
+        a_data = -8'sd9;  b_data = -8'sd6;  $assert(a_ready && b_ready, "A20/B20 accepted"); clk.next();
+        a_data = 8'sd10;  b_data = 8'sd7;   $assert(a_ready && b_ready, "A21/B21 accepted"); clk.next();
+        a_data = 8'sd11;  b_data = 8'sd8;   $assert(a_ready && b_ready, "A22/B22 accepted"); clk.next();
+        a_data = 8'sd12;  b_data = 8'sd1;   $assert(a_ready && b_ready, "A23/B23 accepted"); clk.next();
+
+        a_data = 8'sd13;  b_data = 8'sd9;   $assert(a_ready && b_ready, "A30/B30 accepted"); clk.next();
+        a_data = -8'sd14; b_data = -8'sd10; $assert(a_ready && b_ready, "A31/B31 accepted"); clk.next();
+        a_data = 8'sd15;  b_data = 8'sd11;  $assert(a_ready && b_ready, "A32/B32 accepted"); clk.next();
+        a_data = 8'sd127; b_data = -8'sd128; $assert(a_ready && b_ready, "A33/B33 accepted"); clk.next();
+
+        a_valid = 0;
+        b_valid = 0;
+        a_close = 1;
+        b_close = 1;
+
+        // Compute the matrix while holding the first output.
+        clk.next(20);
+        $assert(c_valid, "first result is valid");
+        $assert(!c_close, "first result is not close");
+
+        c_ready = 1;
+        $assert(c_data == 32'sd18,    "C00 = 18");    clk.next();
+        $assert(c_data == -32'sd27,   "C01 = -27");   clk.next();
+        $assert(c_data == 32'sd63,    "C02 = 63");    clk.next();
+        $assert(c_data == -32'sd496,  "C03 = -496");  clk.next();
+        $assert(c_data == 32'sd130,   "C10 = 130");   clk.next();
+        $assert(c_data == -32'sd105,  "C11 = -105");  clk.next();
+        $assert(c_data == 32'sd39,    "C12 = 39");    clk.next();
+        $assert(c_data == -32'sd1046, "C13 = -1046"); clk.next();
+        $assert(c_data == 32'sd34,    "C20 = 34");    clk.next();
+        $assert(c_data == -32'sd3,    "C21 = -3");    clk.next();
+        $assert(c_data == 32'sd249,   "C22 = 249");   clk.next();
+        $assert(c_data == -32'sd1602, "C23 = -1602"); clk.next();
+        $assert(c_data == 32'sd1065,  "C30 = 1065");  clk.next();
+        $assert(c_data == -32'sd1221, "C31 = -1221"); clk.next();
+        $assert(c_data == 32'sd1476,  "C32 = 1476");  clk.next();
+        $assert(c_data == -32'sd16132,"C33 = -16132");clk.next();
+
+        // The pending input close is accepted now that the last data result
+        // has left the output stream.
+        clk.next();
+        $assert(c_valid, "close token is valid");
+        $assert(c_close, "output stream is closed");
+        clk.next();
+
+        $finish();
+    }
+}

@@ -1,0 +1,285 @@
+module Conv3x3 (
+    clk     : input  clock,
+    rst     : input  reset,
+    x_data  : input  logic<8>,
+    x_valid : input  logic,
+    x_ready : output logic,
+    x_close : input  logic,
+    y_data  : output logic<8>,
+    y_valid : output logic,
+    y_close : output logic,
+    y_ready : input  logic,
+) {
+    // Two eight-pixel line buffers retain the two rows preceding the row
+    // currently arriving.  The six horizontal registers plus x_data form
+    // the active 3-by-3 window.
+    var prev  : logic<8>[8];
+    var prev2 : logic<8>[8];
+
+    var top2: logic<8>;
+    var top1: logic<8>;
+    var mid2: logic<8>;
+    var mid1: logic<8>;
+    var bot2: logic<8>;
+    var bot1: logic<8>;
+
+    var row: logic<3>;
+    var col: logic<3>;
+
+    var out_valid: logic;
+    var out_close: logic;
+    var out_data : logic<8>;
+    var done     : logic;
+
+    // Old contents of the two line-buffer entries at the current column.
+    let top_pixel: logic<8> = prev2[col];
+    let mid_pixel: logic<8> = prev[col];
+
+    // Zero-extension makes every multiply/add in the convolution unsigned.
+    let top2_ext: logic<16> = {8'd0, top2};
+    let top1_ext: logic<16> = {8'd0, top1};
+    let top_ext : logic<16> = {8'd0, top_pixel};
+    let mid2_ext: logic<16> = {8'd0, mid2};
+    let mid1_ext: logic<16> = {8'd0, mid1};
+    let mid_ext : logic<16> = {8'd0, mid_pixel};
+    let bot2_ext: logic<16> = {8'd0, bot2};
+    let bot1_ext: logic<16> = {8'd0, bot1};
+    let cur_ext  : logic<16> = {8'd0, x_data};
+
+    let accumulator: logic<16> =
+        top2_ext + (top1_ext << 1) + top_ext +
+        (mid2_ext << 1) + (mid1_ext << 2) + (mid_ext << 1) +
+        bot2_ext + (bot1_ext << 1) + cur_ext;
+    let result: logic<8> = accumulator >> 4;
+
+    // One output may be held while the output is backpressured.  A new
+    // input can still be accepted on the cycle in which the held output is
+    // consumed.
+    assign x_ready = !done && (!out_valid || y_ready);
+    assign y_data  = out_data;
+    assign y_valid = out_valid;
+    assign y_close = out_close;
+
+    always_ff (clk) {
+        if_reset {
+            for i in 0..8 {
+                prev[i]  = 8'd0;
+                prev2[i] = 8'd0;
+            }
+            top2      = 8'd0;
+            top1      = 8'd0;
+            mid2      = 8'd0;
+            mid1      = 8'd0;
+            bot2      = 8'd0;
+            bot1      = 8'd0;
+            row       = 3'd0;
+            col       = 3'd0;
+            out_valid = 1'b0;
+            out_close = 1'b0;
+            out_data  = 8'd0;
+            done      = 1'b0;
+        } else {
+            // Retire the output presented during this cycle.
+            if out_valid && y_ready {
+                out_valid = 1'b0;
+                out_close = 1'b0;
+            }
+
+            if x_valid && x_ready {
+                if x_close {
+                    // The image has ended; publish the output-stream close.
+                    out_valid = 1'b1;
+                    out_close = 1'b1;
+                    out_data  = 8'd0;
+                    done      = 1'b1;
+                } else {
+                    // Rows two through five and columns two through seven
+                    // complete a 3-by-3 neighbourhood.
+                    if row >= 3'd2 && col >= 3'd2 {
+                        out_valid = 1'b1;
+                        out_close = 1'b0;
+                        out_data  = result;
+                    }
+
+                    // Read the old line-buffer values before replacing them
+                    // with the rows currently arriving.
+                    prev2[col] = prev[col];
+                    prev[col]  = x_data;
+
+                    // Horizontal histories restart at the beginning of a row.
+                    if col == 3'd0 {
+                        top2 = 8'd0;
+                        top1 = top_pixel;
+                        mid2 = 8'd0;
+                        mid1 = mid_pixel;
+                        bot2 = 8'd0;
+                        bot1 = x_data;
+                    } else {
+                        top2 = top1;
+                        top1 = top_pixel;
+                        mid2 = mid1;
+                        mid1 = mid_pixel;
+                        bot2 = bot1;
+                        bot1 = x_data;
+                    }
+
+                    if col == 3'd7 {
+                        col = 3'd0;
+                        row = row + 3'd1;
+                    } else {
+                        col = col + 3'd1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test(conv3x3_vectors)]
+module TestConv3x3 {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen(clk);
+
+    var x_data : logic<8>;
+    var x_valid: logic;
+    var x_ready: logic;
+    var x_close: logic;
+    var y_data : logic<8>;
+    var y_valid: logic;
+    var y_close: logic;
+    var y_ready: logic;
+
+    inst dut: Conv3x3 (
+        clk     : clk,
+        rst     : rst,
+        x_data  : x_data,
+        x_valid : x_valid,
+        x_ready : x_ready,
+        x_close : x_close,
+        y_data  : y_data,
+        y_valid : y_valid,
+        y_close : y_close,
+        y_ready : y_ready,
+    );
+
+    initial {
+        x_data  = 8'd0;
+        x_valid = 1'b0;
+        x_close = 1'b0;
+        y_ready = 1'b1;
+
+        rst.assert();
+        clk.next(10);
+
+        // Row 0.
+        x_valid = 1'b1;
+        x_data = 8'd0;   clk.next();
+        x_data = 8'd11;  clk.next();
+        x_data = 8'd22;  clk.next();
+        x_data = 8'd33;  clk.next();
+        x_data = 8'd44;  clk.next();
+        x_data = 8'd55;  clk.next();
+        x_data = 8'd66;  clk.next();
+        x_data = 8'd77;  clk.next();
+
+        // Row 1.
+        x_data = 8'd37;  clk.next();
+        x_data = 8'd67;  clk.next();
+        x_data = 8'd97;  clk.next();
+        x_data = 8'd127; clk.next();
+        x_data = 8'd157; clk.next();
+        x_data = 8'd187; clk.next();
+        x_data = 8'd217; clk.next();
+        x_data = 8'd114; clk.next();
+
+        // Row 2.  Its third pixel completes the first output window.
+        x_data = 8'd74;  clk.next();
+        x_data = 8'd123; clk.next();
+        x_data = 8'd172; clk.next();
+        $assert(y_valid && !y_close, "first output is valid");
+        $assert(y_data == 8'd67, "first output is 67");
+
+        // Stall once and verify that both the output and input handshake are
+        // held while the consumer is not ready.
+        y_ready = 1'b0;
+        x_data = 8'd221;
+        clk.next();
+        $assert(!x_ready, "input is backpressured by a held output");
+        $assert(y_valid && !y_close, "held output remains valid");
+        $assert(y_data == 8'd67, "held output remains 67");
+
+        y_ready = 1'b1;
+        clk.next();
+        $assert(y_valid && !y_close, "second output is valid");
+        $assert(y_data == 8'd97, "second output is 97");
+
+        x_data = 8'd137; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd118, "third output is 118");
+        x_data = 8'd186; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd132, "fourth output is 132");
+        x_data = 8'd235; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd153, "fifth output is 153");
+        x_data = 8'd151; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd158, "sixth output is 158");
+
+        // Row 3.
+        x_data = 8'd111; clk.next();
+        x_data = 8'd179; clk.next();
+        x_data = 8'd247; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd123, "seventh output is 123");
+        x_data = 8'd182; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd163, "eighth output is 163");
+        x_data = 8'd250; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd179, "ninth output is 179");
+        x_data = 8'd185; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd178, "tenth output is 178");
+        x_data = 8'd253; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd194, "eleventh output is 194");
+        x_data = 8'd188; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd201, "twelfth output is 201");
+
+        // Row 4.
+        x_data = 8'd148; clk.next();
+        x_data = 8'd235; clk.next();
+        x_data = 8'd189; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd170, "thirteenth output is 170");
+        x_data = 8'd20;  clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd189, "fourteenth output is 189");
+        x_data = 8'd230; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd183, "fifteenth output is 183");
+        x_data = 8'd61;  clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd184, "sixteenth output is 184");
+        x_data = 8'd15;  clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd178, "seventeenth output is 178");
+        x_data = 8'd225; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd180, "eighteenth output is 180");
+
+        // Row 5.
+        x_data = 8'd185; clk.next();
+        x_data = 8'd35;  clk.next();
+        x_data = 8'd8;   clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd162, "nineteenth output is 162");
+        x_data = 8'd237; clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd150, "twentieth output is 150");
+        x_data = 8'd87;  clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd146, "twenty-first output is 146");
+        x_data = 8'd60;  clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd151, "twenty-second output is 151");
+        x_data = 8'd33;  clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd115, "twenty-third output is 115");
+        x_data = 8'd6;   clk.next();
+        $assert(y_valid && !y_close && y_data == 8'd102, "twenty-fourth output is 102");
+
+        // End the input stream and check the output-stream close marker.
+        x_data  = 8'd0;
+        x_close = 1'b1;
+        clk.next();
+        $assert(y_valid && y_close, "output close marker is valid");
+        x_valid = 1'b0;
+        x_close = 1'b0;
+        clk.next();
+        $assert(!y_valid, "output stream ended");
+
+        $finish();
+    }
+}

@@ -1,0 +1,6 @@
+1795177024	1	sim --format json conv3x3.fx
+1795177098	1	check --format json conv3x3.fx
+1795177269	1	sim --format json conv3x3.fx
+1795177363	0	sim --format json conv3x3.fx
+1795177364	0	check --format json conv3x3.fx
+1795177367	0	synth --format json --top Conv3x3 conv3x3.fx
