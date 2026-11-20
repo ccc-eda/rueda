@@ -10,6 +10,7 @@ pub mod diag;
 pub mod interp;
 pub mod lexer;
 pub mod parser;
+pub mod rates;
 pub mod runtime;
 pub mod value;
 

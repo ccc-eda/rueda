@@ -84,8 +84,22 @@ fn static_check() {
     assert!(c == 1 && has(&o, "\"range\": \"300..=300\"") && has(&o, "\"min_type\": \"u9\""), "{}", o);
     let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/gemm.fx"]);
     assert!(c == 1 && o.matches("\"code\": \"E0703\"").count() == 2, "{}", o);
-    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/fir.fx"]);
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/fir4.fx"]);
     assert!(c == 0 && has(&o, "\"findings\": 0"), "{}", o);
     let (c, o) = reda(&["check", "fluxa/examples/err_overflow.fx"]);
     assert!(c == 1 && has(&o, "err_overflow.fx:3: warning[E0301] in `Mac`") && has(&o, "fix: declare it as i47"), "{}", o);
+}
+
+#[test]
+fn static_check_channels() {
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/err_deadlock.fx"]);
+    assert!(c == 1 && has(&o, "\"code\": \"E0501\"") && has(&o, "\"sent\": \"0\"") && has(&o, "\"received\": \"1\""), "{}", o);
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/err_linear.fx"]);
+    assert!(c == 1 && has(&o, "\"code\": \"E0702\"") && has(&o, "\"spawned\": \"5\""), "{}", o);
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/fir.fx"]);
+    assert!(c == 1 && has(&o, "\"code\": \"W0503\"") && has(&o, "\"sent\": \"17\""), "{}", o);
+    for ok in ["fluxa/examples/fir4.fx", "fluxa/examples/mac.fx", "fluxa/examples/basics.fx"] {
+        let (c, o) = reda(&["check", "--format", "json", ok]);
+        assert!(c == 0, "{}: {}", ok, o);
+    }
 }

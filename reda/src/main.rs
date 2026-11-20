@@ -27,7 +27,7 @@ merged into one program, like iverilog a.v b.v). A failing test makes the exit c
   --stats           per channel: tokens and the largest FIFO occupancy
   --trace           every send / recv
 examples: reda sim --vcd wave.vcd counter.veryl     reda sim fluxa/examples/fir.fx"),
-    ("check", "static checks of a Fluxa program (ranges, carry sums, divisors, indexes)", "\
+    ("check", "static checks of a Fluxa program (ranges, carry sums, channel counts, ports)", "\
 usage: reda check [--format json] FILE.fx...
 
 Interval analysis of every fn, comb fn and task, before simulation and synthesis (spec §3):
@@ -35,6 +35,12 @@ Interval analysis of every fn, comb fn and task, before simulation and synthesis
          return), or a carry accumulator's sum over the loop bound does not fit its type
   E0102  a divisor's range includes 0
   E0703  an index's range is not within the array (provisional code)
+  E0501  a channel's tokens sent and received over the run differ: a deadlock (W0503: tokens
+         left that fit in the FIFO); counts are linear in the loop bounds and in T(rx) for
+         `for v in rx`, solved over each test or network task (spec §3.4)
+  E0702  an endpoint used after it was given to a spawned task (provisional code)
+  E0401  a pipeline(ii = n) loop uses a channel or a mem port more than n times an iteration
+         (spec §3.5, one bank: a mem is a block RAM with one read and one write port)
 The analysis over-approximates: a finding means \"cannot be shown to fit\", with the range and
 the smallest type that would. Unknown ranges (generics, fixed point) are not checked. Exit code 1
 when there are findings.

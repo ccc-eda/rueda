@@ -4,6 +4,8 @@
 //!   `carry` 累加器依迴圈次數上界的終值範圍（T-CARRY，§3.3）；訊息給出需要的最小型別。
 //! - E0102：除數的範圍包含 0（T-DIV）。
 //! - E0703（暫定）：索引的範圍超出陣列。
+//! - E0501 / W0503、E0401、E0702：通道的 token 守恆、pipeline 迴圈的埠數、spawn 之後再用端點
+//!   （`rates.rs`）。
 //!
 //! 分析是保守的過度近似：範圍未知（泛型、浮點、定點數、未支援的運算）就不檢查，所以不會因為
 //! 「不知道」而報錯；報出來的是「無法證明裝得下」，不一定每次執行都會發生。條件式
@@ -56,6 +58,8 @@ pub fn check(prog: &Arc<Program>) -> Vec<Finding> {
         ck.check_carries();
         out.extend(ck.out);
     }
+    out.extend(crate::rates::rates(prog));
+    out.extend(crate::rates::ports(prog));
     out.sort_by(|a, b| (a.line, a.code, &a.msg).cmp(&(b.line, b.code, &b.msg)));
     out.dedup();
     out
