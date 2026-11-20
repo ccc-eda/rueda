@@ -1,6 +1,6 @@
-# AI 回饋介面：`reda --json` 設計筆記
+# rueda 的 AI 回饋介面（`reda --format json`）設計筆記
 
-> 分支：`aitest`。狀態：設計草案，尚未實作。
+> 分支：`aitest`。狀態：第一階段已實作（Fluxa 的 `sim` / `test` / `list` / `synth` / `fpga`），見第 5 節。
 
 ## 1. 為什麼要做
 
@@ -15,7 +15,7 @@ rueda 已經有完整的流程（Fluxa / Veryl → 模擬 → 合成 → FPGA / 
 ```mermaid
 flowchart LR
     A[Agent / LLM] -- 寫 .fx / .veryl --> S[原始碼]
-    S --> R["reda … --json"]
+    S --> R["reda … --format json"]
     R -- "diagnostics / tests / metrics" --> A
     R --> J{判官}
     J -- 模擬 vs golden model --> R
@@ -56,21 +56,21 @@ $ reda fpga --pnr veryl --bin fir4.bin fluxa/examples/fir4.fx
 
 ## 3. 設計原則
 
-1. **加旗標，不改預設**：沒有 `--json` 時輸出完全不變；`--json` 時 stdout **只有一份 JSON 文件**，其他雜訊改到 stderr。
+1. **加旗標，不改預設**：沒有 `--format json` 時輸出完全不變；有的話 stdout **只有一份 JSON 文件**。旗標不叫 `--json`，因為 `synth` / `fpga` 早就用 `--json OUT.json` 當 `-o`（yosys netlist）的別名，手冊也寫了。
 2. **一個信封，所有子命令共用**：agent 只要學一種格式。
 3. **可重現**：同樣的輸入得到同樣的 JSON（位元組層級）。耗時這類不確定的欄位放在 `timing_info`，比較時可以略過。
 4. **錯誤碼穩定**：沿用 Fluxa 規格（`fluxa/docs/Fluxa語言規格v0.1.md` §6.2）既有的 `E0xxx`；沒有規格碼的錯誤給暫定碼，並在文件中列表。§6.2 已要求每個錯誤都包含**位置、證據、可行修正**，JSON 只是把這三件事變成欄位：`file/line/col`、`data`、`notes` / `fix`。
 5. **反例是一等公民**：測試失敗時給出「第一個出錯的地方」與足以重現的資訊（時間 / 週期、訊號、期望值、實際值、波形檔）。
 6. **exit code 不變**：0 通過、1 失敗、2 參數錯誤或用盡指令數。
 
-## 4. 信封格式（`reda/1`）
+## 4. 信封格式（`rueda/1`）
 
 ```json
 {
-  "schema": "reda/1",
+  "schema": "rueda/1",
   "command": "sim",
   "lang": "fluxa",
-  "inputs": [{ "path": "fluxa/examples/err_overflow.fx", "sha256": "…" }],
+  "inputs": [{ "path": "fluxa/examples/err_overflow.fx", "bytes": 466 }],
   "ok": false,
   "exit": 1,
   "diagnostics": [
@@ -80,11 +80,11 @@ $ reda fpga --pnr veryl --bin fir4.bin fluxa/examples/fir4.fx
       "phase": "sim",
       "message": "assignment to `acc`: value 1073676289 does not fit i24",
       "file": "fluxa/examples/err_overflow.fx",
-      "line": 4, "col": 39, "end_line": 4, "end_col": 50,
+      "line": 4,
       "context": { "task": "Mac", "test": "overflow_is_caught" },
       "data": { "var": "acc", "type": "i24", "value": "1073676289",
-                "range": ["-8388608", "8388607"], "min_type": "i34" },
-      "notes": ["carry 累加器至少需要 i34（8 × 32767² = 8589410312）"]
+                "range": ["-8388608", "8388607"], "min_type": "i31" },
+      "notes": ["the value needs at least i31 (or saturate / wrap it explicitly: .sat::<T>(), .wrap::<T>())"]
     }
   ],
   "tests": [
@@ -144,34 +144,53 @@ Veryl `$assert` 失敗、gatesim 與 RTL 不一致，則用：
 
 `metrics` 的鍵名固定，讓 agent 能直接比較兩次嘗試（例如「LUT 從 125 降到 98，Fmax 不變」）。
 
-## 5. 實作方式
+## 5. 實作（第一階段）
 
-目前各工具的 `cli::main` 自己 `println!` 並呼叫 `std::process::exit`。最小侵入的做法：
+沒有照原先「全域 Report 加改寫每個 `process::exit`」的方式做，而是**讓 `reda` 自己走一條 JSON 路徑，直接呼叫各工具的函式庫**，工具的 CLI 一行都不用改：
 
-1. 新增一個小 crate（暫名 `rueda-report`，放在 `reda/report`，無外部依賴或只依賴 `serde_json`），提供：
-   - `Report`：信封的資料結構；
-   - 一個全域的 `OnceLock<Mutex<Report>>` 與 `json_mode()`，仿照現有的 `CMD.set(name)`；
-   - `report::exit(code)`：JSON 模式下先輸出 JSON 再結束。所有 `process::exit` 改呼叫它。
-2. 各工具在印出人讀訊息的同一處，**也**呼叫 `report::diag(...)` / `report::test(...)` / `report::metric(...)`。人讀輸出在 JSON 模式下改到 stderr。
-3. `FxError` 加上 `code: Option<&'static str>` 與 `end_col`；執行期錯誤（`runtime.rs`、`interp.rs`）帶上錯誤碼與欄位。
-4. `reda` 解析並移除 `--json`，設定 JSON 模式後再分派給子命令。
+| 檔案 | 內容 |
+|---|---|
+| `reda/src/json.rs` | 無依賴的 JSON 值與輸出器（物件保持插入順序，所以同樣的結果印出同樣的位元組）。沒有引入 `serde_json`。 |
+| `reda/src/agent.rs` | `--format json` 的所有子命令：解析參數、呼叫 `fluxa::load_many` / `run_test`、`fluxa_synth::synthesize`、`eda::fpga::ice40::map`，組成信封。 |
+| `reda/src/main.rs` | 取出 `--format json`（或 `--format=json`）後交給 `agent::run`。 |
+| `fluxa/sim/src/lib.rs` | `TestResult` 多了 `failure: Option<Failure>`：錯誤碼、檔名、行號、任務、訊息、死結時被卡住的任務。原本的 `message` 字串不變。 |
+| `fluxa/sim/src/runtime.rs` | 記下第一個執行期錯誤的（行號，任務，訊息）與死結的任務清單；兩處重複的死結報告合成 `declare_deadlock`。 |
+| `fluxa/sim/src/diag.rs` | 執行期錯誤訊息 → 錯誤碼的對照表。 |
+| `reda/tests/format_json.rs` | 驗收測試。 |
 
-先做的範圍：**Fluxa 的 `sim` 與 `fpga`（iCE40）**。這兩條就足夠讓 agent 跑完「寫 → 測 → 合成 → 看資源」。Veryl 與 ASIC 隨後跟上。
+細節：
+
+- 模擬用協作式排程（`coop`），測試裡 `print` 的輸出收進 `tests[].output`，不會混進 JSON。
+- 語法錯誤、`line N: error[E0412]: …` 這類文字訊息，由 `agent.rs` 拆出檔名、行號與錯誤碼。
+- E0301 的 `min_type` 是**由觀察到的那個值推出的下界**：`err_overflow.fx` 第一次溢位的值是 32767²，所以報 i31；把 8 次累加都裝下其實要 i34。要給出真正的需求，得靠合成時的區間分析（之後）。
+- 目前不支援的情況（Veryl、ASIC、`--bin` / `--asc` 等輸出旗標、`--arch ecp5`）一律回一份信封，`exit: 2`，訊息說明尚未支援。
+- `fpga` 的 metrics 停在 LUT 對應之後；佈局繞線與時序之後再加，信封裡會有一筆 `severity: note` 說明。
+
+### 錯誤碼歸類的取捨
+
+執行期錯誤在模擬器裡是 `RtErr::Msg(行號, 字串)`，到處都有產生點。第一階段用 `diag.rs` 依訊息片段歸類，改動最小；代價是訊息措辭一改就要同步改表，所以由測試鎖住。之後應該把錯誤碼放進 `RtErr` 本身，在產生點就決定。
+
+### 還沒做
+
+- 欄位（col）：執行期錯誤目前只有行號，要讓 AST 節點帶欄位。
+- Veryl 的 `sim` / `synth` / `fpga`，以及 `asic`、`gatesim`。
+- `fpga` 的佈局繞線與時序 metrics（需要 IceStorm chipdb：`VERYL_EDA_CHIPDB`）。
+- Fluxa `--stats` 的每條通道統計放進 `metrics`。
 
 ## 6. MCP 外層
 
-做完 `--json` 後，加一個很薄的 MCP server，讓 Claude Code 這類 agent 直接呼叫：
+做完 `--format json` 後，加一個很薄的 MCP server，讓 Claude Code 這類 agent 直接呼叫：
 
 - 工具：`reda_sim`、`reda_list`、`reda_synth`、`reda_fpga`、`reda_gatesim`；參數就是檔案與旗標，回傳就是信封。
 - 形式有兩個選擇（待定）：
   - `reda mcp` 子命令：stdio 上的 JSON-RPC，單一執行檔，部署最簡單；
-  - `tools/` 下的 Node 腳本：呼叫 `reda --json`，跟 Rust 核心解耦。
+  - `tools/` 下的 Node 腳本：呼叫 `reda --format json`，跟 Rust 核心解耦。
 
 ## 7. 驗收
 
 - `fluxa/examples/err_*.fx` 每一個都恰好產生一筆 diagnostic，錯誤碼與位置正確；
-- `fir.fx`、`fir4.fx` 的 `--json` 輸出跑兩次逐位元組相同（扣掉 `timing_info`）；
-- 不加 `--json` 時，`./test.sh` 的結果與現在一致；
+- `err_deadlock.fx`、`fir4.fx` 的輸出跑兩次逐位元組相同（扣掉 `timing_info`）；
+- 不加 `--format json` 時，既有的測試結果不變；
 - 一個小腳本：故意改壞 `fir.fx`，讓 agent 只看 JSON 把它修好，記錄迭代次數。
 
 ## 8. 之後：判官（第 2 步）
@@ -182,6 +201,5 @@ Veryl `$assert` 失敗、gatesim 與 RTL 不一致，則用：
 
 ## 9. 待決定
 
-- 規格沒有涵蓋的執行期錯誤要不要正式編碼？暫定：E0701 執行期 deadlock、E0702 通道端點所有權（`err_linear.fx`）。要併入規格 §6.2 的表，還是另開 `docs/note/error-codes.md`？
+- 規格沒有涵蓋的執行期錯誤要不要正式編碼？暫定：E0701 執行期 deadlock、E0702 通道端點所有權（`err_linear.fx`）、E0703 索引越界。要併入規格 §6.2 的表，還是另開 `docs/note/error-codes.md`？
 - MCP 用 `reda mcp`（Rust）還是 Node 腳本？
-- 是否引入 `serde_json`（目前 workspace 的依賴很少）？

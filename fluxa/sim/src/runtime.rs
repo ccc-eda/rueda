@@ -66,7 +66,11 @@ pub struct World {
     pub waiting: HashMap<usize, String>,
     pub task_names: HashMap<usize, String>,
     pub error: Option<String>,
+    /// `error` 的結構化版本：(行號，任務名稱，訊息)，給 `reda --format json`
+    pub error_at: Option<(u32, String, String)>,
     pub deadlock_report: Option<String>,
+    /// 死結時被卡住的任務：(名稱，編號，原因)，依名稱、編號排序
+    pub deadlock_tasks: Vec<(String, usize, String)>,
     pub seq: u64,
 }
 
@@ -75,6 +79,22 @@ impl World {
         self.epoch += 1;
         self.blocked = 0;
         self.seq += 1;
+    }
+
+    /// 宣告死結：記下每個被卡住的任務與報告
+    fn declare_deadlock(&mut self) {
+        let mut tasks: Vec<(String, usize, String)> = self
+            .waiting
+            .iter()
+            .map(|(t, r)| (self.task_names.get(t).cloned().unwrap_or_default(), *t, r.clone()))
+            .collect();
+        tasks.sort();
+        let lines: Vec<String> =
+            tasks.iter().map(|(n, t, r)| format!("  task `{}` (#{}) is blocked: {}", n, t, r)).collect();
+        self.deadlock_report =
+            Some(format!("deadlock: all {} live task(s) are blocked\n{}", self.live, lines.join("\n")));
+        self.deadlock_tasks = tasks;
+        self.deadlock = true;
     }
 }
 
@@ -228,20 +248,7 @@ impl Shared {
             w.blocked += 1;
             let my_epoch = w.epoch;
             if w.blocked >= w.live {
-                w.deadlock = true;
-                let mut lines: Vec<String> = w
-                    .waiting
-                    .iter()
-                    .map(|(t, r)| {
-                        format!("  task `{}` (#{}) is blocked: {}", w.task_names.get(t).cloned().unwrap_or_default(), t, r)
-                    })
-                    .collect();
-                lines.sort();
-                w.deadlock_report = Some(format!(
-                    "deadlock: all {} live task(s) are blocked\n{}",
-                    w.live,
-                    lines.join("\n")
-                ));
+                w.declare_deadlock();
                 drop(w);
                 self.cv.notify_all();
                 return Err(RtErr::Deadlock);
@@ -292,6 +299,7 @@ impl Shared {
                     "{}: runtime error in task `{}`: {}",
                     self.program.loc(line), name, m
                 ));
+                w.error_at = Some((line, name, m));
             }
             w.shutdown = true;
             w.bump();
@@ -333,20 +341,7 @@ impl Shared {
                     // 已宣告死結，而 main 仍未結束（不應發生）
                     return Err(RtErr::Deadlock);
                 }
-                let mut lines: Vec<String> = w
-                    .waiting
-                    .iter()
-                    .map(|(t, r)| {
-                        format!("  task `{}` (#{}) is blocked: {}", w.task_names.get(t).cloned().unwrap_or_default(), t, r)
-                    })
-                    .collect();
-                lines.sort();
-                w.deadlock_report = Some(format!(
-                    "deadlock: all {} live task(s) are blocked\n{}",
-                    w.live,
-                    lines.join("\n")
-                ));
-                w.deadlock = true;
+                w.declare_deadlock();
             }
         }
     }

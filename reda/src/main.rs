@@ -3,6 +3,9 @@
 //! files' extension), Veryl synthesis and the FPGA / ASIC flows (eda), the WebAssembly
 //! emulator compiler, the RISC-V C compiler and the RV64 board emulator.
 
+mod agent;
+mod json;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// (name, one-line summary, help text)
@@ -172,6 +175,7 @@ fn help(cmd: Option<&str>) -> ! {
             println!("usage: reda <subcommand> [options] FILE...\n");
             for (n, s, _) in COMMANDS { println!("  {:9} {}", n, s); }
             println!("\n'reda help <subcommand>' (or 'reda <subcommand> -h') shows its options.");
+            println!("--format json (Fluxa sim, test, list, synth, fpga so far): the result as one JSON document, for AI agents.");
             println!("examples: reda sim counter.veryl     reda sim fir.fx     reda fpga --pnr veryl --pcf pins.pcf --bin top.bin top.veryl");
             if cmd.is_some() { std::process::exit(2); }
         }
@@ -184,6 +188,12 @@ fn main() {
     let Some(cmd) = args.first().map(|s| s.as_str()) else { help(None) };
     let rest: Vec<String> = args[1..].to_vec();
     if rest.iter().any(|a| a == "-h" || a == "--help") { help(Some(cmd)); }
+    // --format json: the result as one JSON document (schema rueda/1), for AI agents and scripts
+    // (not --json: synth / fpga already take --json OUT.json, the yosys netlist)
+    if let Some((rest, fmt)) = agent::take_format(&rest) {
+        if fmt != "json" { eprintln!("reda: --format is json, not '{}'", fmt); std::process::exit(2); }
+        std::process::exit(agent::run(cmd, &rest));
+    }
     // argument errors in the tools point back to `reda help <subcommand>`
     let name: &'static str = COMMANDS.iter().find(|x| x.0 == cmd).map(|x| x.0).unwrap_or("help");
     let _ = veryl_sim::cli::CMD.set(name);

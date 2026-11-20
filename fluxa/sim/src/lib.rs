@@ -5,6 +5,7 @@
 
 pub mod ast;
 pub mod cli;
+pub mod diag;
 pub mod interp;
 pub mod lexer;
 pub mod parser;
@@ -36,6 +37,23 @@ pub struct TestResult {
     pub stats: String,
     /// 協作式排程時 `print` / `--trace` 的輸出（原生排程直接印出，這裡是空的）
     pub output: String,
+    /// 失敗的結構化描述（`message` 的機器可讀版本，給 `reda --format json`）
+    pub failure: Option<Failure>,
+}
+
+/// 一個測試的失敗：執行期錯誤或死結
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
+    /// 錯誤碼（`diag::code`），規格未涵蓋的錯誤為 `None`
+    pub code: Option<&'static str>,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    /// 出錯的任務（test 主體是 `test`）
+    pub task: Option<String>,
+    /// 不含位置的訊息
+    pub msg: String,
+    /// 死結時被卡住的任務：(名稱，編號，原因)
+    pub blocked: Vec<(String, usize, String)>,
 }
 
 /// 解析單一檔案並求值編譯期常數
@@ -98,9 +116,24 @@ pub fn run_test(prog: &Arc<Program>, t: &TestDecl, opts: &Options) -> TestResult
     sh.finish_test();
     sh.join_all();
     let secs = start.secs();
-    let (child_err, deadlock) = {
+    let (child_err, child_at, deadlock, blocked) = {
         let w = sh.lock();
-        (w.error.clone(), w.deadlock_report.clone())
+        (w.error.clone(), w.error_at.clone(), w.deadlock_report.clone(), w.deadlock_tasks.clone())
+    };
+    let at = |line: u32, task: String, msg: String| {
+        let (file, line) = prog.file_line(line);
+        Failure { code: diag::code(&msg), file: Some(file), line: Some(line), task: Some(task), msg, blocked: vec![] }
+    };
+    let stuck = || {
+        let msg = deadlock.clone().unwrap_or_default().lines().next().unwrap_or("deadlock").to_string();
+        Failure { code: Some(diag::DEADLOCK), file: None, line: None, task: None, msg, blocked: blocked.clone() }
+    };
+    let child = || child_at.clone().map(|(l, t, m)| at(l, t, m));
+    let failure_at: Option<Failure> = match &r {
+        Ok(_) | Err(RtErr::Ret(_)) => child(),
+        Err(RtErr::Msg(l, m)) => Some(at(*l, "test".to_string(), m.clone())),
+        Err(RtErr::Deadlock) => Some(stuck()),
+        Err(RtErr::Shutdown) => child().or_else(|| deadlock.as_ref().map(|_| stuck())),
     };
     let failure: Option<String> = match r {
         Ok(_) | Err(RtErr::Ret(_)) => child_err,
@@ -115,6 +148,7 @@ pub fn run_test(prog: &Arc<Program>, t: &TestDecl, opts: &Options) -> TestResult
         secs,
         stats: if opts.stats { sh.stats_report() } else { String::new() },
         output: sh.take_output(),
+        failure: failure_at,
     }
 }
 

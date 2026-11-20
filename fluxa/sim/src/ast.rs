@@ -242,6 +242,12 @@ impl Program {
         format!("{}:{}", name, line % FILE_STRIDE)
     }
 
+    /// `loc` 的兩個部分：(檔名，檔內行號)
+    pub fn file_line(&self, line: u32) -> (String, u32) {
+        let idx = (line / FILE_STRIDE) as usize;
+        (self.files.get(idx).cloned().unwrap_or_else(|| "?".to_string()), line % FILE_STRIDE)
+    }
+
     /// 併入另一個檔案（像 `iverilog a.v b.v`）；函式名稱不可重複
     pub fn merge(&mut self, other: Program) -> Result<(), String> {
         self.files.extend(other.files);
