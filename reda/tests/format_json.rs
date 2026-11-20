@@ -74,3 +74,18 @@ fn errors_and_unsupported() {
     let (c, _) = reda(&["sim", "--format", "xml", "fluxa/examples/fir.fx"]);
     assert_eq!(c, 2);
 }
+
+#[test]
+fn static_check() {
+    // T-CARRY before simulation: the bound of `len: u16` makes the need i47 (the simulator only saw i31)
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/err_overflow.fx"]);
+    assert!(c == 1 && has(&o, "\"phase\": \"check\"") && has(&o, "\"code\": \"E0301\"") && has(&o, "\"min_type\": \"i47\"") && has(&o, "\"line\": 3"), "{}", o);
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/err_narrow.fx"]);
+    assert!(c == 1 && has(&o, "\"range\": \"300..=300\"") && has(&o, "\"min_type\": \"u9\""), "{}", o);
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/gemm.fx"]);
+    assert!(c == 1 && o.matches("\"code\": \"E0703\"").count() == 2, "{}", o);
+    let (c, o) = reda(&["check", "--format", "json", "fluxa/examples/fir.fx"]);
+    assert!(c == 0 && has(&o, "\"findings\": 0"), "{}", o);
+    let (c, o) = reda(&["check", "fluxa/examples/err_overflow.fx"]);
+    assert!(c == 1 && has(&o, "err_overflow.fx:3: warning[E0301] in `Mac`") && has(&o, "fix: declare it as i47"), "{}", o);
+}

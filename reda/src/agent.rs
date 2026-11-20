@@ -76,13 +76,13 @@ pub fn run(cmd: &str, args: &[String]) -> i32 {
     let mut r = Report::new(cmd);
     let fx = args.iter().any(|a| a.ends_with(".fx"));
     let code = match cmd {
-        "sim" | "test" | "list" | "synth" | "fpga" if fx => {
+        "sim" | "test" | "list" | "synth" | "fpga" | "check" if fx => {
             r.lang = Some("fluxa");
             fluxa(&mut r, cmd, args)
         }
         _ => {
             let what = if fx || !matches!(cmd, "sim" | "test" | "list" | "synth" | "fpga") { format!("reda {}", cmd) } else { format!("reda {} on Veryl files", cmd) };
-            r.error("args", &format!("{} --format json is not supported yet (so far: Fluxa .fx files with sim, test, list, synth, fpga)", what));
+            r.error("args", &format!("{} --format json is not supported yet (so far: Fluxa .fx files with sim, test, list, check, synth, fpga)", what));
             2
         }
     };
@@ -157,6 +157,7 @@ fn fluxa(r: &mut Report, cmd: &str, args: &[String]) -> i32 {
             0
         }
         "sim" | "test" => fx_sim(r, &prog, &a),
+        "check" => fx_check(r, &prog),
         _ => fx_synth(r, &prog, &a, cmd == "fpga"),
     };
     r.secs = start.elapsed().as_secs_f64();
@@ -232,6 +233,43 @@ fn overflow(msg: &str) -> Option<(J, String)> {
     let need = (1..=127u32).find(|&b| if signed { vn >= -(1i128 << (b - 1)) && vn < (1i128 << (b - 1)) && lon >= -(1i128 << (b - 1)) } else { vn < (1i128 << b) })?;
     let t = format!("{}{}", if signed { "i" } else { "u" }, need);
     Some((data.with("min_type", t.as_str()), format!("the value needs at least {} (or saturate / wrap it explicitly: .sat::<T>(), .wrap::<T>())", t)))
+}
+
+/// the static checks (fluxa::check): a diagnostic each; exit 1 when there is any
+fn fx_check(r: &mut Report, prog: &Arc<fluxa::ast::Program>) -> i32 {
+    let fs = fluxa::check::check(prog);
+    for f in &fs { r.diag(finding(prog, f)); }
+    r.metrics = J::obj().with("findings", fs.len());
+    if fs.is_empty() { 0 } else { 1 }
+}
+
+fn finding(prog: &fluxa::ast::Program, f: &fluxa::check::Finding) -> J {
+    let (file, line) = prog.file_line(f.line);
+    let mut d = J::obj().with("code", f.code).with("severity", "warning").with("phase", "check").with("message", &f.msg)
+        .with("file", file).with("line", line).with("context", J::obj().with("function", &f.func));
+    let mut data = J::Obj(f.data.iter().map(|(k, v)| (k.clone(), J::from(v))).collect());
+    if let Some(t) = &f.min_type { data.set("min_type", t); }
+    d.set("data", data);
+    if let Some(x) = &f.fix { d.set("notes", vec![x.as_str()]); }
+    d
+}
+
+/// `reda check FILE.fx...` without --format: one line per finding, like a compiler
+pub fn check_text(args: &[String]) -> i32 {
+    let files: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if files.is_empty() || files.iter().any(|f| !f.ends_with(".fx")) { eprintln!("reda check: Fluxa (.fx) files (reda help check)"); return 2; }
+    let mut srcs = vec![];
+    for f in &files {
+        match std::fs::read_to_string(f) { Ok(t) => srcs.push((f.to_string(), t)), Err(e) => { eprintln!("reda check: cannot read {}: {}", f, e); return 2; } }
+    }
+    let prog = match fluxa::load_many(&srcs) { Ok(p) => p, Err(e) => { eprintln!("{}", e); return 2; } };
+    let fs = fluxa::check::check(&prog);
+    for f in &fs {
+        println!("{}: warning[{}] in `{}`: {}", prog.loc(f.line), f.code, f.func, f.msg);
+        if let Some(x) = &f.fix { println!("    fix: {}", x); }
+    }
+    println!("{} finding(s)", fs.len());
+    if fs.is_empty() { 0 } else { 1 }
 }
 
 fn fx_synth(r: &mut Report, prog: &Arc<fluxa::ast::Program>, a: &FxArgs, fpga: bool) -> i32 {

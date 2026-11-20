@@ -27,6 +27,18 @@ merged into one program, like iverilog a.v b.v). A failing test makes the exit c
   --stats           per channel: tokens and the largest FIFO occupancy
   --trace           every send / recv
 examples: reda sim --vcd wave.vcd counter.veryl     reda sim fluxa/examples/fir.fx"),
+    ("check", "static checks of a Fluxa program (ranges, carry sums, divisors, indexes)", "\
+usage: reda check [--format json] FILE.fx...
+
+Interval analysis of every fn, comb fn and task, before simulation and synthesis (spec §3):
+  E0301  a value's range does not fit where it lands (let x: T, assignment, send, argument,
+         return), or a carry accumulator's sum over the loop bound does not fit its type
+  E0102  a divisor's range includes 0
+  E0703  an index's range is not within the array (provisional code)
+The analysis over-approximates: a finding means \"cannot be shown to fit\", with the range and
+the smallest type that would. Unknown ranges (generics, fixed point) are not checked. Exit code 1
+when there are findings.
+example: reda check fluxa/examples/err_overflow.fx"),
     ("list", "list the modules (and which are #[test])", "\
 usage: reda list FILE.veryl...|FILE.fx...
 
@@ -175,7 +187,7 @@ fn help(cmd: Option<&str>) -> ! {
             println!("usage: reda <subcommand> [options] FILE...\n");
             for (n, s, _) in COMMANDS { println!("  {:9} {}", n, s); }
             println!("\n'reda help <subcommand>' (or 'reda <subcommand> -h') shows its options.");
-            println!("--format json (Fluxa sim, test, list, synth, fpga so far): the result as one JSON document, for AI agents.");
+            println!("--format json (Fluxa sim, test, list, check, synth, fpga so far): the result as one JSON document, for AI agents.");
             println!("examples: reda sim counter.veryl     reda sim fir.fx     reda fpga --pnr veryl --pcf pins.pcf --bin top.bin top.veryl");
             if cmd.is_some() { std::process::exit(2); }
         }
@@ -234,6 +246,7 @@ fn main() {
             Lang::Veryl => veryl_emu::cli::main(&rest),
             Lang::Fluxa => fluxa_emu::cli::main(&rest),
         },
+        "check" => std::process::exit(agent::check_text(&rest)),
         "cc" => rvtools::cli::cc(&rest),
         "rvemu" => riscv_emu::cli::main(&rest),
         "board" => eda::cli::board(&rest),
