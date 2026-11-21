@@ -1,0 +1,9 @@
+{
+  "id": "20261121-083224-book",
+  "graph": "book",
+  "task": "Fluxa 程式設計：用 Kahn 通道寫硬體——從行為模擬、位寬推導、靜態檢查到 FPGA 合成，以及 AI 時代的硬體開發\n\nThe book should have about 12 chapters.\nWrite the whole book in 繁體中文.\nTarget audience: 會寫程式、想學硬體設計的學生與工程師.\nStyle / format requirements: @/private/tmp/claude-502/-Users-Shared-ccc-project-rueda/8466f906-f1df-4a29-ad8b-4e9895fb6b43/scratchpad/bookstyle.md",
+  "started": "2026-11-21 08:32:24",
+  "status": "failed",
+  "finished": "2026-11-21 08:59:59",
+  "error": "minimax:MiniMax-M3.1-Flash HTTP 429: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)\",\"http_code\":\"429\"},\"request_id\":\"07501f0e1bbe026db3a6e47b7fac88ec\"}\n"
+}

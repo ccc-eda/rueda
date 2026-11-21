@@ -1,0 +1,8 @@
+{
+  "id": "20261121-091332-book",
+  "graph": "book",
+  "task": "Fluxa 程式設計：用 Kahn 通道寫硬體——從行為模擬、位寬推導、靜態檢查到 FPGA 合成，以及 AI 時代的硬體開發。內容必須以這些檔案為準,先讀再寫,不可發明語言功能: fluxa/docs/Fluxa語言規格v1.0.md(權威規格,§14 尚未實作只能當未來介紹)、fluxa/docs/std.md、fluxa/docs/ai-bench.md、fluxa/examples/*.fx。程式範例只用規格 v1.0 已實作功能,盡量用 reda sim 驗證。每章附練習題。\n\nThe book should have about 12 chapters.\nWrite the whole book in 繁體中文.",
+  "started": "2026-11-21 09:13:32",
+  "status": "dry-run",
+  "finished": "2026-11-21 09:13:32"
+}
