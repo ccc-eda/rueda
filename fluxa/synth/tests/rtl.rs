@@ -1,5 +1,6 @@
-//! The RTL backend's expressions: they are compiled and run (iverilog), and the values must be
-//! the ones the simulator computes. The test is skipped when iverilog is not installed.
+//! The RTL backend: its expressions are compiled and run (iverilog), and the values must be the
+//! ones the simulator computes; its modules are run too, and the tokens they send must be the
+//! ones the program computes. The tests are skipped when iverilog is not installed.
 
 use std::process::Command;
 
@@ -54,4 +55,137 @@ fn the_expressions_compute_the_values_the_simulator_computes() {
     check("wrap", "8'(16'd300)", 8, 44);
     // a fixed-point value: 3.375 is raw 864 with 8 fraction bits
     check("fixed", "16'(16'sd864 >>> 6)", 16, 13); // 864 >> 6 = 13 (3.375 >> 2 fraction bits: 13/4 = 3.25)
+}
+
+// ------------------------------------------------------------ the modules
+
+/// a channel of a testbench: the port prefix and the width of its data
+struct Port {
+    name: &'static str,
+    width: usize,
+}
+
+/// the RTL of the task `top` of the program `src`
+fn rtl_of(src: &str, top: &str) -> String {
+    let prog = fluxa::load_many(&[("test.fx".to_string(), src.to_string())]).unwrap();
+    let prog = std::sync::Arc::new(prog);
+    fluxa_synth::rtl(&prog, top, &Default::default()).unwrap()
+}
+
+/// the tokens the module sends: the module is compiled and run (iverilog), the values are sent
+/// to `input` and the tokens on `output` are collected. None when iverilog is not installed.
+fn tokens(module: &str, sv: &str, inputs: &[Port], output: Option<Port>, scalars: &[(String, usize, u128)], values: &[Vec<u128>], close: bool) -> Option<Vec<u128>> {
+    let dir = std::env::temp_dir().join(format!("fluxa-rtl-mod-{}-{}", std::process::id(), module));
+    std::fs::create_dir_all(&dir).ok()?;
+    let svf = dir.join("m.sv");
+    let tbf = dir.join("tb.sv");
+    std::fs::write(&svf, sv).ok()?;
+    let mut decls = vec!["  logic clk = 0;".to_string(), "  logic rst = 1;".to_string(), "  always #5 clk = ~clk;".to_string()];
+    let mut conns = vec![".clk(clk)".to_string(), ".rst(rst)".to_string()];
+    for p in inputs {
+        decls.push(format!("  logic [{}:0] {}_data;", p.width - 1, p.name));
+        decls.push(format!("  logic {}_close, {}_valid;", p.name, p.name));
+        decls.push(format!("  wire {}_ready;", p.name));
+        conns.push(format!(".{}_data({}_data)", p.name, p.name));
+        conns.push(format!(".{}_close({}_close)", p.name, p.name));
+        conns.push(format!(".{}_valid({}_valid)", p.name, p.name));
+        conns.push(format!(".{}_ready({}_ready)", p.name, p.name));
+    }
+    if let Some(ref p) = output {
+        decls.push(format!("  logic {}_ready = 1;", p.name));
+        decls.push(format!("  wire [{}:0] {}_data;", p.width - 1, p.name));
+        decls.push(format!("  wire {}_close, {}_valid;", p.name, p.name));
+        conns.push(format!(".{}_ready({}_ready)", p.name, p.name));
+        conns.push(format!(".{}_data({}_data)", p.name, p.name));
+        conns.push(format!(".{}_close({}_close)", p.name, p.name));
+        conns.push(format!(".{}_valid({}_valid)", p.name, p.name));
+    }
+    for (n, w, v) in scalars {
+        decls.push(format!("  logic [{}:0] {} = {}'d{};", w - 1, n, w, v));
+        conns.push(format!(".{}({})", n, n));
+    }
+    let mut tb = format!("module tb;\n{}\n  {} u({});\n", decls.join("\n"), module, conns.join(", "));
+    if let Some(ref p) = output {
+        tb += &format!("  always @(posedge clk) if ({}_valid && {}_ready && !{}_close) $display(\"TOK %d\", {}_data);\n", p.name, p.name, p.name, p.name);
+    }
+    for (k, p) in inputs.iter().enumerate() {
+        let vals: Vec<u128> = values.get(k).cloned().unwrap_or_default();
+        // the values the channel sends
+        tb += &format!("  function automatic [{}:0] val{}(input integer i);\n    case (i)\n", p.width - 1, k);
+        for (i, v) in vals.iter().enumerate() {
+            tb += &format!("      {}: val{} = {}'d{};\n", i, k, p.width, v);
+        }
+        tb += &format!("      default: val{} = '0;\n    endcase\n  endfunction\n", k);
+        // the driver: the next token when the task has taken the last one (a task that takes a
+        // token every clock, a pipeline, sees one token per clock)
+        tb += &format!("  initial begin\n    integer i = 0;\n    {}_data = 0; {}_valid = 0; {}_close = 0;\n    @(negedge clk);\n    rst = 0;\n    {}_data = val{}(0); {}_valid = 1;\n    forever begin\n      @(posedge clk);\n      if ({}_ready) begin\n        i = i + 1;\n        if (i < {}) begin\n          {}_data = val{}(i);\n        end else begin\n          {}_valid = 0;\n", p.name, p.name, p.name, p.name, k, p.name, p.name, vals.len(), p.name, k, p.name);
+        if close {
+            tb += &format!("          {}_close = 1; {}_valid = 1;\n", p.name, p.name);
+        }
+        tb += &format!("        end\n      end\n    end\n  end\n");
+    }
+    tb += "  initial begin\n    @(negedge clk);\n    rst = 0;\n    repeat (400) @(posedge clk);\n    $finish;\n  end\nendmodule\n";
+    std::fs::write(&tbf, &tb).ok()?;
+    let out = dir.join("a.out");
+    let c = match Command::new("iverilog").arg("-g2012").arg("-o").arg(&out).arg(&svf).arg(&tbf).output() {
+        Ok(c) => c,
+        Err(_) => return None, // iverilog is not installed
+    };
+    assert!(c.status.success(), "iverilog failed on the module `{}`:\n{}\n{}", module, String::from_utf8_lossy(&c.stderr), tb);
+    let v = Command::new("vvp").arg(&out).output().ok()?;
+    let s = String::from_utf8_lossy(&v.stdout);
+    let mut toks = vec![];
+    for l in s.lines() {
+        if let Some(rest) = l.strip_prefix("TOK ") { toks.push(rest.trim().parse::<u128>().unwrap_or_else(|_| panic!("a token that is not a number: {}", l))); }
+    }
+    Some(toks)
+}
+
+/// the tasks of `fanout.fx`: a stream that is doubled, one that is summed up, one that counts
+const FANOUT: &str = include_str!("../../examples/fanout.fx");
+
+#[test]
+fn the_modules_send_the_tokens_the_program_computes() {
+    // Double: every token twice
+    let sv = rtl_of(FANOUT, "Double");
+    let Some(toks) = tokens("Double", &sv, &[Port { name: "rx", width: 8 }], Some(Port { name: "out", width: 9 }), &[], &[vec![1, 2, 3]], true) else {
+        eprintln!("iverilog is not available, skipped");
+        return;
+    };
+    assert_eq!(toks, vec![2, 4, 6], "Double sent {:?}", toks);
+
+    // Total: the sum of the tokens
+    let sv = rtl_of(FANOUT, "Total");
+    let Some(toks) = tokens("Total", &sv, &[Port { name: "rx", width: 8 }], Some(Port { name: "out", width: 16 }), &[], &[vec![1, 2, 3]], true) else {
+        eprintln!("iverilog is not available, skipped");
+        return;
+    };
+    assert_eq!(toks, vec![6], "Total sent {:?}", toks);
+
+    // Gen: the numbers from 0 to n
+    let sv = rtl_of(FANOUT, "Gen");
+    let Some(toks) = tokens("Gen", &sv, &[], Some(Port { name: "out", width: 8 }), &[("n".to_string(), 32, 4)], &[], false) else {
+        eprintln!("iverilog is not available, skipped");
+        return;
+    };
+    assert_eq!(toks, vec![0, 1, 2, 3], "Gen sent {:?}", toks);
+}
+
+/// the tasks of `mac.fx`: a pipeline loop that multiplies and adds up
+const MAC: &str = include_str!("../../examples/mac.fx");
+
+#[test]
+fn the_pipeline_loop_computes_the_same_sum() {
+    let sv = rtl_of(MAC, "Mac");
+    let xs = [3i64, -4, 5, 32767, -32768, 7, 0, 100];
+    let ys = [2i64, 9, -1, 32767, -32768, 7, 5, -100];
+    // the tokens go as they are (the negative ones in two's complement)
+    let a: Vec<u128> = xs.iter().map(|x| (*x as u16) as u128).collect();
+    let b: Vec<u128> = ys.iter().map(|y| (*y as u16) as u128).collect();
+    let want = xs.iter().zip(ys.iter()).map(|(x, y)| x * y).sum::<i64>() as u64 as u128;
+    let Some(toks) = tokens("Mac", &sv, &[Port { name: "a", width: 16 }, Port { name: "b", width: 16 }], Some(Port { name: "out", width: 48 }), &[("len".to_string(), 16, 8)], &[a, b], true) else {
+        eprintln!("iverilog is not available, skipped");
+        return;
+    };
+    assert_eq!(toks, vec![want], "Mac sent {:?}", toks);
 }

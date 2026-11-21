@@ -36,6 +36,18 @@ pub struct Synth {
 /// parameters fixed to constants (`--param`, a spawn's arguments): integers, booleans, arrays, tuples
 pub type Params = HashMap<String, fluxa::value::Value>;
 
+/// the RTL of task `top` as SystemVerilog: the same lowering as the gates, printed as a module
+/// (a leaf task: the ports are its channels and its other parameters)
+pub fn rtl(prog: &Arc<Program>, top: &str, params: &Params) -> Result<String, String> {
+    let decl = prog.fns.get(top).ok_or_else(|| format!("no task `{}`", top))?.clone();
+    if decl.kind != FnKind::Task { return Err(format!("`{}` is not a task", top)); }
+    let prog = &specialize(prog, &decl, params)?;
+    if graph::is_graph(&decl) { return Err("the RTL of a task that builds a network comes with the network (v1.1, M1.3)".into()); }
+    let consts: std::collections::HashSet<String> = prog.consts.read().unwrap().keys().cloned().collect();
+    let cfg = lower::lower(&decl, &consts)?;
+    rtl::task_module(prog, &decl, &cfg, params)
+}
+
 /// synthesize task `top` of `prog`; `params` fixes parameters (else they are inputs)
 pub fn synthesize(prog: &Arc<Program>, top: &str, params: &Params) -> Result<Synth, String> {
     let decl = prog.fns.get(top).ok_or_else(|| format!("no task `{}`", top))?.clone();

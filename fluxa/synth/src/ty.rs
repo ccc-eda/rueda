@@ -85,6 +85,15 @@ impl Rng {
     pub fn konst(n: i128) -> Rng { Rng::int(n, n) }
     pub fn fixed(lo: i128, hi: i128, frac: u32) -> Rng { Rng { lo, hi, frac, boolean: false } }
     pub fn signed(&self) -> bool { self.lo < 0 }
+    /// the type a value of this range has
+    pub fn ty(&self) -> Ty {
+        if self.boolean { return Ty::Bool; }
+        if self.frac > 0 {
+            let w = self.width().max(self.frac as usize);
+            return Ty::Fixed { i: (w - self.frac as usize) as u32, f: self.frac, round: Round::Trunc, ovf: Ovf::Wrap };
+        }
+        Ty::Int { lo: self.lo, hi: self.hi }
+    }
     /// the bits the range needs
     pub fn width(&self) -> usize { int_bits(self.lo, self.hi) as usize }
     /// the value scaled to `f` fraction bits (the raw integer shifted left, saturating)

@@ -16,6 +16,7 @@ fn usage() -> ! {
 pub fn main(all: Vec<String>) {
     let (opts, rest) = eda::flow::Opts::parse(&all).unwrap_or_else(|e| { eprintln!("{}", e); usage() });
     let (mut top, mut list, mut gatesim) = (None::<String>, false, None::<String>);
+    let mut rtl = None::<String>;
     let mut params: Vec<(String, String)> = vec![];
     let mut files = vec![];
     let mut a = rest.into_iter();
@@ -29,6 +30,7 @@ pub fn main(all: Vec<String>) {
                 params.push((k.to_string(), v.to_string()));
             }
             "--gatesim" => gatesim = Some(a.next().unwrap_or_else(|| usage())),
+            "--rtl" => rtl = Some(a.next().unwrap_or_else(|| usage())),
             "-h" | "--help" => usage(),
             o if o.starts_with('-') && o.len() > 1 => { eprintln!("unknown option {}", o); usage() }
             _ => files.push(x),
@@ -56,6 +58,12 @@ pub fn main(all: Vec<String>) {
     }
     let params = ps;
     let top = top.or_else(|| crate::default_top(&prog)).unwrap_or_else(|| { eprintln!("no task to synthesize"); std::process::exit(1) });
+    // the readable RTL view: the module as SystemVerilog
+    if let Some(file) = rtl {
+        let text = crate::rtl(&prog, &top, &params).unwrap_or_else(|e| { eprintln!("the RTL of '{}': {}", top, e); std::process::exit(1) });
+        std::fs::write(&file, text).unwrap_or_else(|e| { eprintln!("{}: {}", file, e); std::process::exit(1) });
+        return;
+    }
     opts.apply().unwrap_or_else(|e| { eprintln!("{}", e); std::process::exit(2) });
     let s = crate::synthesize(&prog, &top, &params).unwrap_or_else(|e| { eprintln!("synthesis error in '{}': {}", top, e); std::process::exit(1) });
     eda::flow::run(s.netlist, s.warnings, &top, &opts);

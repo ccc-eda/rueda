@@ -871,7 +871,7 @@ pub fn base(n: &str) -> &str { n.split(['.', '~']).next().unwrap_or(n) }
 
 // ---------------------------------------------------------------- the circuit
 
-struct Chan { ty: Ty, out: bool }
+pub struct Chan { pub ty: Ty, pub out: bool }
 
 /// a memory read port: address, word read
 /// a memory read: the state doing it, the address
@@ -880,7 +880,22 @@ type MemRead = (Bit, Vec<Bit>);
 type MemWrite = (Bit, Vec<Bit>, Vec<Bit>);
 
 /// the task `decl` lowered to `cfg` as a netlist; `params` fixes parameters to constants
-pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &crate::Params) -> R<crate::Synth> {
+/// the task's parameters, channels and memories in hardware
+pub struct Hw {
+    /// the parameters: (the name in the program, the unique name, the kind)
+    pub params: Vec<(String, String, ParamHw)>,
+    /// the channels by their unique name
+    pub chans: HashMap<String, Chan>,
+    /// the memories by their unique name: (the word type, the number of words)
+    pub mems: HashMap<String, (Ty, usize)>,
+    /// the parameters that load a memory's words at run time: (the parameter's name, the memory)
+    pub mem_loads: Vec<(String, String, Ty)>,
+    pub warnings: Vec<String>,
+}
+
+/// the task's parameters in hardware: a channel a stream port, anything else an input (or a
+/// constant given with `--param`)
+pub fn hw_params(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &crate::Params) -> R<Hw> {
     let mut warnings = vec![];
     let mut gen = Gen::new(prog);
     let mut hw = vec![];
@@ -912,9 +927,8 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         _ => None,
     }).collect();
 
-    // the memories: word type and size; initial words: a constant's bits, or loaded at run time
+    // the memories: word type and size; the initial words: a constant's bits, or loaded at run time
     let mut mems: HashMap<String, (Ty, usize)> = HashMap::new();
-    let mut mem_init: HashMap<String, Vec<Bit>> = HashMap::new();
     let mut mem_loads: Vec<(String, String, Ty)> = vec![];
     for (m, t, n, from) in &cfg.mems {
         let mt = gen.ty(&TypeExpr::Mem(Box::new(t.clone()), Box::new(n.clone())), decl.line)?;
@@ -926,10 +940,7 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         let Some(h) = hw.iter_mut().find(|x| &x.1 == p) else { continue };
         let pname = h.0.clone();
         match &h.2 {
-            ParamHw::Scalar(_, Some(v)) => {
-                let bits = crate::hw::value_bits(v, &mt).ok_or_else(|| format!("{}: memory `{}`: parameter `{}` is not a {:?}", prog.loc(decl.line), base(m), pname, mt))?;
-                mem_init.insert(m.clone(), bits.into_iter().map(Bit::of).collect());
-            }
+            ParamHw::Scalar(_, Some(_)) => {}
             ParamHw::Scalar(_, None) | ParamHw::MemInit(_) => {
                 h.2 = ParamHw::MemInit(mt.clone());
                 mem_loads.push((pname.clone(), m.clone(), mt.clone()));
@@ -939,23 +950,27 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         }
     }
     warnings.extend(cfg.warnings.iter().cloned());
+    Ok(Hw { params: hw, chans, mems, mem_loads, warnings })
+}
 
-    // the type pass: the widths of the variables, untyped ones widened until nothing grows
+/// the variables' types: the widths of their registers. The type pass: an untyped variable
+/// widens with every assignment, until nothing grows.
+pub fn types(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, hw: &[(String, String, ParamHw)], chans: &HashMap<String, Chan>, mems: &HashMap<String, (Ty, usize)>) -> R<(HashMap<String, Ty>, HashSet<String>)> {
     let mut vars: HashMap<String, Ty> = HashMap::new();
     let mut untyped: HashSet<String> = Default::default();
     for round in 0.. {
         let mut t = Gen::new(prog);
         t.vars = vars.clone();
         t.untyped = untyped.clone();
-        temps(&mut t, cfg, &chans, &mems, &hw)?;
+        temps(&mut t, cfg, chans, mems, hw)?;
         for b in &cfg.blocks {
-            t.env = scratch_env(&mut t, &hw);
+            t.env = scratch_env(&mut t, hw);
             if let Term::Pipe { head, cond, recvs, .. } = &b.term {
-                for (dst, ch) in head.iter().chain(recvs) { term_values(&mut t, &Term::Recv { dst: dst.clone(), ch: ch.clone(), closed: None, next: 0 }, &chans, &mems)?; }
+                for (dst, ch) in head.iter().chain(recvs) { term_values(&mut t, &Term::Recv { dst: dst.clone(), ch: ch.clone(), closed: None, next: 0 }, chans, mems)?; }
                 if let Some(c) = cond { t.eval(c)?; }
             }
             t.stmts(&b.stmts)?;
-            term_values(&mut t, &b.term, &chans, &mems)?;
+            term_values(&mut t, &b.term, chans, mems)?;
         }
         if !t.grew { vars = t.vars; untyped = t.untyped; break; }
         if round == 12 {
@@ -965,6 +980,27 @@ pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: 
         vars = t.vars;
         untyped = t.untyped;
     }
+    Ok((vars, untyped))
+}
+
+/// a task `decl` lowered to `cfg` as a netlist; `params` fixes parameters to constants
+pub fn build(prog: &Arc<fluxa::ast::Program>, decl: &FnDecl, cfg: &Cfg, params: &crate::Params) -> R<crate::Synth> {
+    let Hw { params: hw, chans, mems, mem_loads, warnings } = hw_params(prog, decl, cfg, params)?;
+
+    // a memory's initial words (a constant's bits, folded into the gates)
+    let mut mem_init: HashMap<String, Vec<Bit>> = HashMap::new();
+    for (m, _t, _n, from) in &cfg.mems {
+        let Some(p) = from else { continue };
+        let Some(h) = hw.iter().find(|x| &x.1 == p) else { continue };
+        let ParamHw::Scalar(_, Some(v)) = &h.2 else { continue };
+        let Some((wt, n)) = mems.get(m) else { continue };
+        let mt = Ty::Array(Box::new(wt.clone()), *n);
+        let bits = crate::hw::value_bits(v, &mt).ok_or_else(|| format!("{}: memory `{}`: parameter `{}` is not a {:?}", prog.loc(decl.line), base(m), h.0, mt))?;
+        mem_init.insert(m.clone(), bits.into_iter().map(Bit::of).collect());
+    }
+
+    // the type pass: the widths of the variables, untyped ones widened until nothing grows
+    let (vars, untyped) = types(prog, decl, cfg, &hw, &chans, &mems)?;
 
     // the circuit
     let mut g = Gen::new(prog);
