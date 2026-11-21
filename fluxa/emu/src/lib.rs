@@ -114,6 +114,12 @@ impl Builder {
                 match (&prm.ty, a) {
                     (TypeExpr::Chan(t, _), Arg::Chan(c)) => {
                         let rt = block_on(it.eval_type(t)).map_err(|e| format!("{}: {:?}", task, e))?;
+                        // the channel's element type must be the parameter's: the simulator and the
+                        // synthesizer refuse a mismatch (the FIFO would silently truncate)
+                        let have = &net.chans[*c].elem;
+                        if !fluxa::value::same_type(have, &rt) {
+                            return Err(format!("{}: argument `{}` of `{}`: the channel `{}` carries {}, the parameter is chan<{}>", task, prm.name, task, net.chans[*c].name, have, rt));
+                        }
                         let ty = match Ty::of_rt(&rt) { Ok(t) => t, Err(_) => chan_ty[*c].clone().ok_or_else(|| format!("{}: channel `{}` needs a type", task, prm.name))? };
                         if chan_ty[*c].is_none() { chan_ty[*c] = Some(ty.clone()); }
                         let out = fluxa_synth::dir_of(&decl, &prm.name) == Some(true);
@@ -289,6 +295,8 @@ impl HwProvider for Provider {
                         Some(t @ TypeExpr::Chan(e, _)) => (block_on(it.eval_type(e)).unwrap_or(RtType::Any), elab::param_depth(&mut it, t)),
                         _ => (RtType::Any, 2),
                     };
+                    // the parameter's type (the channel's own type is not known here: the
+                    // simulator checks the two agree before handing a task to the hardware)
                     let c = net.chan(n, rt, depth);
                     if matches!(v, Value::Rx(_)) { ins.push((n.clone(), c as u32)); } else { outs.push((n.clone(), c as u32)); }
                     a.push((n.clone(), Arg::Chan(c)));

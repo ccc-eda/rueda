@@ -908,6 +908,29 @@ impl Interp {
             for (g, v) in decl.generics.iter().zip(&gvals) {
                 if g.is_const { ordered.push((g.name.clone(), v.clone())); }
             }
+            // the channel of a parameter must carry its element type: the interpreted task checks
+            // it when it binds the parameters, the hardware one never binds them (so it is checked
+            // here, at the call, for both)
+            for prm in &decl.params {
+                let v = match ordered.iter().find(|(n, _)| *n == prm.name).map(|(_, v)| v) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let (Value::Rx(c) | Value::Tx(c)) = v else { continue };
+                let t = match self.eval_type(&prm.ty).await {
+                    Ok(t) => t,
+                    // a type in the task's own generics (the hardware is built for their values)
+                    Err(_) => continue,
+                };
+                let want = match t {
+                    crate::value::RtType::Chan(w, _) => w,
+                    _ => continue,
+                };
+                let (have, name) = { let w = self.sh.lock(); (w.chans[*c].elem.clone(), w.chans[*c].name.clone()) };
+                if !crate::value::same_type(&have, &want) {
+                    return self.err(format!("argument `{}` of `{}`: the channel `{}` carries {}, the parameter is chan<{}>", prm.name, decl.name, name, have, want));
+                }
+            }
             if let Some(r) = p.start(&decl.name, &ordered) {
                 let hw = r.map_err(|m| self.me(m))?;
                 let ins = ordered.iter().filter_map(|(_, v)| if let Value::Rx(c) = v { Some(*c) } else { None }).collect();

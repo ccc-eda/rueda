@@ -1124,9 +1124,13 @@ impl<'p> Em<'p> {
     }
 
     fn part_ty(&self, name: &str, path: &[Step], line: u32) -> R<Ty> {
+        // the simulator's rule: the variable's type is declared (`let x: T`, `carry`, a parameter),
+        // not inferred from what is assigned (`let x = a + b`, `for v in rx`)
+        let need = || format!("{}: wrapping operators need a typed variable on the left; use `.wrap::<T>()` otherwise", self.here(line));
+        if self.untyped.contains(name) { return Err(need()); }
         let mut t = match self.vars.get(name).cloned() {
             Some(t) => t,
-            None => match self.env.get(name) { Some(v) => self.ev_ty(v), None => return Err(format!("{}: wrapping operators need a typed variable on the left", self.here(line))) },
+            None => match self.env.get(name) { Some(v) => self.ev_ty(v), None => return Err(need()) },
         };
         for s in path {
             t = match (t, s) {
