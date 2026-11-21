@@ -1055,6 +1055,9 @@ pub fn task_module(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &crate
     let nst = cfg.blocks.len();
     let sw = eda::netlist::bits_for(nst).max(1);
     let mut states: Vec<Vec<String>> = vec![];
+    // the source line of every block (the comment in the RTL)
+    let mut lines_of: Vec<u32> = vec![];
+    let mut last_line = 0u32;
 
     for b in &cfg.blocks {
         let mut r = Rtl::new(prog, vars.clone());
@@ -1118,6 +1121,11 @@ pub fn task_module(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &crate
             if text == *rn { continue; }
             lines.push(format!("        if ({}) {}_next = {}'({});", go, rn, t.width().max(1), text));
         }
+        // the block's place in the program: the line of the statement it comes from (a block
+        // with no statement of its own continues the previous one)
+        let line = b.stmts.first().map(|s| s.line).unwrap_or(last_line);
+        if line > 0 { last_line = line; }
+        lines_of.push(line);
         states.push(lines);
     }
 
@@ -1183,11 +1191,12 @@ pub fn task_module(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &crate
     }
     out.push("    case (state)".into());
     for (s, lines) in states.iter().enumerate() {
+        // the state of the block, and where it is in the program
+        if lines_of[s] > 0 { out.push(format!("      // the block at line {}", lines_of[s])); }
         out.push(format!("      {}'d{}: begin", sw, s));
         for l in lines { out.push(l.clone()); }
         out.push("      end".into());
-    }
-    out.push("    endcase".into());
+    }    out.push("    endcase".into());
     out.push("  end".into());
     out.push("".into());
 
