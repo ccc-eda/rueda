@@ -1059,8 +1059,8 @@ pub fn task_module(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &crate
     for b in &cfg.blocks {
         let mut r = Rtl::new(prog, vars.clone());
         // the environment: the registers and the parameters
-        for (n, rn, t) in &regs { r.env.insert(n.clone(), RV::S(mk(rn.clone(), rng_of(t)))); }
-        for (u, pn, t) in &scalars { r.env.insert(u.clone(), RV::S(mk(pn.clone(), rng_of(t)))); }
+        for (n, rn, t) in &regs { r.env.insert(n.clone(), reg_value(rn, t)); }
+        for (u, pn, t) in &scalars { r.env.insert(u.clone(), reg_value(pn, t)); }
         for (u, v) in &consts { r.env.insert(u.clone(), v.clone()); }
         let mut lines: Vec<String> = vec![];
 
@@ -1071,7 +1071,7 @@ pub fn task_module(prog: &Arc<Program>, decl: &FnDecl, cfg: &Cfg, params: &crate
             for (dst, ch) in head.iter().chain(recvs) {
                 let Some((p, _, t)) = chans.get(ch) else { continue };
                 let dt = vars.get(dst).cloned().unwrap_or(t.clone());
-                let v = RV::S(mk(format!("{}_data", p), rng_of(t)));
+                let v = reg_value(&format!("{}_data", p), t);
                 let v = r.fit_rv(&v, &dt)?;
                 r.env.insert(dst.clone(), v);
             }
@@ -1232,6 +1232,28 @@ struct Ctx<'a> {
     pipe: Option<&'a Pipe>,
 }
 
+/// a register's value: a scalar is the register itself, an array (or a tuple) its elements (the
+/// register holds them one after the other, the first element in the low bits)
+fn reg_value(rn: &str, t: &Ty) -> RV {
+    match t {
+        Ty::Array(e, n) => {
+            let w = e.width().max(1);
+            RV::A((0..*n).map(|i| reg_value(&format!("{}'(({}) >> {})", w, rn, i * w), e)).collect())
+        }
+        Ty::Tuple(ts) => {
+            let mut at = 0;
+            let mut out = vec![];
+            for e in ts {
+                let w = e.width().max(1);
+                out.push(reg_value(&format!("{}'(({}) >> {})", w, rn, at), e));
+                at += w;
+            }
+            RV::A(out)
+        }
+        _ => RV::S(mk(rn.to_string(), rng_of(t))),
+    }
+}
+
 /// the terminator of a block: the handshake it does and the condition under which the state
 /// moves on (the gates' `go`)
 fn term(b: &crate::lower::Bb, r: &mut Rtl, lines: &mut Vec<String>, c: &Ctx) -> R<String> {
@@ -1268,7 +1290,7 @@ fn term(b: &crate::lower::Bb, r: &mut Rtl, lines: &mut Vec<String>, c: &Ctx) -> 
             lines.push(format!("        {}_closed_set = {} && {} && !{};", p, valid, close, cl));
             // the token's value: the channel's data
             let dt = r.vars.get(dst).cloned().unwrap_or(t.clone());
-            let v = RV::S(mk(format!("{}_data", p), rng_of(t)));
+            let v = reg_value(&format!("{}_data", p), t);
             let v = r.fit_rv(&v, &dt)?;
             r.env.insert(dst.clone(), v);
             Ok(fire)
@@ -1358,9 +1380,10 @@ fn term(b: &crate::lower::Bb, r: &mut Rtl, lines: &mut Vec<String>, c: &Ctx) -> 
 /// flag). The same as the gates' FIFO (`graph.rs`): the push side takes a token when there is
 /// room, the pop side gives one when there is one.
 pub fn fifo_module() -> String {
-    let mut out: Vec<String> = vec![];
-    out.push("// the FIFO between two instances: a queue of DEPTH tokens of W data bits".into());
-    out.push("module FluxaFifo #(parameter int W = 8, parameter int DEPTH = 2) (".into());
+    let mut out: Vec<String> = vec![
+        "// the FIFO between two instances: a queue of DEPTH tokens of W data bits".into(),
+        "module FluxaFifo #(parameter int W = 8, parameter int DEPTH = 2) (".into(),
+    ];
     out.push("  input  logic clk,".into());
     out.push("  input  logic rst,".into());
     out.push("  // the push side: a token goes in".into());

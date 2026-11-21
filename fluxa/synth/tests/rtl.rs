@@ -196,7 +196,6 @@ fn the_pipeline_loop_computes_the_same_sum() {
 
 /// the tasks of `pipeline.fx`: a network (a task that spawns) with a broadcast in it
 const PIPELINE: &str = include_str!("../../examples/pipeline.fx");
-
 #[test]
 fn the_network_computes_the_same_stream() {
     let sv = rtl_of(PIPELINE, "Pipeline");
@@ -211,4 +210,46 @@ fn the_network_computes_the_same_stream() {
     let want: Vec<u128> = xs.iter().map(|x| ((*x as i32 * 3 + 3) as u16 as u128) & 0x7ff).collect();
     assert_eq!(toks[0], want, "Pipeline sent {:?}", toks[0]);
     assert_eq!(toks[1], vec![xs.len() as u128], "Pipeline counted {:?}", toks[1]);
+}
+
+/// the examples of the project: every task of every example must become valid SystemVerilog
+#[test]
+fn every_example_becomes_valid_systemverilog() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    let mut files: Vec<std::path::PathBuf> = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().map(|x| x == "fx").unwrap_or(false)).collect(),
+        Err(e) => { eprintln!("the examples: {}", e); return; }
+    };
+    files.sort();
+    assert!(!files.is_empty(), "no examples in {}", dir.display());
+    let mut checked = 0;
+    for f in &files {
+        let name = f.file_name().unwrap().to_string_lossy().to_string();
+        // the examples that show an error are not hardware
+        if name.starts_with("err_") { continue; }
+        let src = std::fs::read_to_string(f).unwrap();
+        let Ok(prog) = fluxa::load_many(&[(name.clone(), src.clone())]) else { continue };
+        let prog = std::sync::Arc::new(prog);
+        for t in fluxa_synth::tasks(&prog) {
+            // what the gates cannot build, the RTL does not have to build either
+            if fluxa_synth::synthesize(&prog, &t, &Default::default()).is_err() { continue; }
+            let text = match fluxa_synth::rtl(&prog, &t, &Default::default()) {
+                Ok(x) => x,
+                Err(e) => panic!("{}: the RTL of `{}`: {}", name, t, e),
+            };
+            // the modules must compile
+            let dir2 = std::env::temp_dir().join(format!("fluxa-rtl-ex-{}-{}", std::process::id(), t));
+            std::fs::create_dir_all(&dir2).unwrap();
+            let svf = dir2.join("m.sv");
+            std::fs::write(&svf, &text).unwrap();
+            let out = dir2.join("a.out");
+            let c = match Command::new("iverilog").arg("-g2012").arg("-o").arg(&out).arg("-s").arg(&t).arg(&svf).output() {
+                Ok(c) => c,
+                Err(_) => { eprintln!("iverilog is not available, skipped"); return; }
+            };
+            assert!(c.status.success(), "{}: the RTL of `{}` does not compile:\n{}\n{}", name, t, String::from_utf8_lossy(&c.stderr), text);
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no task was checked");
 }
