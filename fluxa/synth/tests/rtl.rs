@@ -74,7 +74,7 @@ fn rtl_of(src: &str, top: &str) -> String {
 
 /// the tokens the module sends: the module is compiled and run (iverilog), the values are sent
 /// to `input` and the tokens on `output` are collected. None when iverilog is not installed.
-fn tokens(module: &str, sv: &str, inputs: &[Port], output: Option<Port>, scalars: &[(String, usize, u128)], values: &[Vec<u128>], close: bool) -> Option<Vec<u128>> {
+fn tokens(module: &str, sv: &str, inputs: &[Port], outputs: &[Port], scalars: &[(String, usize, u128)], values: &[Vec<u128>], close: bool) -> Option<Vec<Vec<u128>>> {
     let dir = std::env::temp_dir().join(format!("fluxa-rtl-mod-{}-{}", std::process::id(), module));
     std::fs::create_dir_all(&dir).ok()?;
     let svf = dir.join("m.sv");
@@ -91,7 +91,7 @@ fn tokens(module: &str, sv: &str, inputs: &[Port], output: Option<Port>, scalars
         conns.push(format!(".{}_valid({}_valid)", p.name, p.name));
         conns.push(format!(".{}_ready({}_ready)", p.name, p.name));
     }
-    if let Some(ref p) = output {
+    for p in outputs {
         decls.push(format!("  logic {}_ready = 1;", p.name));
         decls.push(format!("  wire [{}:0] {}_data;", p.width - 1, p.name));
         decls.push(format!("  wire {}_close, {}_valid;", p.name, p.name));
@@ -105,8 +105,8 @@ fn tokens(module: &str, sv: &str, inputs: &[Port], output: Option<Port>, scalars
         conns.push(format!(".{}({})", n, n));
     }
     let mut tb = format!("module tb;\n{}\n  {} u({});\n", decls.join("\n"), module, conns.join(", "));
-    if let Some(ref p) = output {
-        tb += &format!("  always @(posedge clk) if ({}_valid && {}_ready && !{}_close) $display(\"TOK %d\", {}_data);\n", p.name, p.name, p.name, p.name);
+    for p in outputs {
+        tb += &format!("  always @(posedge clk) if ({}_valid && {}_ready && !{}_close) $display(\"TOK {} %d\", {}_data);\n", p.name, p.name, p.name, p.name, p.name);
     }
     for (k, p) in inputs.iter().enumerate() {
         let vals: Vec<u128> = values.get(k).cloned().unwrap_or_default();
@@ -134,9 +134,13 @@ fn tokens(module: &str, sv: &str, inputs: &[Port], output: Option<Port>, scalars
     assert!(c.status.success(), "iverilog failed on the module `{}`:\n{}\n{}", module, String::from_utf8_lossy(&c.stderr), tb);
     let v = Command::new("vvp").arg(&out).output().ok()?;
     let s = String::from_utf8_lossy(&v.stdout);
-    let mut toks = vec![];
+    // the tokens, by the output they came from
+    let mut toks: Vec<Vec<u128>> = vec![vec![]; outputs.len()];
     for l in s.lines() {
-        if let Some(rest) = l.strip_prefix("TOK ") { toks.push(rest.trim().parse::<u128>().unwrap_or_else(|_| panic!("a token that is not a number: {}", l))); }
+        let Some(rest) = l.strip_prefix("TOK ") else { continue };
+        let (name, v) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+        let k = outputs.iter().position(|p| p.name == name).unwrap_or(0);
+        toks[k].push(v.trim().parse::<u128>().unwrap_or_else(|_| panic!("a token that is not a number: {}", l)));
     }
     Some(toks)
 }
@@ -148,27 +152,27 @@ const FANOUT: &str = include_str!("../../examples/fanout.fx");
 fn the_modules_send_the_tokens_the_program_computes() {
     // Double: every token twice
     let sv = rtl_of(FANOUT, "Double");
-    let Some(toks) = tokens("Double", &sv, &[Port { name: "rx", width: 8 }], Some(Port { name: "out", width: 9 }), &[], &[vec![1, 2, 3]], true) else {
+    let Some(toks) = tokens("Double", &sv, &[Port { name: "rx", width: 8 }], &[Port { name: "out", width: 9 }], &[], &[vec![1, 2, 3]], true) else {
         eprintln!("iverilog is not available, skipped");
         return;
     };
-    assert_eq!(toks, vec![2, 4, 6], "Double sent {:?}", toks);
+    assert_eq!(toks[0], vec![2, 4, 6], "Double sent {:?}", toks[0]);
 
     // Total: the sum of the tokens
     let sv = rtl_of(FANOUT, "Total");
-    let Some(toks) = tokens("Total", &sv, &[Port { name: "rx", width: 8 }], Some(Port { name: "out", width: 16 }), &[], &[vec![1, 2, 3]], true) else {
+    let Some(toks) = tokens("Total", &sv, &[Port { name: "rx", width: 8 }], &[Port { name: "out", width: 16 }], &[], &[vec![1, 2, 3]], true) else {
         eprintln!("iverilog is not available, skipped");
         return;
     };
-    assert_eq!(toks, vec![6], "Total sent {:?}", toks);
+    assert_eq!(toks[0], vec![6], "Total sent {:?}", toks[0]);
 
     // Gen: the numbers from 0 to n
     let sv = rtl_of(FANOUT, "Gen");
-    let Some(toks) = tokens("Gen", &sv, &[], Some(Port { name: "out", width: 8 }), &[("n".to_string(), 32, 4)], &[], false) else {
+    let Some(toks) = tokens("Gen", &sv, &[], &[Port { name: "out", width: 8 }], &[("n".to_string(), 32, 4)], &[], false) else {
         eprintln!("iverilog is not available, skipped");
         return;
     };
-    assert_eq!(toks, vec![0, 1, 2, 3], "Gen sent {:?}", toks);
+    assert_eq!(toks[0], vec![0, 1, 2, 3], "Gen sent {:?}", toks[0]);
 }
 
 /// the tasks of `mac.fx`: a pipeline loop that multiplies and adds up
@@ -183,9 +187,28 @@ fn the_pipeline_loop_computes_the_same_sum() {
     let a: Vec<u128> = xs.iter().map(|x| (*x as u16) as u128).collect();
     let b: Vec<u128> = ys.iter().map(|y| (*y as u16) as u128).collect();
     let want = xs.iter().zip(ys.iter()).map(|(x, y)| x * y).sum::<i64>() as u64 as u128;
-    let Some(toks) = tokens("Mac", &sv, &[Port { name: "a", width: 16 }, Port { name: "b", width: 16 }], Some(Port { name: "out", width: 48 }), &[("len".to_string(), 16, 8)], &[a, b], true) else {
+    let Some(toks) = tokens("Mac", &sv, &[Port { name: "a", width: 16 }, Port { name: "b", width: 16 }], &[Port { name: "out", width: 48 }], &[("len".to_string(), 16, 8)], &[a, b], true) else {
         eprintln!("iverilog is not available, skipped");
         return;
     };
-    assert_eq!(toks, vec![want], "Mac sent {:?}", toks);
+    assert_eq!(toks[0], vec![want], "Mac sent {:?}", toks[0]);
+}
+
+/// the tasks of `pipeline.fx`: a network (a task that spawns) with a broadcast in it
+const PIPELINE: &str = include_str!("../../examples/pipeline.fx");
+
+#[test]
+fn the_network_computes_the_same_stream() {
+    let sv = rtl_of(PIPELINE, "Pipeline");
+    // the values: the tokens go through the stages (x * 3 + 3) and are counted (n)
+    let xs = [5i64, -7, 0, 42, -128, 127];
+    let a: Vec<u128> = xs.iter().map(|x| (*x as u8) as u128).collect();
+    let Some(toks) = tokens("Pipeline", &sv, &[Port { name: "x", width: 8 }], &[Port { name: "y", width: 11 }, Port { name: "n", width: 8 }], &[], &[a], true) else {
+        eprintln!("iverilog is not available, skipped");
+        return;
+    };
+    // the stream: every value times three, plus three (the port is 11 bits wide)
+    let want: Vec<u128> = xs.iter().map(|x| ((*x as i32 * 3 + 3) as u16 as u128) & 0x7ff).collect();
+    assert_eq!(toks[0], want, "Pipeline sent {:?}", toks[0]);
+    assert_eq!(toks[1], vec![xs.len() as u128], "Pipeline counted {:?}", toks[1]);
 }

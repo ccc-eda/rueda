@@ -1354,6 +1354,185 @@ fn term(b: &crate::lower::Bb, r: &mut Rtl, lines: &mut Vec<String>, c: &Ctx) -> 
     }
 }
 
+/// the FIFO between two instances: a queue of `DEPTH` tokens of `W` data bits (and the close
+/// flag). The same as the gates' FIFO (`graph.rs`): the push side takes a token when there is
+/// room, the pop side gives one when there is one.
+pub fn fifo_module() -> String {
+    let mut out: Vec<String> = vec![];
+    out.push("// the FIFO between two instances: a queue of DEPTH tokens of W data bits".into());
+    out.push("module FluxaFifo #(parameter int W = 8, parameter int DEPTH = 2) (".into());
+    out.push("  input  logic clk,".into());
+    out.push("  input  logic rst,".into());
+    out.push("  // the push side: a token goes in".into());
+    out.push("  input  logic [W-1:0] push_data,".into());
+    out.push("  input  logic push_close,".into());
+    out.push("  input  logic push_valid,".into());
+    out.push("  output logic push_ready,".into());
+    out.push("  // the pop side: a token comes out".into());
+    out.push("  output logic [W-1:0] pop_data,".into());
+    out.push("  output logic pop_close,".into());
+    out.push("  output logic pop_valid,".into());
+    out.push("  input  logic pop_ready".into());
+    out.push(");".into());
+    out.push("  localparam int IW = (DEPTH <= 1) ? 1 : $clog2(DEPTH);".into());
+    out.push("  localparam int CW = (DEPTH <= 1) ? 1 : $clog2(DEPTH + 1);".into());
+    out.push("  logic [W:0] entries [0:DEPTH-1];".into());
+    out.push("  logic [IW-1:0] wr, rd;".into());
+    out.push("  logic [CW-1:0] cnt;".into());
+    out.push("  logic push, pop;".into());
+    out.push("".into());
+    out.push("  always_comb begin".into());
+    out.push("    push_ready = (cnt != DEPTH);".into());
+    out.push("    pop_valid = (cnt != 0);".into());
+    out.push("    push = push_valid && push_ready;".into());
+    out.push("    pop = pop_ready && pop_valid;".into());
+    out.push("  end".into());
+    out.push("".into());
+    out.push("  always_ff @(posedge clk) begin".into());
+    out.push("    if (rst) begin".into());
+    out.push("      wr <= '0;".into());
+    out.push("      rd <= '0;".into());
+    out.push("      cnt <= '0;".into());
+    out.push("    end else begin".into());
+    out.push("      if (push) begin".into());
+    out.push("        entries[wr] <= {push_data, push_close};".into());
+    out.push("        wr <= (wr == DEPTH - 1) ? '0 : wr + 1'b1;".into());
+    out.push("      end".into());
+    out.push("      if (pop) rd <= (rd == DEPTH - 1) ? '0 : rd + 1'b1;".into());
+    out.push("      if (push && !pop) cnt <= cnt + 1'b1;".into());
+    out.push("      else if (pop && !push) cnt <= cnt - 1'b1;".into());
+    out.push("    end".into());
+    out.push("  end".into());
+    out.push("".into());
+    out.push("  assign pop_data = entries[rd][W:1];".into());
+    out.push("  assign pop_close = entries[rd][0];".into());
+    out.push("endmodule".into());
+    out.join("\n") + "\n"
+}
+
+/// the RTL of a task that builds a network: the top module, the instances' modules and the FIFO
+pub fn network_module(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) -> R<String> {
+    let net = crate::graph::elaborate(prog, decl, params)?;
+    let mut out = vec![fifo_module()];
+    // the instances' modules
+    for inst in &net.insts {
+        let text = match &inst.src {
+            Some(src) => {
+                let p2 = Arc::new(fluxa::load_many(&[("broadcast.fx".into(), src.clone())])?);
+                let d = p2.fns.get("Broadcast").ok_or("the broadcast has no task")?.clone();
+                let consts: std::collections::HashSet<String> = p2.consts.read().unwrap().keys().cloned().collect();
+                let cfg = crate::lower::lower(&d, &consts)?;
+                task_module(&p2, &d, &cfg, &crate::Params::default())?
+            }
+            None => {
+                let d = prog.fns.get(&inst.name).ok_or_else(|| format!("no task `{}`", inst.name))?;
+                let consts: std::collections::HashSet<String> = prog.consts.read().unwrap().keys().cloned().collect();
+                let cfg = crate::lower::lower(d, &consts)?;
+                task_module(prog, d, &cfg, &inst.params)?
+            }
+        };
+        out.push(text);
+    }
+    out.push(top_module(decl, &net)?);
+    Ok(out.join("\n"))
+}
+
+/// the top module of a network: the instances, the FIFOs between them and the task's own ports
+fn top_module(decl: &FnDecl, net: &crate::graph::Net) -> R<String> {
+    let mut out = vec![];
+    // the ports
+    let mut ports = vec!["  input  logic clk".to_string(), "  input  logic rst".to_string()];
+    for (name, t) in &net.iface.ins {
+        ports.push(format!("  input  logic [{}:0] {}_data", t.width().max(1) - 1, name));
+        ports.push(format!("  input  logic {}_close", name));
+        ports.push(format!("  input  logic {}_valid", name));
+        ports.push(format!("  output logic {}_ready", name));
+    }
+    for (name, t) in &net.iface.outs {
+        ports.push(format!("  input  logic {}_ready", name));
+        ports.push(format!("  output logic [{}:0] {}_data", t.width().max(1) - 1, name));
+        ports.push(format!("  output logic {}_close", name));
+        ports.push(format!("  output logic {}_valid", name));
+    }
+    // the array parameters the network passes on: the input ports
+    for (n, t, _) in &net.passed {
+        if !net.insts.iter().any(|i| i.passes.iter().any(|(_, j)| &net.passed[*j].0 == n)) { continue; }
+        let w = Ty::of_rt(t).map(|t| t.width()).unwrap_or(1);
+        ports.push(format!("  input  logic [{}:0] {}", w.max(1) - 1, n));
+    }
+    out.push(format!("// {}: the RTL of the network `{}` (generated by the Fluxa synthesizer)", decl.name, decl.name));
+    out.push(format!("module {} (", ident(&decl.name)));
+    out.push(ports.join(",\n"));
+    out.push(");".into());
+    out.push("".into());
+
+    // the channels between two instances: a FIFO each
+    let mut fifo_push: HashMap<usize, (String, usize, usize)> = HashMap::new();
+    for (c, (_cname, _, depth)) in net.chans.iter().enumerate() {
+        let (Some(crate::graph::End::Inst(..)), Some(crate::graph::End::Inst(..))) = (net.producer.get(&c), net.consumer.get(&c)) else { continue };
+        let w = chan_width(net, c)?;
+        out.push(format!("  // the channel {}: a FIFO of {} tokens of {} bits", c, depth, w));
+        out.push(format!("  logic [{}:0] push{}_data;", w.max(1) - 1, c));
+        out.push(format!("  logic push{}_close, push{}_valid, push{}_ready;", c, c, c));
+        out.push(format!("  logic [{}:0] pop{}_data;", w.max(1) - 1, c));
+        out.push(format!("  logic pop{}_close, pop{}_valid, pop{}_ready;", c, c, c));
+        out.push(format!("  FluxaFifo #(.W({}), .DEPTH({})) fifo{} (", w.max(1), depth, c));
+        out.push("    .clk(clk), .rst(rst),".into());
+        out.push(format!("    .push_data(push{}_data), .push_close(push{}_close), .push_valid(push{}_valid), .push_ready(push{}_ready),", c, c, c, c));
+        out.push(format!("    .pop_data(pop{}_data), .pop_close(pop{}_close), .pop_valid(pop{}_valid), .pop_ready(pop{}_ready)", c, c, c, c));
+        out.push("  );".into());
+        fifo_push.insert(c, (format!("fifo{}", c), w, *depth));
+    }
+    out.push("".into());
+
+    // the instances
+    for (k, inst) in net.insts.iter().enumerate() {
+        let me = format!("{}{}", inst.name.trim_start_matches('$').to_lowercase(), k);
+        let mut conns = vec![".clk(clk)".to_string(), ".rst(rst)".to_string()];
+        for (n, c, sends) in &inst.ends {
+            // the channel's other end
+            let other = if *sends { net.consumer.get(c) } else { net.producer.get(c) };
+            let Some(other) = other else { continue };
+            let prefix = match other {
+                crate::graph::End::Top(t) => t.clone(),
+                crate::graph::End::Inst(..) => {
+                    // the sender pushes into the FIFO, the receiver pops from it
+                    let side = if *sends { "push" } else { "pop" };
+                    format!("{}{}", side, c)
+                }
+            };
+            conns.push(format!(".{}_data({}_data)", n, prefix));
+            conns.push(format!(".{}_close({}_close)", n, prefix));
+            conns.push(format!(".{}_valid({}_valid)", n, prefix));
+            conns.push(format!(".{}_ready({}_ready)", n, prefix));
+        }
+        // the array parameters the network passes on
+        for (q, j) in &inst.passes {
+            conns.push(format!(".{}({})", q, net.passed[*j].0));
+        }
+        // the instance's module: the task's name (the broadcast has its own)
+        let module = if inst.src.is_some() { "Broadcast".to_string() } else { inst.name.clone() };
+        out.push(format!("  // the instance {} of the task `{}`", me, inst.name));
+        out.push(format!("  {} {} (", module, me));
+        out.push(format!("    {}", conns.join(",\n    ")));
+        out.push("  );".into());
+    }
+    out.push("endmodule".into());
+    Ok(out.join("\n") + "\n")
+}
+
+/// the width of a channel's tokens
+fn chan_width(net: &crate::graph::Net, c: usize) -> R<usize> {
+    let (_, t, _) = &net.chans[c];
+    if let Ok(t) = Ty::of_rt(t) { return Ok(t.width()); }
+    for e in [net.producer.get(&c), net.consumer.get(&c)].into_iter().flatten() {
+        if let crate::graph::End::Inst(k, n) = e {
+            if let Some((_, t, _)) = net.insts[*k].chans.iter().find(|x| &x.0 == n) { return Ok(t.width()); }
+        }
+    }
+    Ty::of_rt(t).map(|t| t.width())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -58,13 +58,40 @@ impl HwProvider for Recorder {
 
 /// one end of a channel: an instance's port (instance, parameter name), or the task's own port
 #[derive(Clone, Debug, PartialEq)]
-enum End { Inst(usize, String), Top(String) }
+pub enum End { Inst(usize, String), Top(String) }
 
-struct Inst {
-    name: String,
-    s: crate::Synth,
+/// an instance of the network: its task, its parameters and the channels on its ports
+pub struct Inst {
+    /// the task's name
+    pub name: String,
+    /// the source of a task the network builds itself (the broadcast)
+    pub src: Option<String>,
+    /// the task's scalar parameters (the constants given at the spawn)
+    pub params: crate::Params,
+    /// the channels on its ports: (the parameter name, the channel, sends?)
+    pub ends: Vec<(String, usize, bool)>,
     /// its parameters given the network's array parameters: (its parameter, the network's)
-    passes: Vec<(String, usize)>,
+    pub passes: Vec<(String, usize)>,
+    /// its channel ports: (the parameter name, the element type, sends?)
+    pub chans: Vec<(String, Ty, bool)>,
+}
+
+/// the network a task builds: the instances, the channels and the task's own ports
+pub struct Net {
+    /// the instances, in the order they were spawned
+    pub insts: Vec<Inst>,
+    /// the channels: (the name, the element type, the depth)
+    pub chans: Vec<(String, RtType, usize)>,
+    /// the producer of each channel
+    pub producer: HashMap<usize, End>,
+    /// the consumer of each channel
+    pub consumer: HashMap<usize, End>,
+    /// the task's own channel parameters: (the name, the channel, out?)
+    pub top_chans: Vec<(String, usize, Option<bool>)>,
+    /// the array parameters the network passes on: (the name, the type, the stand-in)
+    pub passed: Vec<(String, RtType, Value)>,
+    /// the task's own ports
+    pub iface: Iface,
 }
 
 /// a stand-in for an array (or tuple) parameter of the network while it is run: values no
@@ -89,8 +116,11 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
-pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) -> R<crate::Synth> {
-    // ---- the network, as the simulator builds it
+/// the network a task builds: the instances, the channels and the task's own ports. The task's
+/// body is run in the simulator with a recording hardware provider: every `spawn` (and
+/// `broadcast`) is recorded with its arguments instead of started, every `chan()` is a channel of
+/// the simulator's world. So the graph is exactly what the simulator builds.
+pub fn elaborate(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) -> R<Net> {
     let rec = Arc::new(Recorder::default());
     let sh = Shared::with_hw(prog.clone(), false, true, Some(rec.clone()));
     let mut it = Interp::new(sh.clone(), 0, decl.name.clone());
@@ -136,20 +166,17 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     let mut consumer: HashMap<usize, End> = HashMap::new();
     for (task, a) in &spawns {
         let k = insts.len();
-        let (s, ends, passes) = if task == "$broadcast" {
+        let (src, params, ends, passes, chans) = if task == "$broadcast" {
             let (Some(Value::Rx(src)), Some(Value::Array(outs))) = (a.iter().find(|x| x.0 == "rx").map(|x| &x.1), a.iter().find(|x| x.0 == "outs").map(|x| &x.1)) else { return Err("broadcast: unexpected arguments".into()) };
             let outs: Vec<usize> = outs.iter().filter_map(|v| if let Value::Tx(c) = v { Some(*c) } else { None }).collect();
             let elem = &chans[*src].1;
             let sends: String = (0..outs.len()).map(|k| format!("o{}.send(v); ", k)).collect();
             let ps: String = (0..outs.len()).map(|k| format!(", o{}: out chan<{}>", k, elem)).collect();
             let src_text = format!("task Broadcast(x: in chan<{}>{}) {{ for v in x {{ {}}} }}", elem, ps, sends);
-            let p2 = fluxa::load_many(&[("broadcast.fx".into(), src_text)])?;
-            let s = crate::synthesize(&p2, "Broadcast", &Default::default())?;
             let mut ends = vec![("x".to_string(), *src, false)];
             for (k, c) in outs.iter().enumerate() { ends.push((format!("o{}", k), *c, true)); }
-            (s, ends, vec![])
+            (Some(src_text.clone()), crate::Params::default(), ends, vec![], chans_of_src(&src_text, "Broadcast")?)
         } else {
-            let sub = prog.fns.get(task).ok_or_else(|| format!("no task `{}`", task))?;
             let mut sp = crate::Params::new();
             let mut ends = vec![];
             let mut passes = vec![];
@@ -164,26 +191,27 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
                     },
                 }
             }
-            let _ = sub;
-            let s = crate::synthesize(prog, task, &sp).map_err(|e| format!("{} (spawned by {}): {}", task, decl.name, e))?;
+            let chans = chans_of(prog, task, &sp).map_err(|e| format!("{} (spawned by {}): {}", task, decl.name, e))?;
             // the direction is what the instance does with the channel
-            let ends = ends.into_iter().map(|(n, c, _)| { let out = s.iface.outs.iter().any(|o| o.0 == n); (n, c, out) }).collect();
-            (s, ends, passes)
+            let ends = ends.into_iter().map(|(n, c, _)| {
+                let out = chans.iter().any(|(p, _, o)| *p == n && *o);
+                (n, c, out)
+            }).collect();
+            (None, sp, ends, passes, chans)
         };
-        for (n, c, out) in ends {
-            let e = End::Inst(k, n);
-            let slot = if out { &mut producer } else { &mut consumer };
-            if slot.insert(c, e).is_some() { return Err(format!("{}: channel `{}` has two {}s", decl.name, chans[c].0, if out { "sender" } else { "receiver" })); }
+        for (n, c, out) in &ends {
+            let e = End::Inst(k, n.clone());
+            let slot = if *out { &mut producer } else { &mut consumer };
+            if slot.insert(*c, e).is_some() { return Err(format!("{}: channel `{}` has two {}s", decl.name, chans[*c].0, if *out { "sender" } else { "receiver" })); }
         }
-        insts.push(Inst { name: task.clone(), s, passes });
+        insts.push(Inst { name: task.clone(), src, params, ends, passes, chans });
     }
     // a channel's type: its element type, else (a tuple's `Any`) the type of an instance's port on it
     let chan_ty = |c: usize, producer: &HashMap<usize, End>, consumer: &HashMap<usize, End>| -> R<Ty> {
         if let Ok(t) = Ty::of_rt(&chans[c].1) { return Ok(t); }
         for e in [producer.get(&c), consumer.get(&c)].into_iter().flatten() {
             if let End::Inst(k, n) = e {
-                let io = &insts[*k].s.iface;
-                if let Some((_, t)) = io.outs.iter().chain(&io.ins).find(|x| &x.0 == n) { return Ok(t.clone()); }
+                if let Some((_, t, _)) = insts[*k].chans.iter().find(|x| &x.0 == n) { return Ok(t.clone()); }
             }
         }
         Ty::of_rt(&chans[c].1)
@@ -198,7 +226,61 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
             _ => return Err(format!("{}: channel parameter `{}` must be used by exactly one spawned task", decl.name, name)),
         }
     }
+    Ok(Net { insts, chans, producer, consumer, top_chans, passed, iface })
+}
 
+/// a channel's type: its element type, else (a tuple's `Any`) the type of an instance's port on it
+fn chan_ty_of(insts: &[(Inst, crate::Synth)], chans: &[(String, RtType, usize)], c: usize, producer: &HashMap<usize, End>, consumer: &HashMap<usize, End>) -> R<Ty> {
+    if let Ok(t) = Ty::of_rt(&chans[c].1) { return Ok(t); }
+    for e in [producer.get(&c), consumer.get(&c)].into_iter().flatten() {
+        if let End::Inst(k, n) = e {
+            let io = &insts[*k].1.iface;
+            if let Some((_, t)) = io.outs.iter().chain(&io.ins).find(|x| &x.0 == n) { return Ok(t.clone()); }
+        }
+    }
+    Ty::of_rt(&chans[c].1)
+}
+
+/// the channel ports of a task with the given parameters: (the parameter name, the element type,
+/// sends?)
+pub fn chans_of(prog: &Arc<Program>, task: &str, params: &crate::Params) -> R<Vec<(String, Ty, bool)>> {
+    let decl = prog.fns.get(task).ok_or_else(|| format!("no task `{}`", task))?;
+    let consts: std::collections::HashSet<String> = prog.consts.read().unwrap().keys().cloned().collect();
+    let cfg = crate::lower::lower(decl, &consts)?;
+    let hw = crate::gen::hw_params(prog, decl, &cfg, params)?;
+    Ok(hw.params.iter().filter_map(|(n, _, h)| match h {
+        crate::gen::ParamHw::InChan(t) => Some((n.clone(), t.clone(), false)),
+        crate::gen::ParamHw::OutChan(t) => Some((n.clone(), t.clone(), true)),
+        _ => None,
+    }).collect())
+}
+
+/// the channel ports of a task given as source
+fn chans_of_src(src: &str, task: &str) -> R<Vec<(String, Ty, bool)>> {
+    let p2 = fluxa::load_many(&[("src.fx".into(), src.to_string())])?;
+    let prog = Arc::new(p2);
+    chans_of(&prog, task, &crate::Params::default())
+}
+
+pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) -> R<crate::Synth> {
+    let net = elaborate(prog, decl, params)?;
+    let mut iface = net.iface;
+    let chans = net.chans;
+    let producer = net.producer;
+    let consumer = net.consumer;
+    let passed = net.passed;
+    // the instances' netlists
+    let mut insts: Vec<(Inst, crate::Synth)> = vec![];
+    for inst in net.insts {
+        let s = match &inst.src {
+            Some(src) => {
+                let p2 = fluxa::load_many(&[("broadcast.fx".into(), src.clone())])?;
+                crate::synthesize(&p2, "Broadcast", &Default::default())?
+            }
+            None => crate::synthesize(prog, &inst.name, &inst.params).map_err(|e| format!("{} (spawned by {}): {}", inst.name, decl.name, e))?,
+        };
+        insts.push((inst, s));
+    }
     // ---- one netlist
     let mut b = Builder::new();
     let clk = b.wire();
@@ -212,11 +294,11 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     let inst_name = |k: usize, inst: &Inst| format!("{}{}", inst.name.trim_start_matches('$').to_lowercase(), k);
     // where the gates go (before optimization): each instance (a network's own parts below it) and each FIFO
     let mut area: Vec<(String, usize)> = vec![];
-    for (k, inst) in insts.iter().enumerate() {
-        let nl = &inst.s.netlist;
+    for (k, (inst, s)) in insts.iter().enumerate() {
+        let nl = &s.netlist;
         let me = inst_name(k, inst);
-        if inst.s.area.is_empty() { area.push((me.clone(), nl.cells.len())); }
-        else { area.extend(inst.s.area.iter().map(|(p, n)| (format!("{}.{}", me, p), *n))); }
+        if s.area.is_empty() { area.push((me.clone(), nl.cells.len())); }
+        else { area.extend(s.area.iter().map(|(p, n)| (format!("{}.{}", me, p), *n))); }
         let base = b.next_wire;
         let maxw = nl.cells.iter().flat_map(|c| c.conns.iter().map(|x| x.1)).chain(nl.ports.iter().flat_map(|p| p.bits.iter().copied()))
             .filter_map(|x| if let Bit::W(w) = x { Some(w) } else { None }).max().unwrap_or(0);
@@ -254,23 +336,23 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     // initial words are loaded (the network's memory load)
     for (n, t, _) in &passed {
         let ty = Ty::of_rt(t)?;
-        for (k, inst) in insts.iter().enumerate() {
+        for (k, (inst, s)) in insts.iter().enumerate() {
             for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n) {
-                if let Some((_, m, mt)) = inst.s.iface.mem_inits.iter().find(|x| &x.0 == q) { iface.mem_inits.push((n.clone(), format!("{}.{}", inst_name(k, inst), m), mt.clone())); }
+                if let Some((_, m, mt)) = s.iface.mem_inits.iter().find(|x| &x.0 == q) { iface.mem_inits.push((n.clone(), format!("{}.{}", inst_name(k, inst), m), mt.clone())); }
             }
         }
-        if !insts.iter().any(|inst| inst.passes.iter().any(|(q, j)| passed[*j].0 == *n && inst.s.iface.scalars.iter().any(|s| &s.0 == q))) { continue; }
+        if !insts.iter().any(|(inst, s)| inst.passes.iter().any(|(q, j)| passed[*j].0 == *n && s.iface.scalars.iter().any(|x| &x.0 == q))) { continue; }
         let bits = b.wires(ty.width() as u32);
         ports.push(Port { name: n.clone(), dir: Dir::In, bits: bits.clone() });
         iface.scalars.push((n.clone(), ty));
-        for (k, inst) in insts.iter().enumerate() {
-            for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n && inst.s.iface.scalars.iter().any(|s| s.0 == x.0)) {
+        for (k, (inst, s)) in insts.iter().enumerate() {
+            for (q, _) in inst.passes.iter().filter(|x| passed[x.1].0 == *n && s.iface.scalars.iter().any(|y| y.0 == x.0)) {
                 let to = iports[k].get(q).ok_or_else(|| format!("instance {} has no port {}", inst.name, q))?;
                 for (t, f) in to.iter().zip(&bits) { if let Bit::W(w) = t { alias.insert(*w, *f); } }
             }
         }
     }
-    let get = |iports: &Vec<HashMap<String, Vec<Bit>>>, k: usize, n: &str| -> R<Vec<Bit>> { iports[k].get(n).cloned().ok_or_else(|| format!("instance {} has no port {}", insts[k].name, n)) };
+    let get = |iports: &Vec<HashMap<String, Vec<Bit>>>, k: usize, n: &str| -> R<Vec<Bit>> { iports[k].get(n).cloned().ok_or_else(|| format!("instance {} has no port {}", insts[k].0.name, n)) };
     let set = |alias: &mut HashMap<u32, Bit>, to: &[Bit], from: &[Bit]| { for (t, f) in to.iter().zip(from) { if let Bit::W(w) = t { alias.insert(*w, *f); } } };
     let mut out_ports: Vec<Port> = vec![];
     for (c, (cname, _, depth)) in chans.iter().enumerate() {
@@ -283,16 +365,16 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
         if let Ok(declared) = Ty::of_rt(&chans[c].1) {
             for e in [p, q] {
                 if let End::Inst(k, n) = e {
-                    let io = &insts[*k].s.iface;
+                    let io = &insts[*k].1.iface;
                     if let Some((_, t)) = io.outs.iter().chain(&io.ins).find(|x| &x.0 == n) {
                         if *t != declared {
-                            return Err(format!("{}: channel `{}` carries {}, but `{}`'s port `{}` is {}", decl.name, cname, ty_name(&declared), insts[*k].name, n, ty_name(t)));
+                            return Err(format!("{}: channel `{}` carries {}, but `{}`'s port `{}` is {}", decl.name, cname, ty_name(&declared), insts[*k].0.name, n, ty_name(t)));
                         }
                     }
                 }
             }
         }
-        let w = chan_ty(c, &producer, &consumer)?.width();
+        let w = chan_ty_of(&insts, &chans, c, &producer, &consumer)?.width();
         // the producer's side: data, close, valid out of it, ready into it
         let (pd, pc, pv, pr_target): (Vec<Bit>, Bit, Bit, Option<Vec<Bit>>) = match p {
             End::Inst(k, n) => (get(&iports, *k, &format!("{}_data", n))?, get(&iports, *k, &format!("{}_close", n))?[0], get(&iports, *k, &format!("{}_valid", n))?[0], Some(get(&iports, *k, &format!("{}_ready", n))?)),
@@ -328,7 +410,7 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     // an instance input left unconnected (a scalar given no value) is an error
     let nl: Netlist = netlist::optimize(b, &alias, ports, nets, &decl.name)?;
     let mut warnings = vec![];
-    for inst in &insts { warnings.extend(inst.s.warnings.iter().map(|w| format!("{}: {}", inst.name, w))); }
+    for (inst, s) in &insts { warnings.extend(s.warnings.iter().map(|w| format!("{}: {}", inst.name, w))); }
     // FIFOs that dominate the area: usually depths raised past what the network needs
     let total: usize = area.iter().map(|x| x.1).sum();
     let fifos: Vec<&(String, usize)> = area.iter().filter(|x| x.0.contains("fifo ")).collect();
@@ -341,9 +423,9 @@ pub fn build(prog: &Arc<Program>, decl: &Arc<FnDecl>, params: &crate::Params) ->
     }
     // instance k of task T is `t<k>` (its own instances below it)
     let mut tree = vec![(String::new(), decl.name.clone())];
-    for (k, inst) in insts.iter().enumerate() {
+    for (k, (inst, s)) in insts.iter().enumerate() {
         let me = inst_name(k, inst);
-        for (p, t) in &inst.s.insts { tree.push((if p.is_empty() { me.clone() } else { format!("{}.{}", me, p) }, t.clone())); }
+        for (p, t) in &s.insts { tree.push((if p.is_empty() { me.clone() } else { format!("{}.{}", me, p) }, t.clone())); }
     }
     Ok(crate::Synth { netlist: nl, iface, warnings, insts: tree, area })
 }
