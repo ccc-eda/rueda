@@ -9,6 +9,7 @@ pub mod gen;
 pub mod graph;
 pub mod hw;
 pub mod lower;
+pub mod rtl;
 pub mod ty;
 
 #[cfg(not(target_arch = "wasm32"))]

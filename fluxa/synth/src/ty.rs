@@ -68,6 +68,124 @@ pub struct SVal {
     pub frac: u32,
 }
 
+/// a value's range: its type without the bits. The rules that compute a range live here, so the
+/// gate backend (`SVal`) and the RTL backend (`rtl::TV`) cannot disagree about a width.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rng {
+    pub lo: i128,
+    pub hi: i128,
+    pub frac: u32,
+    pub boolean: bool,
+}
+
+impl Rng {
+    pub fn of(v: &SVal) -> Rng { Rng { lo: v.lo, hi: v.hi, frac: v.frac, boolean: v.boolean } }
+    pub fn int(lo: i128, hi: i128) -> Rng { Rng { lo, hi, frac: 0, boolean: false } }
+    pub fn bool() -> Rng { Rng { lo: 0, hi: 1, frac: 0, boolean: true } }
+    pub fn konst(n: i128) -> Rng { Rng::int(n, n) }
+    pub fn fixed(lo: i128, hi: i128, frac: u32) -> Rng { Rng { lo, hi, frac, boolean: false } }
+    pub fn signed(&self) -> bool { self.lo < 0 }
+    /// the bits the range needs
+    pub fn width(&self) -> usize { int_bits(self.lo, self.hi) as usize }
+    /// the value scaled to `f` fraction bits (the raw integer shifted left, saturating)
+    pub fn upscale(&self, f: u32) -> Rng {
+        if self.frac >= f { return *self; }
+        let k = f - self.frac;
+        Rng { lo: shl_sat(self.lo, k), hi: shl_sat(self.hi, k), frac: f, boolean: self.boolean }
+    }
+}
+
+/// the range of `a + b` (the fraction bits aligned)
+pub fn rng_add(a: Rng, b: Rng) -> Rng {
+    let f = a.frac.max(b.frac);
+    let (a, b) = (a.upscale(f), b.upscale(f));
+    Rng::int(a.lo + b.lo, a.hi + b.hi).with_frac(f)
+}
+
+/// the range of `a - b`
+pub fn rng_sub(a: Rng, b: Rng) -> Rng {
+    let f = a.frac.max(b.frac);
+    let (a, b) = (a.upscale(f), b.upscale(f));
+    Rng::int(a.lo - b.hi, a.hi - b.lo).with_frac(f)
+}
+
+/// the range of `-a`
+pub fn rng_neg(a: Rng) -> Rng { rng_sub(Rng::konst(0).with_frac(a.frac), a) }
+
+/// the range of `a * b`
+pub fn rng_mul(a: Rng, b: Rng) -> Rng {
+    let p = [a.lo * b.lo, a.lo * b.hi, a.hi * b.lo, a.hi * b.hi];
+    let (lo, hi) = (*p.iter().min().unwrap(), *p.iter().max().unwrap());
+    Rng::int(lo, hi).with_frac(a.frac + b.frac)
+}
+
+/// the ranges of the quotient and the remainder of `a / b` (truncating toward zero)
+pub fn rng_divrem(a: Rng, b: Rng) -> R<(Rng, Rng)> {
+    if a.frac > 0 || b.frac > 0 { return Err("division of fixed-point values is not synthesized".into()); }
+    if b.lo <= 0 && b.hi >= 0 { return Err("division: the divisor's range includes 0 (E0102)".into()); }
+    let amax = a.lo.abs().max(a.hi.abs());
+    let bmin = b.lo.abs().min(b.hi.abs()).max(1);
+    let qmax = amax / bmin;
+    let (qlo, qhi) = if a.signed() || b.signed() { (-qmax, qmax) } else { (a.lo / b.hi.max(1), qmax) };
+    let rmax = b.lo.abs().max(b.hi.abs()) - 1;
+    let (rlo, rhi) = if a.signed() { (-rmax, rmax) } else { (0, rmax.min(a.hi)) };
+    Ok((Rng::int(qlo, qhi), Rng::int(rlo, rhi)))
+}
+
+/// the range of `a << k`
+pub fn rng_shl(a: Rng, k: u32) -> Rng {
+    Rng::int(shl_sat(a.lo, k), shl_sat(a.hi, k)).with_frac(a.frac)
+}
+
+/// the range of `a >> k` (floor)
+pub fn rng_shr(a: Rng, k: u32) -> Rng {
+    Rng::int(a.lo >> k, a.hi >> k).with_frac(a.frac)
+}
+
+/// the range of a shift by a variable amount (the largest shift the amount allows)
+pub fn rng_shift(a: Rng, amt: Rng, left: bool) -> R<Rng> {
+    if amt.lo < 0 { return Err("a shift amount must not be negative".into()); }
+    if left {
+        let k = amt.hi.min(120) as u32;
+        Ok(Rng::int(a.lo.min(shl_sat(a.lo, k)), a.hi.max(shl_sat(a.hi, k))).with_frac(a.frac))
+    } else {
+        Ok(Rng::int(a.lo.min(0), a.hi.max(0)).with_frac(a.frac))
+    }
+}
+
+/// the range of `a & b`, `a | b`, `a ^ b`: the operands' common width
+pub fn rng_bitop(a: Rng, b: Rng) -> Rng {
+    if a.boolean && b.boolean { return Rng::bool(); }
+    let w = int_bits(a.lo.min(b.lo), a.hi.max(b.hi)) as usize;
+    let (lo, hi) = if a.signed() || b.signed() { (-(1i128 << (w - 1)), (1i128 << (w - 1)) - 1) } else { (0, (1i128 << w) - 1) };
+    Rng::int(lo, hi)
+}
+
+/// the range of `~a`
+pub fn rng_not(a: Rng) -> Rng {
+    if a.boolean { return Rng::bool(); }
+    Rng::int(-a.hi - 1, -a.lo - 1)
+}
+
+/// the range of `c ? a : b`: it covers both
+pub fn rng_select(a: Rng, b: Rng) -> Rng {
+    if a.boolean && b.boolean { return Rng::bool(); }
+    let f = a.frac.max(b.frac);
+    let (a, b) = (a.upscale(f), b.upscale(f));
+    Rng::int(a.lo.min(b.lo), a.hi.max(b.hi)).with_frac(f)
+}
+
+/// the range of a value converted to type `t` (the type's own range)
+pub fn rng_convert(_v: Rng, t: &Ty) -> Rng {
+    let (lo, hi) = t.range();
+    Rng { lo, hi, frac: t.frac(), boolean: *t == Ty::Bool }
+}
+
+impl Rng {
+    pub fn with_frac(self, frac: u32) -> Rng { Rng { frac, ..self } }
+}
+
+
 /// a value in hardware: a scalar, or an array / tuple of values
 #[derive(Clone, Debug)]
 pub enum HV {
@@ -137,62 +255,54 @@ fn align(a: &SVal, b: &SVal) -> (SVal, SVal) { let f = a.frac.max(b.frac); (upsc
 
 pub fn add(g: &mut Builder, a: &SVal, b: &SVal) -> SVal {
     let (a, b) = align(a, b);
-    let (lo, hi) = (a.lo + b.lo, a.hi + b.hi);
-    let w = int_bits(lo, hi) as usize;
+    let r = rng_add(Rng::of(&a), Rng::of(&b));
+    let w = int_bits(r.lo, r.hi) as usize;
     let s = g.add(&a.ext(w), &b.ext(w));
-    ranged(s, lo, hi, a.frac)
+    ranged(s, r.lo, r.hi, r.frac)
 }
 
 pub fn sub(g: &mut Builder, a: &SVal, b: &SVal) -> SVal {
     let (a, b) = align(a, b);
-    let (lo, hi) = (a.lo - b.hi, a.hi - b.lo);
-    let w = int_bits(lo, hi) as usize;
+    let r = rng_sub(Rng::of(&a), Rng::of(&b));
+    let w = int_bits(r.lo, r.hi) as usize;
     let s = g.sub(&a.ext(w), &b.ext(w));
-    ranged(s, lo, hi, a.frac)
+    ranged(s, r.lo, r.hi, r.frac)
 }
 
 pub fn neg(g: &mut Builder, a: &SVal) -> SVal { sub(g, &SVal { frac: a.frac, ..SVal::konst(0) }, a) }
 
 pub fn mul(g: &mut Builder, a: &SVal, b: &SVal) -> SVal {
-    let p = [a.lo * b.lo, a.lo * b.hi, a.hi * b.lo, a.hi * b.hi];
-    let (lo, hi) = (*p.iter().min().unwrap(), *p.iter().max().unwrap());
-    let w = int_bits(lo, hi) as usize;
+    let r = rng_mul(Rng::of(a), Rng::of(b));
+    let w = int_bits(r.lo, r.hi) as usize;
     let m = g.mul(&a.ext(w), &b.ext(w));
-    ranged(m, lo, hi, a.frac + b.frac)
+    ranged(m, r.lo, r.hi, r.frac)
 }
 
 /// quotient and remainder of integers, truncating toward zero (like the simulator)
 pub fn divrem(g: &mut Builder, a: &SVal, b: &SVal) -> R<(SVal, SVal)> {
-    if a.frac > 0 || b.frac > 0 { return Err("division of fixed-point values is not synthesized".into()); }
-    if b.lo <= 0 && b.hi >= 0 { return Err("division: the divisor's range includes 0 (E0102)".into()); }
-    let amax = a.lo.abs().max(a.hi.abs());
-    let bmin = b.lo.abs().min(b.hi.abs()).max(1);
-    let qmax = amax / bmin;
-    let (qlo, qhi) = if a.signed() || b.signed() { (-qmax, qmax) } else { (a.lo / b.hi.max(1), qmax) };
-    let rmax = b.lo.abs().max(b.hi.abs()) - 1;
-    let (rlo, rhi) = if a.signed() { (-rmax, rmax) } else { (0, rmax.min(a.hi)) };
+    let (q, r) = rng_divrem(Rng::of(a), Rng::of(b))?;
     let w = int_bits(a.lo.min(b.lo), a.hi.max(b.hi)) as usize + 1;
-    let (q, r) = if a.signed() || b.signed() { g.sdivmod(&a.ext(w), &b.ext(w)) } else { g.udivmod(&a.ext(w), &b.ext(w)) };
-    Ok((ranged(q, qlo, qhi, 0), ranged(r, rlo, rhi, 0)))
+    let (qv, rv) = if a.signed() || b.signed() { g.sdivmod(&a.ext(w), &b.ext(w)) } else { g.udivmod(&a.ext(w), &b.ext(w)) };
+    Ok((ranged(qv, q.lo, q.hi, 0), ranged(rv, r.lo, r.hi, 0)))
 }
 
 pub fn shl_const(a: &SVal, k: u32) -> SVal {
-    let (lo, hi) = (shl_sat(a.lo, k), shl_sat(a.hi, k));
-    let w = int_bits(lo, hi) as usize;
+    let r = rng_shl(Rng::of(a), k);
+    let w = int_bits(r.lo, r.hi) as usize;
     let mut b = vec![Bit::C0; k as usize];
     b.extend(a.ext(w.saturating_sub(k as usize)));
-    ranged(b, lo, hi, a.frac)
+    ranged(b, r.lo, r.hi, r.frac)
 }
 
 /// arithmetic shift right (floor)
 pub fn shr_const(a: &SVal, k: u32) -> SVal {
-    let (lo, hi) = (a.lo >> k, a.hi >> k);
+    let r = rng_shr(Rng::of(a), k);
     let fill = if a.signed() { *a.bits.last().unwrap() } else { Bit::C0 };
     let mut b: Vec<Bit> = a.bits.iter().skip(k as usize).copied().collect();
     while b.len() < a.bits.len().max(1) { b.push(fill); }
-    let w = int_bits(lo, hi) as usize;
+    let w = int_bits(r.lo, r.hi) as usize;
     let b = if a.signed() { sext(&b, w) } else { pad(&b, w) };
-    ranged(b, lo, hi, a.frac)
+    ranged(b, r.lo, r.hi, r.frac)
 }
 
 /// x << k, held to Fluxa's exact integers (±2^120: the simulator stops a program going past them)
@@ -207,25 +317,22 @@ fn shl_sat(x: i128, k: u32) -> i128 {
 
 /// a shift by a variable amount: the range assumes the largest shift the amount allows
 pub fn shift(g: &mut Builder, a: &SVal, amt: &SVal, left: bool) -> R<SVal> {
-    if amt.lo < 0 { return Err("a shift amount must not be negative".into()); }
+    let r = rng_shift(Rng::of(a), Rng::of(amt), left)?;
+    let w = int_bits(r.lo, r.hi) as usize;
     if left {
-        let k = amt.hi.min(120) as u32;
-        let (lo, hi) = (a.lo.min(shl_sat(a.lo, k)), a.hi.max(shl_sat(a.hi, k)));
-        let w = int_bits(lo, hi) as usize;
         let s = g.shift(&a.ext(w), &amt.bits, true, Bit::C0);
-        Ok(ranged(s, lo, hi, a.frac))
+        Ok(ranged(s, r.lo, r.hi, r.frac))
     } else {
         let fill = if a.signed() { *a.bits.last().unwrap() } else { Bit::C0 };
         let s = g.shift(&a.bits, &amt.bits, false, fill);
-        let (lo, hi) = (a.lo.min(0), a.hi.max(0));
-        let w = int_bits(lo, hi) as usize;
-        let s = if a.signed() { sext(&s, w) } else { pad(&s, w) };
-        Ok(ranged(s, lo, hi, a.frac))
+        let b = if a.signed() { sext(&s, w) } else { pad(&s, w) };
+        Ok(ranged(b, r.lo, r.hi, r.frac))
     }
 }
 
 /// &, |, ^ bit by bit: the result has the operands' common width
 pub fn bitop(g: &mut Builder, a: &SVal, b: &SVal, op: char) -> SVal {
+    let r = rng_bitop(Rng::of(a), Rng::of(b));
     if a.boolean && b.boolean {
         let x = match op { '&' => g.and(a.bits[0], b.bits[0]), '|' => g.or(a.bits[0], b.bits[0]), _ => g.xor(a.bits[0], b.bits[0]) };
         return SVal::bit(x);
@@ -233,15 +340,15 @@ pub fn bitop(g: &mut Builder, a: &SVal, b: &SVal, op: char) -> SVal {
     let w = int_bits(a.lo.min(b.lo), a.hi.max(b.hi)) as usize;
     let (x, y) = (a.ext(w), b.ext(w));
     let bits: Vec<Bit> = (0..w).map(|i| match op { '&' => g.and(x[i], y[i]), '|' => g.or(x[i], y[i]), _ => g.xor(x[i], y[i]) }).collect();
-    let (lo, hi) = if a.signed() || b.signed() { (-(1i128 << (w - 1)), (1i128 << (w - 1)) - 1) } else { (0, (1i128 << w) - 1) };
-    SVal { bits, lo, hi, boolean: false, frac: 0 }
+    SVal { bits, lo: r.lo, hi: r.hi, boolean: false, frac: 0 }
 }
 
 pub fn not_bits(g: &mut Builder, a: &SVal) -> SVal {
     if a.boolean { return SVal::bit(g.not(a.bits[0])); }
+    let r = rng_not(Rng::of(a));
     let bits = g.notv(&a.bits);
     // ~x = -x - 1
-    SVal { bits, lo: -a.hi - 1, hi: -a.lo - 1, boolean: false, frac: 0 }.normalized()
+    SVal { bits, lo: r.lo, hi: r.hi, boolean: false, frac: 0 }.normalized()
 }
 
 /// a < b, a == b, … as one bit (fixed point aligned first)
@@ -264,10 +371,10 @@ pub fn compare(g: &mut Builder, a: &SVal, b: &SVal, op: &str) -> SVal {
 pub fn select(g: &mut Builder, c: Bit, a: &SVal, b: &SVal) -> SVal {
     if a.boolean && b.boolean { return SVal::bit(g.mux(c, b.bits[0], a.bits[0])); }
     let (a, b) = align(a, b);
-    let (lo, hi) = (a.lo.min(b.lo), a.hi.max(b.hi));
-    let w = int_bits(lo, hi) as usize;
+    let r = rng_select(Rng::of(&a), Rng::of(&b));
+    let w = int_bits(r.lo, r.hi) as usize;
     let bits = g.muxv(c, &b.ext(w), &a.ext(w));
-    SVal { bits, lo, hi, boolean: false, frac: a.frac }
+    SVal { bits, lo: r.lo, hi: r.hi, boolean: false, frac: r.frac }
 }
 
 /// the raw integer shifted right by `s` bits, rounded as the simulator's `round_shift` does
